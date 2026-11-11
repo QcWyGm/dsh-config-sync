@@ -1,0 +1,59 @@
+{
+  "name": "dsh-config-sync",
+  "version": "0.2.9",
+  "type": "module",
+  "description": "在 DSH 设置里查看 dsh-config 仓库与本机的同步状态，并生成退出后执行的 push/pull 脚本。同步动作本身不在应用内执行。",
+  "main": "./index.js",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE",
+    "runtime",
+    "tools"
+  ],
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "dsh-config",
+    "sync"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": []
+    }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.0"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/QcWyGm/dsh-config-sync"
+  },
+  "homepage": "https://github.com/QcWyGm/dsh-config-sync#readme",
+  "bugs": {
+    "url": "https://github.com/QcWyGm/dsh-config-sync/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "check": "node --check index.js && node --check client.js",
+    "verify": "node tools/selftest.mjs . && node tools/clientcheck.mjs"
+  }
+}

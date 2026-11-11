@@ -1,0 +1,16 @@
+﻿# dsh-config-sync 的 bundle 补丁层
+#
+# dsh.profile.bundles 里出现 dsh-config-sync 后，启动时会把这一行插进插件树：
+# 宿主半身挂 /config-sync/status 与 /config-sync/prepare 两个路由，
+# 浏览器半身（package.json 的 dsh.client）在左侧栏注册「配置同步」一行 + 配对面板，并在 设置 → 通用 留一行摘要。
+#
+# repoPath 留空时按常见位置自动探测（D:\dsh-config、G:\dsh-config、C:\dsh-config、~\dsh-config），
+# 判据是同时存在 apply.ps1 与 profile/package.json；换机不用改这里。
+# appRoot 留空时由插件自身位置推出（插件装在 <AppRoot>\dsh-config-sync-0.1.0）。
+- insert:
+    - id: config-sync
+      name: 'dsh-config-sync'
+      config:
+        repoPath: ''
+        appRoot: ''
+        profileName: 'desktop'

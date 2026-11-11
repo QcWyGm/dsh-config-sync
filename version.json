@@ -1,0 +1,1 @@
+{"version":"0.2.9","releasedAt":"2026-11-11","notes":"改为公开仓库分发：清单与安装包托管在 GitHub dsh-config-sync，自更新不再需要令牌；补齐市场要求的 license/repository/files/engines","tgz":"releases/dsh-config-sync-0.2.9.tgz","sha256":"432a4f2100958faa00973af61cf2f6729aa2d9cfcf1202108efb138dca1c8308","minClient":"0.2.2-rc.2"}

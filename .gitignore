@@ -1,0 +1,6 @@
+# 依赖与运行态
+node_modules/
+*.log
+
+# 打包中间产物
+*.tgz.tmp
