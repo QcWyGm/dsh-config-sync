@@ -4,7 +4,7 @@
 
 A DSH plugin: it adds a **"Config Sync"** row to the sidebar (opening a full-page health-check panel), plus a summary row under **Settings → General**. It only **inspects and prepares commands** — the sync actions themselves never run inside the app.
 
-![panel](docs/panel.png)
+![panel](docs/panel.en.png)
 
 The UI is bilingual: it follows the client language (`zh-*` → Chinese, anything else → English), with no settings toggle. Only the generated `.cmd` scripts keep Chinese text, because they are local shell helpers.
 
