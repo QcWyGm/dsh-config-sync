@@ -32,6 +32,18 @@ dsh plugin add https://raw.githubusercontent.com/QcWyGm/dsh-config-sync/main/rel
 
 面板「插件更新」卡读取 `version.json`（默认 `https://raw.githubusercontent.com/QcWyGm/dsh-config-sync/main/version.json`，30 分钟缓存），发现更高版本后：退出 DSH → 下载 tgz → 校验 sha256 → 备份旧目录到 `~\.dsh\backups\plugin-<旧版本>-<时间>` → 覆盖 → 重启。
 
+## 作为插件市场的索引源
+
+本仓库根目录的 `market-index.json` 就是一份可直接使用的 DSH 市场索引（`format: 1`，`source.type: git` + 40 位 commit，安装时从本仓库取包，无需构建）。索引地址：
+
+```
+https://raw.githubusercontent.com/QcWyGm/dsh-config-sync/main/market-index.json
+```
+
+在 DSH 里「插件 → 插件市场 / 发现 → 管理索引源 → 添加索引源」填入上面的 URL，即可在列表里看到「配置同步」，点安装即按该 commit 拉取本仓库。
+
+升级流程：改代码 → 打包 `releases/dsh-config-sync-<版本>.tgz` → 更新 `version.json` 的 `version/sha256` → 把 `market-index.json` 里那条 `versions` 的 `version` 与 `commit` 换成新提交 → 推送。索引只引用 commit，所以旧版本也能随时装回。
+
 `capture` 要读 `cordis.patch.yml`，DSH 运行时这个文件正被应用持有，抓到的是半截状态；`apply` 写完以后，DSH 退出时又会回写覆盖。所以边界固定为：判断该跑什么、把命令写好，退出 DSH 后双击跑。
 
 同步机制、目录结构、换机与排障的完整说明在配置仓库根 `README.md`，本文只讲插件自身。
