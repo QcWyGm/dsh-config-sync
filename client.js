@@ -35,23 +35,43 @@ window.__ModuleLoader__.load({
 
     /**
      * 语言：跟随客户端。zh-* 走中文，其余一律英文。
-     * 所有界面文案走 M(zh, en)；请求都带 accept-language，宿主按它返回同语言的建议句。
+     *
+     * 判定顺序（DSH 自己切换界面语言时**不会**改 navigator.language，所以不能只看它）：
+     *   1. document.documentElement.lang —— DSH 切语言时写在这里（en / zh-CN …）；
+     *   2. 页面里 dsh 暴露的语言设置（若有的版本只存设置不改 html lang）；
+     *   3. navigator.languages / navigator.language —— 系统语言兜底。
+     * 每次调用现读，不缓存：用户在设置里切语言后不必重启客户端就能跟着变。
      */
-    const UI_LANG = (() => {
+    const readTags = () => {
+      const tags = []
       try {
-        const list = (navigator.languages && navigator.languages.length) ? navigator.languages : [navigator.language || '']
-        for (const item of list) {
-          const tag = String(item || '').trim().toLowerCase()
-          if (tag) return tag.startsWith('zh') ? 'zh' : 'en'
+        const html = document.documentElement && document.documentElement.getAttribute('lang')
+        if (html) tags.push(String(html))
+      } catch { }
+      try {
+        for (const item of [document.body && document.body.getAttribute('lang'), document.body && document.body.getAttribute('data-lang')]) {
+          if (item) tags.push(String(item))
         }
       } catch { }
-      return 'zh'
-    })()
-    const IS_ZH = UI_LANG === 'zh'
-    const M = (zh, en) => (IS_ZH ? zh : en)
-    const LOCALE = IS_ZH ? 'zh-CN' : 'en-US'
-    const LANG_HEADERS = { 'accept-language': IS_ZH ? 'zh-CN,zh;q=0.9' : 'en-US,en;q=0.9' }
-    const TITLE = M('配置同步', 'Config Sync')
+      try {
+        const list = (navigator.languages && navigator.languages.length) ? navigator.languages : [navigator.language || '']
+        for (const item of list) if (item) tags.push(String(item))
+      } catch { }
+      return tags
+    }
+    const langIsZh = () => {
+      const tags = readTags()
+      for (const item of tags) {
+        const tag = String(item || '').trim().toLowerCase()
+        if (!tag) continue
+        if (/^(zh|cn|chinese)/.test(tag)) return true
+        if (/^(en|english)/.test(tag)) return false
+      }
+      return true
+    }
+    const M = (zh, en) => (langIsZh() ? zh : en)
+    const localeNow = () => (langIsZh() ? 'zh-CN' : 'en-US')
+    const langHeaders = () => ({ 'accept-language': langIsZh() ? 'zh-CN,zh;q=0.9' : 'en-US,en;q=0.9' })
 
     const S = {
       // 侧栏 / 设置摘要行
@@ -210,7 +230,7 @@ window.__ModuleLoader__.load({
     function badJson(res) { return new Error(M(`${res.status} 返回非 JSON`, `${res.status} returned non-JSON`)) }
 
     async function callStatus() {
-      const res = await fetch('/config-sync/status', { cache: 'no-store', credentials: 'same-origin', headers: LANG_HEADERS })
+      const res = await fetch('/config-sync/status', { cache: 'no-store', credentials: 'same-origin', headers: langHeaders() })
       const text = await res.text()
       let body
       try { body = text ? JSON.parse(text) : null } catch { throw badJson(res) }
@@ -219,7 +239,7 @@ window.__ModuleLoader__.load({
     }
 
     /** 每个 POST 都带 accept-language：宿主的建议句/错误信息按它出中文或英文。 */
-    const jsonHeaders = { 'content-type': 'application/json', ...LANG_HEADERS }
+    const jsonHeaders = { 'content-type': 'application/json', ...langHeaders() }
 
     async function callPrepare(action, message) {
       const res = await fetch('/config-sync/prepare', {
@@ -277,7 +297,7 @@ window.__ModuleLoader__.load({
           headers: jsonHeaders,
           body: JSON.stringify(payload),
         }
-        : { cache: 'no-store', credentials: 'same-origin', headers: LANG_HEADERS })
+        : { cache: 'no-store', credentials: 'same-origin', headers: langHeaders() })
       const text = await res.text()
       let body
       try { body = text ? JSON.parse(text) : null } catch { throw badJson(res) }
@@ -339,7 +359,7 @@ window.__ModuleLoader__.load({
         all: M('全部', 'All'),
       }
       const backup = items.map((it) => it.backup).find((b) => b && b.dir)
-      const when = backup && backup.at ? new Date(backup.at).toLocaleString(LOCALE, { hour12: false }) : ''
+      const when = backup && backup.at ? new Date(backup.at).toLocaleString(localeNow(), { hour12: false }) : ''
       const warnItems = items.flatMap((it) => (Array.isArray(it.warnings) ? it.warnings.map((w) => ({ action: it.action, w })) : []))
       const key = 'warn_' + (warnItems.length ? 1 : 0)
       return h('div', { style: { display: 'flex', flexDirection: 'column', gap: '6px' } },
@@ -451,7 +471,7 @@ window.__ModuleLoader__.load({
         h(Kv, { k: M('本机数据', 'Local data'), v: (() => {
           const local = props.data && props.data.local
           if (!local || !local.known) return M('还没同步过（跑一次推送/拉取后才知道本机有没有新写入）', 'Never synced yet (run a push/pull to learn whether local data changed)')
-          const when = local.lastSyncAt ? new Date(local.lastSyncAt).toLocaleString(LOCALE, { hour12: false }) : '?'
+          const when = local.lastSyncAt ? new Date(local.lastSyncAt).toLocaleString(localeNow(), { hour12: false }) : '?'
           const tail = local.pending > 0
             ? M(
               `上次同步后有 ${local.pending} 个文件更新${local.sample && local.sample.length ? `（如 ${local.sample.join('、')}）` : ''}`,
@@ -647,7 +667,7 @@ window.__ModuleLoader__.load({
 
       const pending = auto.pending
       // 后台调度拿不到请求语言，宿主把原因中英各存一份，这里按当前界面语言挑
-      const pendingReason = pending ? (IS_ZH ? (pending.reasonZh || pending.reason) : (pending.reasonEn || pending.reason)) : ''
+      const pendingReason = pending ? (langIsZh() ? (pending.reasonZh || pending.reason) : (pending.reasonEn || pending.reason)) : ''
       return h('div', { style: S.card },
         h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' } },
           h('div', { style: S.cardTitle }, M('自动同步', 'Auto sync')),
@@ -663,10 +683,10 @@ window.__ModuleLoader__.load({
           ? h('div', { style: { ...S.hint, color: 'var(--dsw-alias-state-warn-primary)' } },
             M(
               `已排队：退出后${pending.mode === 'pull' ? '拉取' + (pending.restart ? '并重启客户端' : '') : '推送'}`
-              + `（${new Date(pending.at).toLocaleTimeString(LOCALE, { hour12: false })}`
+              + `（${new Date(pending.at).toLocaleTimeString(localeNow(), { hour12: false })}`
               + `${pendingReason ? M(`，原因：${pendingReason}`, `, reason: ${pendingReason}`) : ''}）`,
               `Queued: ${pending.mode === 'pull' ? 'pull' + (pending.restart ? ' and relaunch the client' : '') : 'push'} after exit `
-              + `(${new Date(pending.at).toLocaleTimeString(LOCALE, { hour12: false })}`
+              + `(${new Date(pending.at).toLocaleTimeString(localeNow(), { hour12: false })}`
               + `${pendingReason ? `, reason: ${pendingReason}` : ''})`,
             ))
           : null,
@@ -849,7 +869,7 @@ window.__ModuleLoader__.load({
         const has = u.hasUpdate === true
         const failed = !has && u.ok === false
         const kind = has ? 'warn' : (failed ? 'error' : 'ok')
-        const notesText = (u.remote && (IS_ZH ? (u.remote.notes || u.remote.notesEn) : (u.remote.notesEn || u.remote.notes))) || ''
+        const notesText = (u.remote && (langIsZh() ? (u.remote.notes || u.remote.notesEn) : (u.remote.notesEn || u.remote.notes))) || ''
         const label = has
           ? M(`有新版本 ${remote}`, `New version ${remote}`)
           : (failed ? M('检查失败', 'Check failed') : (u.checkedAt ? M('已是最新', 'Up to date') : M('检查中', 'Checking')))
@@ -1038,7 +1058,7 @@ window.__ModuleLoader__.load({
       return h('div', { style: S.page },
         h('div', { style: S.pageInner },
           h('div', { style: { display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' } },
-            h('div', { style: S.pageTitle }, TITLE),
+            h('div', { style: S.pageTitle }, M('配置同步', 'Config Sync')),
             h('span', { style: chipStyle(summary.kind) }, chipLabel(summary.kind)),
             h('div', { style: { ...S.hint, flex: 1, minWidth: '160px' } }, summary.text),
             // 云端状态放标题行（和左边的「一致」同一个徽标样式：绿=一致、红=不一致），
@@ -1097,7 +1117,7 @@ window.__ModuleLoader__.load({
 
       const head = h('div', { style: S.head },
         h('div', { style: S.headText },
-          h('div', { style: S.title }, TITLE),
+          h('div', { style: S.title }, M('配置同步', 'Config Sync')),
           h('div', { style: S.sub }, busy ? M('检测中…', 'Checking…') : summary.text),
           data ? h('div', { style: S.sub }, `app ${data.version.local || '?'} / ${M('契约', 'contract')} ${data.version.contract || '?'}`) : null,
         ),
@@ -1219,7 +1239,7 @@ window.__ModuleLoader__.load({
             name: 'sidebar.panellist',
             id: PANEL_ID,
             order: 35,
-            label: () => TITLE,
+            label: () => M('配置同步', 'Config Sync'),
             locale: 'config-sync',
           }, SidebarIcon)
           return () => {

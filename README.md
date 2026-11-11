@@ -14,7 +14,7 @@ DSH 插件：左侧栏加一行「配置同步」，点开是整页体检面板�
 
 ```sh
 # 从本仓库的 release 包安装（无需构建，包内已含宿主/前端/runtime 脚本）
-dsh plugin add https://raw.githubusercontent.com/QcWyGm/dsh-config-sync/main/releases/dsh-config-sync-0.3.0.tgz
+dsh plugin add https://raw.githubusercontent.com/QcWyGm/dsh-config-sync/main/releases/dsh-config-sync-0.3.1.tgz
 ```
 
 或在 DSH 面板「插件 → 插件市场」里搜索 `dsh-config-sync`（本仓库已将 `dsh-plugin`、`deepseek-harness` 写进包关键词，并声明了 `dsh.bundle.patch`）。
