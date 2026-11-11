@@ -16,6 +16,7 @@
  * - 零第三方依赖：只用 node:* 内建（第三方插件不能 import @deepseek-ai/*，它们在 app.asar 里）。
  */
 import { execFile, execFileSync } from 'node:child_process'
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { spawn } from 'node:child_process'
 import { createRequire } from 'node:module'
 import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
@@ -31,6 +32,24 @@ const ROUTE_PREPARE = '/config-sync/prepare'
 const ROUTE_SETTINGS = '/config-sync/settings'
 const ROUTE_UPDATE = '/config-sync/update'
 const SETTINGS_NAME = 'dsh-config-sync.json'
+
+/**
+ * 双语：面板是中文还是英文，跟客户端语言走（客户端每个请求都带 accept-language）。
+ * t(zh, en) 只在**面向用户**的文案上用；生成的 .cmd 脚本内容、日志一律保持中文。
+ */
+const langStore = new AsyncLocalStorage()
+
+function pickLang(req) {
+  try {
+    const raw = String((req && req.headers && (req.headers['accept-language'] || req.headers['Accept-Language'])) || '').toLowerCase()
+    if (!raw) return 'zh'
+    return raw.includes('zh') ? 'zh' : 'en'
+  } catch { return 'zh' }
+}
+
+function t(zh, en) {
+  return langStore.getStore() === 'en' ? en : zh
+}
 
 // ---- 插件自身的版本与更新源 ----
 // 插件目录就是 index.js 所在目录（apply 会把它部署成 <AppRoot>\dsh-config-sync-<ver>\）。
@@ -488,32 +507,75 @@ async function inspect(config) {
 
   const advice = []
   if (!appRoot) {
-    advice.push('定位不到客户端根目录：插件不在 <客户端根> 下（如 D:\\DeepSeekHarness\\dsh-config-sync-0.1.0），' +
-      '或客户端是打包版（resources\\app.asar）而这里没认出来 —— 三份同步脚本会因此生成不了')
+    advice.push(t(
+      '定位不到客户端根目录：插件不在 <客户端根> 下（如 D:\\DeepSeekHarness\\dsh-config-sync-0.1.0），'
+      + '或客户端是打包版（resources\\app.asar）而这里没认出来 —— 三份同步脚本会因此生成不了',
+      'Cannot locate the client root: the plugin is not under <client root> (e.g. D:\\DeepSeekHarness\\dsh-config-sync-0.1.0), '
+      + 'or this is a packaged build (resources\\app.asar) that was not recognized — the three sync scripts cannot be generated.',
+    ))
   }
   if (!repo) {
-    advice.push('还没有配置仓库目录：请在下面的「本机仓库」卡里点「设置路径」，指向那台机器上的 dsh-config 仓库（含 apply.ps1 和 profile\\package.json）')
+    advice.push(t(
+      '还没有配置仓库目录：请在下面的「本机仓库」卡里点「设置路径」，指向那台机器上的 dsh-config 仓库（含 apply.ps1 和 profile\\package.json）',
+      'The repo directory is not set: use the Local repo card below to point at the dsh-config repo on this machine (it must contain apply.ps1 and profile\\package.json).',
+    ))
   } else if (!isRepoDir(repo)) {
-    advice.push(`仓库目录不在了或不像仓库（缺 apply.ps1 或 profile\\package.json）：${repo} —— 请在「本机仓库」卡里重新设路径`)
+    advice.push(t(
+      `仓库目录不在了或不像仓库（缺 apply.ps1 或 profile\\package.json）：${repo} —— 请在「本机仓库」卡里重新设路径`,
+      `The repo directory is missing or does not look like a repo (no apply.ps1 or profile\\package.json): ${repo} — set the path again in the Local repo card.`,
+    ))
   } else if (!isFile(join(repo, 'sync.ps1'))) {
-    advice.push(`仓库目录里没有 sync.ps1，推送/拉取跑不起来：${repo}`)
+    advice.push(t(
+      `仓库目录里没有 sync.ps1，推送/拉取跑不起来：${repo}`,
+      `The repo directory has no sync.ps1, so push/pull cannot run: ${repo}`,
+    ))
   }
   if (repo && !(gitRemoteUrl || settings.remoteUrl)) {
-    advice.push('还没有配置云端仓库地址：推送/拉取生成不了，请在「云端仓库」卡里填远端地址并保存')
+    advice.push(t(
+      '还没有配置云端仓库地址：推送/拉取生成不了，请在「云端仓库」卡里填远端地址并保存',
+      'The cloud repo is not set: push/pull cannot be generated — fill in the remote URL in the Cloud repo card and save.',
+    ))
   }
-  if (!localVersion) advice.push(`读不到客户端版本（${appRoot ? `${appRoot}\\resources\\app\\package.json 或 resources\\app.asar` : 'AppRoot 没定位到'}）`)
+  if (!localVersion) {
+    advice.push(t(
+      `读不到客户端版本（${appRoot ? `${appRoot}\\resources\\app\\package.json 或 resources\\app.asar` : 'AppRoot 没定位到'}）`,
+      `Cannot read the client version (${appRoot ? `${appRoot}\\resources\\app\\package.json or resources\\app.asar` : 'AppRoot not found'})`,
+    ))
+  }
   if (localVersion && contractVersion && !versionMatch) {
-    advice.push(`两端客户端版本不同：本机 ${localVersion}，仓库契约 ${contractVersion}。先升级较旧那台，或 pull 时加 -AllowVersionDrift`)
+    advice.push(t(
+      `两端客户端版本不同：本机 ${localVersion}，仓库契约 ${contractVersion}。先升级较旧那台，或 pull 时加 -AllowVersionDrift`,
+      `The two clients differ: this machine ${localVersion}, repo contract ${contractVersion}. Upgrade the older one, or pass -AllowVersionDrift when pulling.`,
+    ))
   }
-  if (unresolved.length) advice.push(`${unresolved.length} 个 bundle 在本机解析不到，启动会在 entry loading 崩溃：${unresolved.join(', ')}`)
-  if (missing.length) advice.push(`${missing.length} 个依赖没装（pnpm install 没跑成）：${missing.join(', ')}`)
-  if (behind !== null && behind > 0) advice.push(`仓库落后 ${behind} 个提交：退出 DSH 后执行「拉取」`)
-  if (ahead !== null && ahead > 0) advice.push(`仓库领先 ${ahead} 个提交（本机改过还没推）：退出 DSH 后执行「推送」`)
-  if (dirty !== null && dirty > 0) advice.push(`工作区有 ${dirty} 项未提交：退出 DSH 后跑「推送」会一并提交`)
+  if (unresolved.length) {
+    advice.push(t(
+      `${unresolved.length} 个 bundle 在本机解析不到，启动会在 entry loading 崩溃：${unresolved.join(', ')}`,
+      `${unresolved.length} bundle(s) cannot be resolved on this machine and will crash entry loading: ${unresolved.join(', ')}`,
+    ))
+  }
+  if (missing.length) {
+    advice.push(t(
+      `${missing.length} 个依赖没装（pnpm install 没跑成）：${missing.join(', ')}`,
+      `${missing.length} dependency(ies) missing (pnpm install did not finish): ${missing.join(', ')}`,
+    ))
+  }
+  if (behind !== null && behind > 0) {
+    advice.push(t(`仓库落后 ${behind} 个提交：退出 DSH 后执行「拉取」`, `The repo is ${behind} commit(s) behind: run Pull after DSH exits.`))
+  }
+  if (ahead !== null && ahead > 0) {
+    advice.push(t(`仓库领先 ${ahead} 个提交（本机改过还没推）：退出 DSH 后执行「推送」`, `${ahead} local commit(s) not pushed yet: run Push after DSH exits.`))
+  }
+  if (dirty !== null && dirty > 0) {
+    advice.push(t(`工作区有 ${dirty} 项未提交：退出 DSH 后跑「推送」会一并提交`, `${dirty} uncommitted change(s): running Push after DSH exits commits them too.`))
+  }
   if (local.known && local.pending > 0) {
-    advice.push(`本机有 ${local.pending} 个文件在上次同步之后有更新（新会话/资料之类），仓库里还没有：退出 DSH 后跑「推送」`)
+    advice.push(t(
+      `本机有 ${local.pending} 个文件在上次同步之后有更新（新会话/资料之类），仓库里还没有：退出 DSH 后跑「推送」`,
+      `${local.pending} file(s) changed since the last sync (new sessions/materials) and are not in the repo yet: run Push after DSH exits.`,
+    ))
   }
-  if (!advice.length) advice.push('仓库与本机一致，没有待办')
+  if (!advice.length) advice.push(t('仓库与本机一致，没有待办', 'The repo matches this machine — nothing to do.'))
 
   return {
     ok: true,
@@ -651,7 +713,10 @@ function pickPs1(repo, name) {
   if (isFile(fromRepo)) return fromRepo
   const fromPlugin = join(pluginRoot(), 'runtime', name)
   if (isFile(fromPlugin)) return fromPlugin
-  throw new Error(`找不到 ${name}：仓库里没有（${fromRepo}），插件自带的 runtime 也没有（${fromPlugin}）`)
+  throw new Error(t(
+    `找不到 ${name}：仓库里没有（${fromRepo}），插件自带的 runtime 也没有（${fromPlugin}）`,
+    `Cannot find ${name}: not in the repo (${fromRepo}) and not in the plugin's bundled runtime (${fromPlugin})`,
+  ))
 }
 
 function pluginRoot() {
@@ -737,11 +802,13 @@ function buildCmd(config, action, repo, appRoot, dshHome, state = {}) {
     ].join('\r\n')
     const path = join(repo, '同步-还原.cmd')
     writeFileSync(path, text, 'utf8')
-    return { action, label: '还原（本机 → 快照）', path, command: real, backup: { dir: backup.latest, root: backup.root, at: backup.latestAt, count: backup.count, files: backup.latestFiles } }
+    return { action, label: t('还原（本机 → 快照）', 'Restore (machine → snapshot)'), path, command: real, backup: { dir: backup.latest, root: backup.root, at: backup.latestAt, count: backup.count, files: backup.latestFiles } }
   }
 
   const target = action === 'push' ? 'push' : 'pull'
-  const label = target === 'push' ? '推送（本机 → 远端）' : '拉取（远端 → 本机）'
+  const label = target === 'push'
+    ? t('推送（本机 → 远端）', 'Push (machine → remote)')
+    : t('拉取（远端 → 本机）', 'Pull (remote → machine)')
   // 提交说明只对 push 有意义：用户在面板里填一句，时间由 sync.ps1 在实际执行那一刻追加。
   // 这里只做清洗（去引号/换行、% 转义、限长）：引号会破坏参数结构，% 会被 cmd 当变量展开。
   const note = target === 'push' ? String(state.message || '').replace(/["\r\n]/g, ' ').replace(/%/g, '%%').trim().slice(0, 120) : ''
@@ -751,9 +818,22 @@ function buildCmd(config, action, repo, appRoot, dshHome, state = {}) {
   const dirty = Number(state.dirty) || 0
   const warnings = []
   if (target === 'pull') {
-    if (ahead > 0) warnings.push(`本机领先远端 ${ahead} 个提交（还没推送），拉取后这些改动在仓库里仍然缺失`)
-    if (dirty > 0) warnings.push(`工作区有 ${dirty} 项未提交，拉取会用仓库版本覆盖对应的本机文件`)
-    warnings.push('拉取 = 拉远端 + apply 到本机：会用仓库里的版本覆盖本机配置')
+    if (ahead > 0) {
+      warnings.push(t(
+        `本机领先远端 ${ahead} 个提交（还没推送），拉取后这些改动在仓库里仍然缺失`,
+        `This machine is ${ahead} commit(s) ahead (not pushed yet); after pulling, those changes are still missing from the repo.`,
+      ))
+    }
+    if (dirty > 0) {
+      warnings.push(t(
+        `工作区有 ${dirty} 项未提交，拉取会用仓库版本覆盖对应的本机文件`,
+        `${dirty} uncommitted change(s): pulling overwrites the matching local files with the repo version.`,
+      ))
+    }
+    warnings.push(t(
+      '拉取 = 拉远端 + apply 到本机：会用仓库里的版本覆盖本机配置',
+      'Pull = fetch the remote and apply it locally: the repo version overwrites the local config.',
+    ))
   }
   const guard = target === 'pull'
     ? [
@@ -915,7 +995,7 @@ function psQuote(value) {
  */
 async function spawnWatcher({ mode, repo, appRoot, dshHome, restart, extraArgs = [] }) {
   const script = autoScript(dshHome, repo)
-  if (!script) return { ok: false, error: '插件与仓库里都没有 post-exit.ps1，无法排队' }
+  if (!script) return { ok: false, error: t('插件与仓库里都没有 post-exit.ps1，无法排队', 'post-exit.ps1 is in neither the plugin nor the repo — cannot queue') }
 
   // 同一时刻只允许一次同步。实测过的坑：启动首检排了 push、用户在确认框点确认又排了 pull，
   // 两个守护都在等同一个 pid —— DSH 一退出它们**同时开工**，一次推送一次拉取并行跑、各重启一次，
@@ -965,7 +1045,7 @@ async function spawnWatcher({ mode, repo, appRoot, dshHome, restart, extraArgs =
   } catch (error) {
     const msg = String((error && error.message) || error)
     logLaunch(dshHome, `启动失败 ${mode} exe=${exe}：${msg}`)
-    return { ok: false, error: `拉不起 powershell（${exe}）：${msg}` }
+    return { ok: false, error: t(`拉不起 powershell（${exe}）：${msg}`, `Cannot launch PowerShell (${exe}): ${msg}`) }
   }
   let stdout = ''
   let stderr = ''
@@ -979,7 +1059,7 @@ async function spawnWatcher({ mode, repo, appRoot, dshHome, restart, extraArgs =
   if (code !== 0) {
     const detail = String(stderr || stdout || code).trim().slice(0, 300)
     logLaunch(dshHome, `启动失败 ${mode} exe=${exe}：${detail}`)
-    return { ok: false, error: `拉不起 post-exit（launcher 退出码 ${code}）：${detail}` }
+    return { ok: false, error: t(`拉不起 post-exit（launcher 退出码 ${code}）：${detail}`, `Cannot launch post-exit (launcher exit code ${code}): ${detail}`) }
   }
   const pid = Number(String(stdout).trim().split(/\s+/).pop()) || 0
   autoState.watcherStartedAt = Date.now()
@@ -1202,14 +1282,17 @@ async function handleSettings(req, res, config) {
     let repoPath = before.repoPath
     if (has('repoPath')) {
       repoPath = String(body.repoPath || '').trim().replace(/[\\/]+$/, '')
-      if (!repoPath) throw new Error('仓库路径不能为空')
+      if (!repoPath) throw new Error(t('仓库路径不能为空', 'Repo path cannot be empty'))
       // 新机器上这个目录常常还不存在、或者是个空目录（等着首次拉取去克隆）：都允许存。
       // 只有「已经有别的东西、又明显不是 dsh-config 仓库」才拒，免得住错地方把人家目录写乱。
       if (isDir(repoPath) && !isRepoDir(repoPath)) {
         let entries = []
         try { entries = readdirSync(repoPath) } catch { }
         if (entries.length > 0 && !isFile(join(repoPath, '.git', 'HEAD'))) {
-          throw new Error(`这个目录里已经有别的东西，又不像 dsh-config 仓库（缺 apply.ps1 或 profile\\package.json）：${repoPath}`)
+          throw new Error(t(
+            `这个目录里已经有别的东西，又不像 dsh-config 仓库（缺 apply.ps1 或 profile\\package.json）：${repoPath}`,
+            `That directory already holds something else and does not look like a dsh-config repo (no apply.ps1 or profile\\package.json): ${repoPath}`,
+          ))
         }
       }
     }
@@ -1217,14 +1300,14 @@ async function handleSettings(req, res, config) {
     let remoteUrl = before.remoteUrl
     if (has('remoteUrl')) {
       remoteUrl = String(body.remoteUrl || '').trim()
-      if (!remoteUrl) throw new Error('远端地址不能为空')
-      if (!REMOTE_RE.test(remoteUrl)) throw new Error('远端地址只支持 git@host:path、ssh:// 或 https:// 三种写法')
+      if (!remoteUrl) throw new Error(t('远端地址不能为空', 'Remote URL cannot be empty'))
+      if (!REMOTE_RE.test(remoteUrl)) throw new Error(t('远端地址只支持 git@host:path、ssh:// 或 https:// 三种写法', 'Remote URL must be git@host:path, ssh:// or https://'))
     }
 
     let sshKey = before.sshKey
     if (has('sshKey')) {
       sshKey = String(body.sshKey || '').trim()
-      if (sshKey && !isFile(sshKey)) throw new Error(`私钥文件不存在：${sshKey}`)
+      if (sshKey && !isFile(sshKey)) throw new Error(t(`私钥文件不存在：${sshKey}`, `Private key file does not exist: ${sshKey}`))
     }
 
     // 更新令牌：私有仓库读清单/下包要用。字段没给就沿用原值，明确 clearUpdateToken 才清空。
@@ -1238,7 +1321,7 @@ async function handleSettings(req, res, config) {
     else if (has('updateManifestUrl')) {
       updateManifestUrl = String(body.updateManifestUrl || '').trim()
       if (updateManifestUrl && !/^https?:\/\//i.test(updateManifestUrl)) {
-        throw new Error('清单地址只能是 http(s) 链接；想用内置默认地址就留空')
+        throw new Error(t('清单地址只能是 http(s) 链接；想用内置默认地址就留空', 'The manifest URL must be an http(s) link; leave it empty to use the built-in default'))
       }
     }
 
@@ -1250,7 +1333,10 @@ async function handleSettings(req, res, config) {
     if (!has('repoPath') && !has('remoteUrl') && !has('sshKey') &&
         !has('autoPull') && !has('autoPush') && !has('autoRestart') &&
         !has('updateToken') && !has('updateManifestUrl') && body.clearUpdateToken !== true && body.clearUpdateManifestUrl !== true) {
-      throw new Error('没有要保存的字段（repoPath / remoteUrl / sshKey / autoPull / autoPush / updateToken / updateManifestUrl 至少给一个）')
+      throw new Error(t(
+        '没有要保存的字段（repoPath / remoteUrl / sshKey / autoPull / autoPush / updateToken / updateManifestUrl 至少给一个）',
+        'Nothing to save (provide at least one of repoPath / remoteUrl / sshKey / autoPull / autoPush / updateToken / updateManifestUrl)',
+      ))
     }
 
     // 新仓库路径一落盘，后面的 git remote 要对它做，别用改之前解析出来的旧仓库。
@@ -1279,7 +1365,10 @@ async function handleSettings(req, res, config) {
         if (result.err) {
           // 回滚：设置文件恢复原样，别让面板显示一个 git 并未采用的地址
           if (prevRaw === null) { try { unlinkSync(file) } catch { } } else { writeFileSync(file, prevRaw, 'utf8') }
-          throw new Error(`${current === null ? 'git remote add' : 'git remote set-url'} 失败：${String(result.stderr || result.err.message || result.err).trim()}`)
+          throw new Error(t(
+            `${current === null ? 'git remote add' : 'git remote set-url'} 失败：${String(result.stderr || result.err.message || result.err).trim()}`,
+            `${current === null ? 'git remote add' : 'git remote set-url'} failed: ${String(result.stderr || result.err.message || result.err).trim()}`,
+          ))
         }
         gitSet = remoteUrl
       }
@@ -1354,14 +1443,16 @@ function resolveTgzUrl(manifest, manifestUrl = UPDATE_MANIFEST_URL) {
 }
 
 async function fetchManifest(url) {
-  if (typeof fetch !== 'function') throw new Error('当前运行环境没有 fetch，无法检查更新')
+  if (typeof fetch !== 'function') throw new Error(t('当前运行环境没有 fetch，无法检查更新', 'fetch is unavailable in this runtime — cannot check for updates'))
   const ctrl = typeof AbortController === 'function' ? new AbortController() : null
   const timer = ctrl ? setTimeout(() => { try { ctrl.abort() } catch { } }, 10 * 1000) : null
   try {
     const res = await fetch(url, { cache: 'no-store', signal: ctrl ? ctrl.signal : undefined })
-    if (!res.ok) throw new Error(`HTTP ${res.status}${res.status === 403 ? '（私有仓库要填只读令牌）' : ''}`)
+    if (!res.ok) {
+      throw new Error(`HTTP ${res.status}${res.status === 403 ? t('（私有仓库要填只读令牌）', ' (a read-only token is required for private repos)') : ''}`)
+    }
     const json = await res.json()
-    if (!json || !json.version) throw new Error('version.json 里没有 version 字段')
+    if (!json || !json.version) throw new Error(t('version.json 里没有 version 字段', 'version.json has no "version" field'))
     return json
   } finally {
     if (timer) clearTimeout(timer)
@@ -1411,7 +1502,7 @@ function updatePayload(state, settings = {}) {
   const remote = state.manifest
   return {
     ok: !state.error,
-    local: { version: PLUGIN_VERSION || '未知', dir: PLUGIN_DIR },
+    local: { version: PLUGIN_VERSION || t('未知', 'unknown'), dir: PLUGIN_DIR },
     // 更新相关的配置集中在这里（清单地址、令牌是否已存），别散到「云端仓库」卡里
     config: {
       manifestUrl: String(settings.updateManifestUrl || '') || UPDATE_MANIFEST_URL,
@@ -1421,6 +1512,8 @@ function updatePayload(state, settings = {}) {
     remote: remote ? {
       version: String(remote.version || ''),
       notes: String(remote.notes || ''),
+      // 清单里的说明是中英两份（notes / notesEn），由客户端按自己的语言挑
+      notesEn: String(remote.notesEn || ''),
       releasedAt: String(remote.releasedAt || ''),
       tgz: resolveTgzUrl(remote, state.url),
       sha256: String(remote.sha256 || ''),
@@ -1465,15 +1558,24 @@ async function handleUpdate(req, res, config) {
     if (action === 'apply') {
       const state = await checkUpdate({ force: true, url: manifestUrl, token: updateToken })
       const remote = state.manifest
-      if (!remote) throw new Error(`读不到更新清单：${state.error || '未知原因'}`)
-      if (compareVersion(remote.version, PLUGIN_VERSION) <= 0) throw new Error(`已经是最新版本（${PLUGIN_VERSION}），无需更新`)
+      if (!remote) throw new Error(t(`读不到更新清单：${state.error || '未知原因'}`, `Cannot read the update manifest: ${state.error || 'unknown reason'}`))
+      if (compareVersion(remote.version, PLUGIN_VERSION) <= 0) {
+        throw new Error(t(`已经是最新版本（${PLUGIN_VERSION}），无需更新`, `Already on the latest version (${PLUGIN_VERSION}) — no update needed`))
+      }
       const tgz = resolveTgzUrl(remote, state.url)
-      if (!tgz) throw new Error('version.json 里没有给 tgz 下载地址')
-      const notes = String(remote.notes || '').trim()
-      const yes = await askConfirm('更新「配置同步」插件',
-        `把插件从 ${PLUGIN_VERSION} 更新到 ${remote.version}？` +
-        (notes ? `\n\n${notes}` : '') +
-        '\n\n更新过程：退出 DSH → 下载并校验安装包 → 备份旧版 → 覆盖安装 → 自动重启。')
+      if (!tgz) throw new Error(t('version.json 里没有给 tgz 下载地址', 'version.json gives no tgz download URL'))
+      const notes = String((langStore.getStore() === 'en' ? (remote.notesEn || remote.notes) : remote.notes) || '').trim()
+      const yes = await askConfirm(
+        t('更新「配置同步」插件', 'Update the Config Sync plugin'),
+        t(
+          `把插件从 ${PLUGIN_VERSION} 更新到 ${remote.version}？`
+          + (notes ? `\n\n${notes}` : '')
+          + '\n\n更新过程：退出 DSH → 下载并校验安装包 → 备份旧版 → 覆盖安装 → 自动重启。',
+          `Update the plugin from ${PLUGIN_VERSION} to ${remote.version}?`
+          + (notes ? `\n\n${notes}` : '')
+          + '\n\nSteps: exit DSH → download and verify the package → back up the old version → install over it → relaunch automatically.',
+        ),
+      )
       if (!yes) { sendJson(res, 200, { ok: true, action, cancelled: true, ...updatePayload(state, settings) }); return }
 
       const repo = resolveRepo(config?.repoPath, dshHome).repo || ''
@@ -1500,7 +1602,7 @@ async function handleUpdate(req, res, config) {
       return
     }
 
-    throw new Error('action 只能是 check / apply')
+    throw new Error(t('action 只能是 check / apply', 'action must be check or apply'))
   } catch (error) {
     sendJson(res, 400, { ok: false, error: String((error && error.message) || error) })
   }
@@ -1532,7 +1634,7 @@ async function handleAuto(req, res, config) {
     const dshHome = config?.dshHome || process.env.DSH_HOME || join(homedir(), '.dsh')
     const settings = readSettings(dshHome)
     const repo = resolveRepo(config?.repoPath, dshHome).repo || ''
-    if (!repo) throw new Error('还没有配置仓库目录，自动同步无从谈起')
+    if (!repo) throw new Error(t('还没有配置仓库目录，自动同步无从谈起', 'The repo directory is not configured, so auto sync cannot work'))
     const appRoot = resolveAppRoot(config?.appRoot) || ''
 
     if (action === 'check') {
@@ -1541,7 +1643,12 @@ async function handleAuto(req, res, config) {
       const drift = await checkDrift(repo)
       autoState.checking = false
       autoState.lastCheckAt = Date.now()
-      if (!drift) { autoState.lastCheckError = '读不到远端（fetch 失败或没有 origin），先确认云端仓库地址与 SSH'; }
+      if (!drift) {
+        autoState.lastCheckError = t(
+          '读不到远端（fetch 失败或没有 origin），先确认云端仓库地址与 SSH',
+          'Cannot read the remote (fetch failed or there is no origin) — check the cloud repo URL and SSH setup',
+        )
+      }
       autoState.drift = drift
       sendJson(res, 200, { ok: true, action, drift, error: autoState.lastCheckError || null })
       return
@@ -1570,7 +1677,7 @@ async function handleAuto(req, res, config) {
       return
     }
 
-    throw new Error(`action 只能是 check / pull-now / push-now / cancel`)
+    throw new Error(t('action 只能是 check / pull-now / push-now / cancel', 'action must be check / pull-now / push-now / cancel'))
   } catch (error) {
     sendJson(res, 400, { ok: false, error: String((error && error.message) || error) })
   }
@@ -1588,7 +1695,7 @@ function scheduleAutoStart(config) {
       if (autoState.pending) return
       const repo = resolveRepo(config?.repoPath, dshHome).repo || ''
       if (!repo || !isDir(join(repo, '.git'))) {
-        autoState.lastCheckError = '仓库还没就位，跳过本次自动检查'
+        autoState.lastCheckError = t('仓库还没就位，跳过本次自动检查', 'The repo is not in place yet — skipping this auto check')
         autoState.lastCheckAt = Date.now()
         return
       }
@@ -1597,17 +1704,24 @@ function scheduleAutoStart(config) {
       autoState.checking = false
       autoState.lastCheckAt = Date.now()
       if (!drift) {
-        autoState.lastCheckError = '读不到远端（fetch 失败或没有 origin）'
+        autoState.lastCheckError = t('读不到远端（fetch 失败或没有 origin）', 'Cannot read the remote (fetch failed or there is no origin)')
         return
       }
       autoState.drift = drift
       const appRoot = resolveAppRoot(config?.appRoot) || ''
 
       if (settings.autoPull && drift.behind > 0) {
-        const yes = await askConfirm('云端有更新，要同步到本机吗？',
-          `云端比本机多 ${drift.behind} 个提交。\n` +
-          `同步需要先完全退出 DSH：确认后客户端会自动关闭，拉取完成后按设置自动重新打开。\n` +
-          `（本机领先 ${drift.ahead} 个提交，拉取不会动它们）`)
+        const yes = await askConfirm(
+          t('云端有更新，要同步到本机吗？', 'The cloud has new commits — sync them to this machine?'),
+          t(
+            `云端比本机多 ${drift.behind} 个提交。\n`
+            + '同步需要先完全退出 DSH：确认后客户端会自动关闭，拉取完成后按设置自动重新打开。\n'
+            + `（本机领先 ${drift.ahead} 个提交，拉取不会动它们）`,
+            `The cloud is ${drift.behind} commit(s) ahead of this machine.\n`
+            + 'Syncing requires DSH to fully exit first: after you confirm, the client closes itself and reopens according to your settings once the pull finishes.\n'
+            + `(This machine is ${drift.ahead} commit(s) ahead — pulling leaves those alone.)`,
+          ),
+        )
         if (yes) {
           const started = await spawnWatcher({ mode: 'pull', repo, appRoot, dshHome, restart: settings.autoRestart })
           if (started.ok) {
@@ -1630,15 +1744,19 @@ function scheduleAutoStart(config) {
         if (raw) dirty = raw.split('\n').filter((l) => l.trim()).length
         const syncState = readSyncState(dshHome)
         const lp = localPending(dshHome, syncState.lastSyncAt, config?.profileName, { repo, appRoot })
-        const reason = drift.ahead > 0 ? `领先 ${drift.ahead} 个提交`
+        // 后台调度里拿不到请求语言，所以中英各存一份，由客户端按自己的语言挑
+        const reasonZh = drift.ahead > 0 ? `领先 ${drift.ahead} 个提交`
           : dirty > 0 ? `未提交 ${dirty} 项`
             : (lp.known && lp.pending > 0) ? `本机 ${lp.pending} 个文件比上次同步新` : ''
-        if (reason) {
+        const reasonEn = drift.ahead > 0 ? `${drift.ahead} commit(s) ahead`
+          : dirty > 0 ? `${dirty} uncommitted change(s)`
+            : (lp.known && lp.pending > 0) ? `${lp.pending} file(s) newer than the last sync` : ''
+        if (reasonZh) {
           // 自动推送不需要确认（用户已开开关），排队等退出即可；推完把客户端拉回来
           const restart = settings.autoRestart !== false
           const started = await spawnWatcher({ mode: 'push', repo, appRoot, dshHome, restart })
           if (started.ok) {
-            autoState.pending = { mode: 'push', at: Date.now(), reason, restart, watcherPid: started.pid, closeRequested: false }
+            autoState.pending = { mode: 'push', at: Date.now(), reason: reasonZh, reasonZh, reasonEn, restart, watcherPid: started.pid, closeRequested: false }
           } else {
             autoState.lastCheckError = started.error
           }
@@ -1668,7 +1786,7 @@ async function handlePrepare(req, res, config) {
     const raw = await readBody(req)
     const body = raw.trim() ? JSON.parse(raw) : {}
     const action = String(body.action || '')
-    if (!ACTIONS.includes(action)) throw new Error(`action 只能是 ${ACTIONS.join(' / ')}`)
+    if (!ACTIONS.includes(action)) throw new Error(t(`action 只能是 ${ACTIONS.join(' / ')}`, `action must be one of ${ACTIONS.join(' / ')}`))
     const message = typeof body.message === 'string' ? body.message : ''
     const dshHome = config?.dshHome || process.env.DSH_HOME || join(homedir(), '.dsh')
     const resolved = resolveRepo(config?.repoPath, dshHome)
@@ -1676,7 +1794,10 @@ async function handlePrepare(req, res, config) {
     // 仓库还没克隆（新机器只装了插件）也允许生成：脚本会用插件自带的 runtime\，首次拉取由 sync.ps1 现场 clone。
     // 只有「压根没配过路径」才拦。
     if (!repo) {
-      throw new Error('还没有配置仓库目录：请先在面板「本机仓库」卡里点「设置路径」，指到一个目录（本地还没有仓库时，首次拉取会自动从云端克隆）')
+      throw new Error(t(
+        '还没有配置仓库目录：请先在面板「本机仓库」卡里点「设置路径」，指到一个目录（本地还没有仓库时，首次拉取会自动从云端克隆）',
+        'The repo directory is not configured: set the path in the Local repo card first (if the repo is not local yet, the first pull clones it from the cloud automatically)',
+      ))
     }
     const repoReady = isRepoDir(repo)
     // 推送 / 拉取都以「云端仓库地址」为前置；还原只动本机快照，不需要远端。
@@ -1684,19 +1805,29 @@ async function handlePrepare(req, res, config) {
       const origin = isDir(join(repo, '.git')) ? await git(repo, ['remote', 'get-url', 'origin']) : null
       const remoteUrl = origin || readSettings(dshHome).remoteUrl
       if (!remoteUrl) {
-        throw new Error('还没有配置云端仓库地址：请先在面板「云端仓库」卡里填好远端地址并保存，再生成推送/拉取脚本')
+        throw new Error(t(
+          '还没有配置云端仓库地址：请先在面板「云端仓库」卡里填好远端地址并保存，再生成推送/拉取脚本',
+          'The cloud repo is not configured: fill in the remote URL in the Cloud repo card and save before generating push/pull scripts',
+        ))
       }
     }
     const appRoot = resolveAppRoot(config?.appRoot)
     // 定位不到客户端根就不许生成脚本：-AppRoot 错了会把插件部署进仓库、{{APP_ROOT}} 也全展开错位。
     if (!appRoot) {
-      throw new Error('定位不到客户端根目录（要能找到 resources\\app\\package.json 或 resources\\app.asar）：' +
-        '请确认插件装在 <客户端根> 下（例如 D:\\DeepSeekHarness\\dsh-config-sync-0.1.0），或在设置里填客户端根 appRoot')
+      throw new Error(t(
+        '定位不到客户端根目录（要能找到 resources\\app\\package.json 或 resources\\app.asar）：'
+        + '请确认插件装在 <客户端根> 下（例如 D:\\DeepSeekHarness\\dsh-config-sync-0.1.0），或在设置里填客户端根 appRoot',
+        'Cannot locate the client root (needs resources\\app\\package.json or resources\\app.asar): '
+        + 'make sure the plugin is installed under <client root> (e.g. D:\\DeepSeekHarness\\dsh-config-sync-0.1.0), or set appRoot in the settings',
+      ))
     }
     const state = {...await repoState(repo), message}
     const bootstrap = repoReady ? null : {
       repo,
-      note: '本机还没有这个仓库（或还没克隆）：生成的三份脚本先用插件自带的 runtime，第一次执行拉取/推送会自动从云端克隆到该目录',
+      note: t(
+        '本机还没有这个仓库（或还没克隆）：生成的三份脚本先用插件自带的 runtime，第一次执行拉取/推送会自动从云端克隆到该目录',
+        'This repo is not on this machine yet (or not cloned): the three scripts use the plugin\'s bundled runtime, and the first pull/push clones it from the cloud into that directory',
+      ),
     }
     if (action === 'all') {
       const built = ['push', 'pull', 'restore'].map((a) => buildCmd(config, a, repo, appRoot, dshHome, state))
@@ -1713,30 +1844,33 @@ async function handlePrepare(req, res, config) {
 export function apply(ctx, config) {
   try {
     ctx.inject(['webServer'], (scoped) => {
+      // 每个请求按 accept-language 决定返回中文还是英文：AsyncLocalStorage 让 t() 在
+      // 任何异步后续里都能读到本次请求的语言，不用把语言参数一层层往下传。
+      const withLang = (handler) => (req, res) => langStore.run(pickLang(req), () => handler(req, res, config))
       scoped.effect(() => scoped.webServer.register({
         kind: 'exact',
         path: ROUTE_STATUS,
-        handler: (req, res) => handleStatus(req, res, config),
+        handler: withLang(handleStatus),
       }))
       scoped.effect(() => scoped.webServer.register({
         kind: 'exact',
         path: ROUTE_PREPARE,
-        handler: (req, res) => handlePrepare(req, res, config),
+        handler: withLang(handlePrepare),
       }))
       scoped.effect(() => scoped.webServer.register({
         kind: 'exact',
         path: ROUTE_SETTINGS,
-        handler: (req, res) => handleSettings(req, res, config),
+        handler: withLang(handleSettings),
       }))
       scoped.effect(() => scoped.webServer.register({
         kind: 'exact',
         path: ROUTE_AUTO,
-        handler: (req, res) => handleAuto(req, res, config),
+        handler: withLang(handleAuto),
       }))
       scoped.effect(() => scoped.webServer.register({
         kind: 'exact',
         path: ROUTE_UPDATE,
-        handler: (req, res) => handleUpdate(req, res, config),
+        handler: withLang(handleUpdate),
       }))
     })
     // 开关打开才排一次启动检查（默认关 = 什么都不做）

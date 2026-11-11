@@ -32,7 +32,26 @@ window.__ModuleLoader__.load({
     const name = 'dsh-config-sync'
     const inject = ['slots']
     const PANEL_ID = 'config-sync'
-    const TITLE = '配置同步'
+
+    /**
+     * 语言：跟随客户端。zh-* 走中文，其余一律英文。
+     * 所有界面文案走 M(zh, en)；请求都带 accept-language，宿主按它返回同语言的建议句。
+     */
+    const UI_LANG = (() => {
+      try {
+        const list = (navigator.languages && navigator.languages.length) ? navigator.languages : [navigator.language || '']
+        for (const item of list) {
+          const tag = String(item || '').trim().toLowerCase()
+          if (tag) return tag.startsWith('zh') ? 'zh' : 'en'
+        }
+      } catch { }
+      return 'zh'
+    })()
+    const IS_ZH = UI_LANG === 'zh'
+    const M = (zh, en) => (IS_ZH ? zh : en)
+    const LOCALE = IS_ZH ? 'zh-CN' : 'en-US'
+    const LANG_HEADERS = { 'accept-language': IS_ZH ? 'zh-CN,zh;q=0.9' : 'en-US,en;q=0.9' }
+    const TITLE = M('配置同步', 'Config Sync')
 
     const S = {
       // 侧栏 / 设置摘要行
@@ -142,54 +161,77 @@ window.__ModuleLoader__.load({
      * 「待处理」和「一致」两句都是在讲同一件事，看着像互相矛盾。
      */
     function summarize(data) {
-      if (!data) return { kind: 'idle', text: '尚未检测' }
+      if (!data) return { kind: 'idle', text: M('尚未检测', 'Not checked yet') }
       const { repo, version, bundles, deps } = data
-      if (!repo || !repo.exists) return { kind: 'error', text: '仓库路径还没配置（先在本机仓库卡里设置）' }
-      if (!data.remote || !data.remote.configured) return { kind: 'error', text: '云端仓库地址还没配置（先在云端仓库卡里设置）' }
+      if (!repo || !repo.exists) return { kind: 'error', text: M('仓库路径还没配置（先在本机仓库卡里设置）', 'Repo path is not set (configure it in the Local repo card)') }
+      if (!data.remote || !data.remote.configured) return { kind: 'error', text: M('云端仓库地址还没配置（先在云端仓库卡里设置）', 'Remote is not set (configure it in the Cloud repo card)') }
       if (bundles.unresolved.length || deps.missing.length) {
-        return { kind: 'error', text: `${bundles.unresolved.length} 个 bundle 解析不到 · ${deps.missing.length} 个依赖缺失` }
+        return {
+          kind: 'error',
+          text: M(
+            `${bundles.unresolved.length} 个 bundle 解析不到 · ${deps.missing.length} 个依赖缺失`,
+            `${bundles.unresolved.length} bundle(s) unresolved · ${deps.missing.length} dependency(ies) missing`,
+          ),
+        }
       }
       if (version.local && version.contract && !version.match) {
-        return { kind: 'warn', text: `版本不一致（本机 ${version.local} ≠ 契约 ${version.contract}）` }
+        return {
+          kind: 'warn',
+          text: M(
+            `版本不一致（本机 ${version.local} ≠ 契约 ${version.contract}）`,
+            `Version mismatch (local ${version.local} ≠ contract ${version.contract})`,
+          ),
+        }
       }
-      if (repo.behind === null) return { kind: 'idle', text: '读不到本机 git 状态（git 不可用或没 upstream）' }
-      if (repo.dirty > 0) return { kind: 'warn', text: `本机有 ${repo.dirty} 处未提交改动，建议推送` }
-      if (repo.ahead > 0) return { kind: 'warn', text: `本机有 ${repo.ahead} 个提交还没推送` }
+      if (repo.behind === null) return { kind: 'idle', text: M('读不到本机 git 状态（git 不可用或没 upstream）', 'Cannot read local git state (git missing or no upstream)') }
+      if (repo.dirty > 0) return { kind: 'warn', text: M(`本机有 ${repo.dirty} 处未提交改动，建议推送`, `${repo.dirty} uncommitted change(s) — consider pushing`) }
+      if (repo.ahead > 0) return { kind: 'warn', text: M(`本机有 ${repo.ahead} 个提交还没推送`, `${repo.ahead} local commit(s) not pushed yet`) }
       // git 干净不代表没东西要推：新会话/新资料还躺在 ~\.dsh 里，没 capture 之前仓库是完全干净的
       const local = data.local || {}
       if (local.known && local.pending > 0) {
-        return { kind: 'warn', text: `本机有 ${local.pending} 个文件在上次同步后有更新，建议推送` }
+        return {
+          kind: 'warn',
+          text: M(
+            `本机有 ${local.pending} 个文件在上次同步后有更新，建议推送`,
+            `${local.pending} local file(s) changed since the last sync — consider pushing`,
+          ),
+        }
       }
-      return { kind: 'ok', text: '仓库与本机一致' }
+      return { kind: 'ok', text: M('仓库与本机一致', 'Repo matches this machine') }
     }
 
     function chipLabel(kind) {
-      if (kind === 'ok') return '一致'
-      if (kind === 'error') return '有问题'
-      if (kind === 'warn') return '待推送'
-      return '未检测'
+      if (kind === 'ok') return M('一致', 'In sync')
+      if (kind === 'error') return M('有问题', 'Problem')
+      if (kind === 'warn') return M('待推送', 'To push')
+      return M('未检测', 'Unchecked')
     }
 
+    function badJson(res) { return new Error(M(`${res.status} 返回非 JSON`, `${res.status} returned non-JSON`)) }
+
     async function callStatus() {
-      const res = await fetch('/config-sync/status', { cache: 'no-store', credentials: 'same-origin' })
+      const res = await fetch('/config-sync/status', { cache: 'no-store', credentials: 'same-origin', headers: LANG_HEADERS })
       const text = await res.text()
       let body
-      try { body = text ? JSON.parse(text) : null } catch { throw new Error(`${res.status} 返回非 JSON`) }
+      try { body = text ? JSON.parse(text) : null } catch { throw badJson(res) }
       if (!res.ok || !body || body.ok !== true) throw new Error((body && body.error) || `${res.status}`)
       return body
     }
+
+    /** 每个 POST 都带 accept-language：宿主的建议句/错误信息按它出中文或英文。 */
+    const jsonHeaders = { 'content-type': 'application/json', ...LANG_HEADERS }
 
     async function callPrepare(action, message) {
       const res = await fetch('/config-sync/prepare', {
         method: 'POST',
         cache: 'no-store',
         credentials: 'same-origin',
-        headers: { 'content-type': 'application/json' },
+        headers: jsonHeaders,
         body: JSON.stringify({ action, message: message || '' }),
       })
       const text = await res.text()
       let body
-      try { body = text ? JSON.parse(text) : null } catch { throw new Error(`${res.status} 返回非 JSON`) }
+      try { body = text ? JSON.parse(text) : null } catch { throw badJson(res) }
       if (!res.ok || !body || body.ok !== true) throw new Error((body && body.error) || `${res.status}`)
       return body
     }
@@ -199,12 +241,12 @@ window.__ModuleLoader__.load({
         method: 'POST',
         cache: 'no-store',
         credentials: 'same-origin',
-        headers: { 'content-type': 'application/json' },
+        headers: jsonHeaders,
         body: JSON.stringify(payload),
       })
       const text = await res.text()
       let body
-      try { body = text ? JSON.parse(text) : null } catch { throw new Error(`${res.status} 返回非 JSON`) }
+      try { body = text ? JSON.parse(text) : null } catch { throw badJson(res) }
       if (!res.ok || !body || body.ok !== true) throw new Error((body && body.error) || `${res.status}`)
       return body
     }
@@ -215,12 +257,12 @@ window.__ModuleLoader__.load({
         method: 'POST',
         cache: 'no-store',
         credentials: 'same-origin',
-        headers: { 'content-type': 'application/json' },
+        headers: jsonHeaders,
         body: JSON.stringify(payload),
       })
       const text = await res.text()
       let body
-      try { body = text ? JSON.parse(text) : null } catch { throw new Error(`${res.status} 返回非 JSON`) }
+      try { body = text ? JSON.parse(text) : null } catch { throw badJson(res) }
       if (!res.ok || !body || body.ok !== true) throw new Error((body && body.error) || `${res.status}`)
       return body
     }
@@ -232,13 +274,13 @@ window.__ModuleLoader__.load({
           method: 'POST',
           cache: 'no-store',
           credentials: 'same-origin',
-          headers: { 'content-type': 'application/json' },
+          headers: jsonHeaders,
           body: JSON.stringify(payload),
         }
-        : { cache: 'no-store', credentials: 'same-origin' })
+        : { cache: 'no-store', credentials: 'same-origin', headers: LANG_HEADERS })
       const text = await res.text()
       let body
-      try { body = text ? JSON.parse(text) : null } catch { throw new Error(`${res.status} 返回非 JSON`) }
+      try { body = text ? JSON.parse(text) : null } catch { throw badJson(res) }
       if (!res.ok || !body) throw new Error((body && body.error) || `${res.status}`)
       return body
     }
@@ -290,19 +332,29 @@ window.__ModuleLoader__.load({
       const items = Array.isArray(made.built)
         ? made.built
         : [{ action: made.action, label: made.label, path: made.path, command: made.command, backup: made.backup, warnings: made.warnings }]
-      const LABEL = { push: '推送', pull: '拉取', restore: '还原', all: '全部' }
+      const LABEL = {
+        push: M('推送', 'Push'),
+        pull: M('拉取', 'Pull'),
+        restore: M('还原', 'Restore'),
+        all: M('全部', 'All'),
+      }
       const backup = items.map((it) => it.backup).find((b) => b && b.dir)
-      const when = backup && backup.at ? new Date(backup.at).toLocaleString('zh-CN', { hour12: false }) : ''
+      const when = backup && backup.at ? new Date(backup.at).toLocaleString(LOCALE, { hour12: false }) : ''
       const warnItems = items.flatMap((it) => (Array.isArray(it.warnings) ? it.warnings.map((w) => ({ action: it.action, w })) : []))
       const key = 'warn_' + (warnItems.length ? 1 : 0)
       return h('div', { style: { display: 'flex', flexDirection: 'column', gap: '6px' } },
         items.map((it, i) => h('div', { key: i, style: { display: 'flex', flexDirection: 'column', gap: '4px' } },
-          h('div', { style: S.hint }, `已生成「${it.label || LABEL[it.action] || it.action}」：${it.path}`),
+          h('div', { style: S.hint }, M(
+            `已生成「${it.label || LABEL[it.action] || it.action}」：${it.path}`,
+            `Generated "${it.label || it.action}": ${it.path}`,
+          )),
           h('div', { style: S.code }, it.command),
         )),
         backup
-          ? h('div', { style: S.hint },
-            `还原快照：${backup.dir}（${when}，共 ${backup.count} 份中的最新，含 ${backup.files} 个文件）`)
+          ? h('div', { style: S.hint }, M(
+            `还原快照：${backup.dir}（${when}，共 ${backup.count} 份中的最新，含 ${backup.files} 个文件）`,
+            `Restore snapshot: ${backup.dir} (${when}; newest of ${backup.count}, ${backup.files} files)`,
+          ))
           : null,
         warnItems.length
           ? h('div', { key, style: { display: 'flex', flexDirection: 'column', gap: '2px' } },
@@ -311,7 +363,10 @@ window.__ModuleLoader__.load({
               style: { ...S.hint, color: 'var(--dsw-alias-state-warn-primary)' },
             }, `[${LABEL[x.action] || x.action}] ${x.w}`)))
           : null,
-        h('div', { style: S.hint }, '同步动作必须在 DSH 完全退出后执行——脚本里已带进程检查，双击会先拦一次；拉取脚本会让你先输 y 确认，还原脚本会先跑一遍只看不动。'),
+        h('div', { style: S.hint }, M(
+          '同步动作必须在 DSH 完全退出后执行——脚本里已带进程检查，双击会先拦一次；拉取脚本会让你先输 y 确认，还原脚本会先跑一遍只看不动。',
+          'Sync must run after DSH has fully exited. The scripts check for a running client first; pull asks you to type y, restore dry-runs before writing.',
+        )),
       )
     }
 
@@ -327,8 +382,10 @@ window.__ModuleLoader__.load({
       const [busy, setBusy] = react.useState(false)
       const [err, setErr] = react.useState('')
       const [msg, setMsg] = react.useState('')
-      const sourceLabel = (s) => s === 'settings' ? '本机设置'
-        : (s === 'config' ? '插件配置（cordis.patch.yml）' : (s === 'env' ? '环境变量 DSH_CONFIG_REPO' : (s === 'auto' ? '自动探测' : '未配置')))
+      const sourceLabel = (s) => s === 'settings' ? M('本机设置', 'Machine settings')
+        : (s === 'config' ? M('插件配置（cordis.patch.yml）', 'Plugin config (cordis.patch.yml)')
+          : (s === 'env' ? M('环境变量 DSH_CONFIG_REPO', 'Env var DSH_CONFIG_REPO')
+            : (s === 'auto' ? M('自动探测', 'Auto-detected') : M('未配置', 'Not set'))))
 
       // 没配仓库 = 强制编辑态，且不允许「取消」回到只读
       const forced = missing
@@ -340,7 +397,10 @@ window.__ModuleLoader__.load({
         setBusy(true); setErr(''); setMsg('')
         try {
           const r = await callSettings({ repoPath: path })
-          setMsg(`已保存仓库路径${r.repo && r.repo.hasGit ? '' : '（该目录没有 .git，推送/拉取会失败）'}`)
+          setMsg(M(
+            `已保存仓库路径${r.repo && r.repo.hasGit ? '' : '（该目录没有 .git，推送/拉取会失败）'}`,
+            `Repo path saved${r.repo && r.repo.hasGit ? '' : ' (no .git in that directory — push/pull will fail)'}`,
+          ))
           setEditing(false)
           if (typeof props.onSaved === 'function') props.onSaved()
         } catch (e) {
@@ -349,50 +409,72 @@ window.__ModuleLoader__.load({
       }
 
       const row = h('div', { style: S.kvRow },
-        h('div', { style: S.kvKey }, '仓库路径'),
+        h('div', { style: S.kvKey }, M('仓库路径', 'Repo path')),
         isEditing
           ? h('input', {
             type: 'text', style: S.input, value: path, spellCheck: false,
-            placeholder: 'D:\\dsh-config（那台机器上装仓库的目录）',
+            placeholder: M('D:\\dsh-config（那台机器上装仓库的目录）', 'D:\\dsh-config (directory holding the repo on this machine)'),
             onChange: (e) => setPath(e.target.value),
           })
-          : h('div', { style: { ...S.kvVal, fontFamily: 'Consolas, ui-monospace, monospace' } }, repo.path || '（未配置）'),
+          : h('div', { style: { ...S.kvVal, fontFamily: 'Consolas, ui-monospace, monospace' } }, repo.path || M('（未配置）', '(not set)')),
       )
 
       return h('div', { style: S.card },
         h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' } },
-          h('div', { style: S.cardTitle }, '本机仓库'),
+          h('div', { style: S.cardTitle }, M('本机仓库', 'Local repo')),
           h('div', { style: { ...S.hint, flex: 1 } }, isEditing
-            ? (forced ? '还没配置仓库目录，先填好并保存，才能生成同步脚本' : '编辑中：改完点保存')
-            : '只读展示，点「修改」后可编辑'),
+            ? (forced
+              ? M('还没配置仓库目录，先填好并保存，才能生成同步脚本', 'Set the repo path first — sync scripts cannot be generated without it')
+              : M('编辑中：改完点保存', 'Editing: save when done'))
+            : M('只读展示，点「修改」后可编辑', 'Read-only; click Edit to change')),
           h('div', { style: S.actions },
             isEditing
               ? h(react.Fragment, null,
-                h('button', { type: 'button', style: S.btnPrimary, disabled: busy || !path.trim(), onClick: save }, busy ? '保存中…' : '保存'),
-                forced ? null : h('button', { type: 'button', style: S.btn, disabled: busy, onClick: cancelEdit }, '取消'),
+                h('button', { type: 'button', style: S.btnPrimary, disabled: busy || !path.trim(), onClick: save }, busy ? M('保存中…', 'Saving…') : M('保存', 'Save')),
+                forced ? null : h('button', { type: 'button', style: S.btn, disabled: busy, onClick: cancelEdit }, M('取消', 'Cancel')),
               )
-              : h('button', { type: 'button', style: S.btn, disabled: !props.data, onClick: startEdit }, '修改'),
+              : h('button', { type: 'button', style: S.btn, disabled: !props.data, onClick: startEdit }, M('修改', 'Edit')),
           ),
         ),
         row,
-        h(Kv, { k: '路径来源', v: sourceLabel(repo.source) + (repo.exists ? '' : '（这个路径不可用）') }),
-        h(Kv, { k: '分支 / HEAD', v: repo.exists ? `${repo.branch || '?'} @ ${repo.head || '?'}` : '（不可用）' }),
-        h(Kv, { k: '远端', v: repo.exists ? `落后 ${repo.behind ?? '?'} · 领先 ${repo.ahead ?? '?'} · 未提交 ${repo.dirty ?? '?'}` : '（不可用）' }),
-        h(Kv, { k: '本机数据', v: (() => {
+        h(Kv, { k: M('路径来源', 'Path source'), v: sourceLabel(repo.source) + (repo.exists ? '' : M('（这个路径不可用）', ' (path unavailable)')) }),
+        h(Kv, { k: M('分支 / HEAD', 'Branch / HEAD'), v: repo.exists ? `${repo.branch || '?'} @ ${repo.head || '?'}` : M('（不可用）', '(unavailable)') }),
+        h(Kv, {
+          k: M('远端', 'Remote'),
+          v: repo.exists
+            ? M(
+              `落后 ${repo.behind ?? '?'} · 领先 ${repo.ahead ?? '?'} · 未提交 ${repo.dirty ?? '?'}`,
+              `behind ${repo.behind ?? '?'} · ahead ${repo.ahead ?? '?'} · dirty ${repo.dirty ?? '?'}`,
+            )
+            : M('（不可用）', '(unavailable)'),
+        }),
+        h(Kv, { k: M('本机数据', 'Local data'), v: (() => {
           const local = props.data && props.data.local
-          if (!local || !local.known) return '还没同步过（跑一次推送/拉取后才知道本机有没有新写入）'
-          const when = local.lastSyncAt ? new Date(local.lastSyncAt).toLocaleString('zh-CN', { hour12: false }) : '?'
+          if (!local || !local.known) return M('还没同步过（跑一次推送/拉取后才知道本机有没有新写入）', 'Never synced yet (run a push/pull to learn whether local data changed)')
+          const when = local.lastSyncAt ? new Date(local.lastSyncAt).toLocaleString(LOCALE, { hour12: false }) : '?'
           const tail = local.pending > 0
-            ? `上次同步后有 ${local.pending} 个文件更新${local.sample && local.sample.length ? `（如 ${local.sample.join('、')}）` : ''}`
-            : '上次同步后没有新写入'
-          return `${tail}；上次同步 ${when}${local.mode ? `（${local.mode}）` : ''}`
+            ? M(
+              `上次同步后有 ${local.pending} 个文件更新${local.sample && local.sample.length ? `（如 ${local.sample.join('、')}）` : ''}`,
+              `${local.pending} file(s) changed since the last sync${local.sample && local.sample.length ? ` (e.g. ${local.sample.join(', ')})` : ''}`,
+            )
+            : M('上次同步后没有新写入', 'nothing new since the last sync')
+          return M(
+            `${tail}；上次同步 ${when}${local.mode ? `（${local.mode}）` : ''}`,
+            `${tail}; last sync ${when}${local.mode ? ` (${local.mode})` : ''}`,
+          )
         })() }),
-        h('div', { style: S.hint }, '仓库路径只存本机（C:\\Users\\你\\.dsh\\dsh-config-sync.json），不进仓库；换台机器各配各的。'),
+        h('div', { style: S.hint }, M(
+          '仓库路径只存本机（C:\\Users\\你\\.dsh\\dsh-config-sync.json），不进仓库；换台机器各配各的。',
+          'The repo path lives only on this machine (C:\\Users\\you\\.dsh\\dsh-config-sync.json), never in the repo; each machine sets its own.',
+        )),
         forced
           ? h('div', { style: { ...S.hint, color: 'var(--dsw-alias-state-error-primary)' } },
-            '必须先把仓库目录配好：否则推送/拉取/还原三份脚本都无法生成，体检也只能看个空壳。')
+            M(
+              '必须先把仓库目录配好：否则推送/拉取/还原三份脚本都无法生成，体检也只能看个空壳。',
+              'Configure the repo directory first — otherwise push/pull/restore cannot be generated and the check has nothing to inspect.',
+            ))
           : null,
-        err ? h('div', { style: { ...S.hint, color: 'var(--dsw-alias-state-error-primary)' } }, `保存失败：${err}`) : null,
+        err ? h('div', { style: { ...S.hint, color: 'var(--dsw-alias-state-error-primary)' } }, M(`保存失败：${err}`, `Save failed: ${err}`)) : null,
         msg ? h('div', { style: { ...S.hint, color: 'var(--dsw-alias-state-success-primary)' } }, msg) : null,
       )
     }
@@ -413,7 +495,9 @@ window.__ModuleLoader__.load({
       const [err, setErr] = react.useState('')
       const [msg, setMsg] = react.useState('')
       const isEditing = editing || missing
-      const sourceLabel = (s) => s === 'settings' ? '本机设置' : (s === 'git' ? 'git 配置' : (s === 'default' ? '自动探测' : '未配置'))
+      const sourceLabel = (s) => s === 'settings' ? M('本机设置', 'Machine settings')
+        : (s === 'git' ? M('git 配置', 'git config')
+          : (s === 'default' ? M('自动探测', 'Auto-detected') : M('未配置', 'Not set')))
 
       const startEdit = () => {
         setUrl(remote.url || '')
@@ -427,7 +511,10 @@ window.__ModuleLoader__.load({
         setBusy(true); setErr(''); setMsg('')
         try {
           const r = await callSettings({ remoteUrl: url, sshKey: key })
-          setMsg(`已保存${r.gitRemoteSet ? '，并已更新本机 git origin' : ''}`)
+          setMsg(M(
+            `已保存${r.gitRemoteSet ? '，并已更新本机 git origin' : ''}`,
+            `Saved${r.gitRemoteSet ? ' and updated the local git origin' : ''}`,
+          ))
           setEditing(false)
           if (typeof props.onSaved === 'function') props.onSaved()
         } catch (e) {
@@ -442,41 +529,55 @@ window.__ModuleLoader__.load({
             type: 'text', style: S.input, value, placeholder, spellCheck: false,
             onChange: (e) => onChange(e.target.value),
           })
-          : h('div', { style: { ...S.kvVal, fontFamily: 'Consolas, ui-monospace, monospace' } }, value || '（未配置）'),
+          : h('div', { style: { ...S.kvVal, fontFamily: 'Consolas, ui-monospace, monospace' } }, value || M('（未配置）', '(not set)')),
       )
 
       return h('div', { style: S.card },
         h('div', {
           style: { display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' },
         },
-          h('div', { style: S.cardTitle }, '云端仓库'),
+          h('div', { style: S.cardTitle }, M('云端仓库', 'Cloud repo')),
           h('div', { style: { ...S.hint, flex: 1 } }, isEditing
-            ? (missing ? '还没配置云端仓库地址，填好远端地址并保存，才能生成推送/拉取' : '编辑中：改完点保存')
-            : '只读展示，点「修改」后可编辑'),
+            ? (missing
+              ? M('还没配置云端仓库地址，填好远端地址并保存，才能生成推送/拉取', 'Set the remote URL and save — push/pull cannot be generated without it')
+              : M('编辑中：改完点保存', 'Editing: save when done'))
+            : M('只读展示，点「修改」后可编辑', 'Read-only; click Edit to change')),
           isEditing
             ? h('div', { style: S.actions },
-              h('button', { type: 'button', style: S.btnPrimary, disabled: busy || !url.trim(), onClick: save }, busy ? '保存中…' : '保存'),
-              missing ? null : h('button', { type: 'button', style: S.btn, disabled: busy, onClick: cancelEdit }, '取消'),
+              h('button', { type: 'button', style: S.btnPrimary, disabled: busy || !url.trim(), onClick: save }, busy ? M('保存中…', 'Saving…') : M('保存', 'Save')),
+              missing ? null : h('button', { type: 'button', style: S.btn, disabled: busy, onClick: cancelEdit }, M('取消', 'Cancel')),
             )
             : h('div', { style: S.actions },
-              h('button', { type: 'button', style: S.btn, disabled: !props.data, onClick: startEdit }, '修改'),
+              h('button', { type: 'button', style: S.btn, disabled: !props.data, onClick: startEdit }, M('修改', 'Edit')),
             ),
         ),
-        field('远端地址', isEditing ? url : (remote.url || ''), setUrl, 'git@gitee.com:账号/dsh-config.git'),
-        field('SSH 私钥', isEditing ? key : (remote.sshKey || ''), setKey, 'C:\\Users\\你\\.ssh\\id_ed25519_gitee'),
-        h(Kv, { k: '私钥来源', v: `${sourceLabel(remote.sshKeyFrom)}${remote.sshKeyExists ? '' : '（文件不存在，需修改）'}` }),
-        h(Kv, { k: '地址来源', v: sourceLabel(remote.urlSource) }),
-        h(Kv, { k: '设置文件', v: remote.settingsPath || '（未知）' }),
-        h('div', { style: S.hint }, '只存私钥路径，不存密钥内容；这份设置跟本机走、不进仓库。保存远端地址时会同时更新本机 git 的 origin，git 改失败则整套回滚。'),
+        field(M('远端地址', 'Remote URL'), isEditing ? url : (remote.url || ''), setUrl, 'git@gitee.com:account/dsh-config.git'),
+        field(M('SSH 私钥', 'SSH key'), isEditing ? key : (remote.sshKey || ''), setKey, M('C:\\Users\\你\\.ssh\\id_ed25519_gitee', 'C:\\Users\\you\\.ssh\\id_ed25519_gitee')),
+        h(Kv, {
+          k: M('私钥来源', 'Key source'),
+          v: `${sourceLabel(remote.sshKeyFrom)}${remote.sshKeyExists ? '' : M('（文件不存在，需修改）', ' (file missing — needs fixing)')}`,
+        }),
+        h(Kv, { k: M('地址来源', 'URL source'), v: sourceLabel(remote.urlSource) }),
+        h(Kv, { k: M('设置文件', 'Settings file'), v: remote.settingsPath || M('（未知）', '(unknown)') }),
+        h('div', { style: S.hint }, M(
+          '只存私钥路径，不存密钥内容；这份设置跟本机走、不进仓库。保存远端地址时会同时更新本机 git 的 origin，git 改失败则整套回滚。',
+          'Only the key path is stored, never the key itself; settings stay on this machine and never enter the repo. Saving the remote URL also updates the local git origin, and any git failure rolls everything back.',
+        )),
         missing
           ? h('div', { style: { ...S.hint, color: 'var(--dsw-alias-state-error-primary)' } },
-            '必须先把云端仓库地址配好：否则推送/拉取脚本生成不出来（还原只动本机快照，仍可用）。')
+            M(
+              '必须先把云端仓库地址配好：否则推送/拉取脚本生成不出来（还原只动本机快照，仍可用）。',
+              'Configure the cloud repo first — push/pull cannot be generated without it (restore only touches local snapshots and still works).',
+            ))
           : null,
         missing && !remote.sshKeyExists
           ? h('div', { style: { ...S.hint, color: 'var(--dsw-alias-state-warn-primary)' } },
-            '私钥没填也能用——认证会交给 .ssh\\config 或 Git 的默认选择；填了才写进脚本的 GIT_SSH_COMMAND。')
+            M(
+              '私钥没填也能用——认证会交给 .ssh\\config 或 Git 的默认选择；填了才写进脚本的 GIT_SSH_COMMAND。',
+              'The key is optional: auth falls back to .ssh\\config or Git defaults. Fill it in only if you want GIT_SSH_COMMAND written into the scripts.',
+            ))
           : null,
-        err ? h('div', { style: { ...S.hint, color: 'var(--dsw-alias-state-error-primary)' } }, `保存失败：${err}`) : null,
+        err ? h('div', { style: { ...S.hint, color: 'var(--dsw-alias-state-error-primary)' } }, M(`保存失败：${err}`, `Save failed: ${err}`)) : null,
         msg ? h('div', { style: { ...S.hint, color: 'var(--dsw-alias-state-success-primary)' } }, msg) : null,
       )
     }
@@ -498,7 +599,7 @@ window.__ModuleLoader__.load({
         setBusy('save'); setErr(''); setMsg('')
         try {
           await callSettings(patch)
-          setMsg('已保存')
+          setMsg(M('已保存', 'Saved'))
           if (typeof props.onSaved === 'function') props.onSaved()
         } catch (e) { setErr(String((e && e.message) || e)) } finally { setBusy('') }
       }
@@ -508,7 +609,7 @@ window.__ModuleLoader__.load({
         try {
           const res = await fetch('/config-sync/auto', {
             method: 'POST', cache: 'no-store', credentials: 'same-origin',
-            headers: { 'content-type': 'application/json' },
+            headers: jsonHeaders,
             body: JSON.stringify({ action, ...(extra || {}) }),
           })
           const text = await res.text()
@@ -516,11 +617,13 @@ window.__ModuleLoader__.load({
           if (!res.ok || !body || body.ok !== true) throw new Error((body && body.error) || `${res.status}`)
           if (action === 'check') {
             const d = body.drift
-            setMsg(d ? `云端：落后 ${d.behind} 个提交，领先 ${d.ahead} 个提交` : (body.error || '读不到远端'))
+            setMsg(d
+              ? M(`云端：落后 ${d.behind} 个提交，领先 ${d.ahead} 个提交`, `Cloud: ${d.behind} commit(s) behind, ${d.ahead} ahead`)
+              : (body.error || M('读不到远端', 'Cannot read the remote')))
           } else {
             setMsg(body.closeRequested
-              ? '已排队：客户端马上关闭，退出后执行；拉取完成后按设置自动重开'
-              : '已排队：退出 DSH 后自动执行')
+              ? M('已排队：客户端马上关闭，退出后执行；拉取完成后按设置自动重开', 'Queued: the client closes now and the sync runs after exit; it relaunches per your settings when pulling finishes')
+              : M('已排队：退出 DSH 后自动执行', 'Queued: runs automatically after DSH exits'))
           }
           if (typeof props.onSaved === 'function') props.onSaved()
         } catch (e) { setErr(String((e && e.message) || e)) } finally { setBusy('') }
@@ -538,34 +641,44 @@ window.__ModuleLoader__.load({
             label,
           ),
           h('div', { style: { ...S.kvVal, color: 'var(--dsw-alias-text-secondary)' } },
-            `${on ? '已开启' : '已关闭'}　${hintText}`),
+            `${on ? M('已开启', 'On') : M('已关闭', 'Off')}　${hintText}`),
         )
       }
 
       const pending = auto.pending
+      // 后台调度拿不到请求语言，宿主把原因中英各存一份，这里按当前界面语言挑
+      const pendingReason = pending ? (IS_ZH ? (pending.reasonZh || pending.reason) : (pending.reasonEn || pending.reason)) : ''
       return h('div', { style: S.card },
         h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' } },
-          h('div', { style: S.cardTitle }, '自动同步'),
-          h('div', { style: { ...S.hint, flex: 1 } }, '两个开关默认关闭；不打开就完全保持手动流程（自己双击脚本）'),
+          h('div', { style: S.cardTitle }, M('自动同步', 'Auto sync')),
+          h('div', { style: { ...S.hint, flex: 1 } }, M('两个开关默认关闭；不打开就完全保持手动流程（自己双击脚本）', 'Both switches default to off; leaving them off keeps the workflow manual (double-click the scripts yourself)')),
         ),
-        sw('autoPull', 'pull', '启动时自动拉取',
-          '云端有新提交 → 弹确认框 → 退出 DSH 后拉取；失败会自动还原上一次的配置，然后照样重启并提示结果'),
-        sw('autoPush', 'push', '退出时自动推送',
-          '本机有未提交改动 / 新会话资料 / 未推送提交 → 每 2 分钟复查一次，命中就排队，等 DSH 完全退出后推送'),
+        sw('autoPull', 'pull', M('启动时自动拉取', 'Pull on startup'),
+          M('云端有新提交 → 弹确认框 → 退出 DSH 后拉取；失败会自动还原上一次的配置，然后照样重启并提示结果',
+            'New commits upstream → confirm dialog → pull after DSH exits; on failure it restores the previous config, then relaunches and reports the result')),
+        sw('autoPush', 'push', M('退出时自动推送', 'Push on exit'),
+          M('本机有未提交改动 / 新会话资料 / 未推送提交 → 每 2 分钟复查一次，命中就排队，等 DSH 完全退出后推送',
+            'Uncommitted changes / new session data / unpushed commits → re-checked every 2 minutes, queued when found, pushed once DSH has fully exited')),
         pending
           ? h('div', { style: { ...S.hint, color: 'var(--dsw-alias-state-warn-primary)' } },
-            `已排队：退出后${pending.mode === 'pull' ? '拉取' + (pending.restart ? '并重启客户端' : '') : '推送'}`
-            + `（${new Date(pending.at).toLocaleTimeString('zh-CN', { hour12: false })}`
-            + `${pending.reason ? `，原因：${pending.reason}` : ''}）`)
+            M(
+              `已排队：退出后${pending.mode === 'pull' ? '拉取' + (pending.restart ? '并重启客户端' : '') : '推送'}`
+              + `（${new Date(pending.at).toLocaleTimeString(LOCALE, { hour12: false })}`
+              + `${pendingReason ? M(`，原因：${pendingReason}`, `, reason: ${pendingReason}`) : ''}）`,
+              `Queued: ${pending.mode === 'pull' ? 'pull' + (pending.restart ? ' and relaunch the client' : '') : 'push'} after exit `
+              + `(${new Date(pending.at).toLocaleTimeString(LOCALE, { hour12: false })}`
+              + `${pendingReason ? `, reason: ${pendingReason}` : ''})`,
+            ))
           : null,
         !auto.script
           ? h('div', { style: { ...S.hint, color: 'var(--dsw-alias-state-warn-primary)' } },
-            '插件与仓库里都找不到 post-exit.ps1：自动同步排不了队，重装一次插件即可（新包自带 runtime）')
+            M('插件与仓库里都找不到 post-exit.ps1：自动同步排不了队，重装一次插件即可（新包自带 runtime）',
+              'post-exit.ps1 is missing from both the plugin and the repo, so auto sync cannot queue — reinstall the plugin (the current package ships runtime/)'))
           : null,
         h('div', { style: S.actions },
-          h('button', { type: 'button', style: S.btnPrimary, disabled: Boolean(busy), onClick: () => act('pull-now') }, '立即拉取（会关闭 DSH）'),
-          h('button', { type: 'button', style: S.btn, disabled: Boolean(busy), onClick: () => act('push-now') }, '退出后推送'),
-          pending ? h('button', { type: 'button', style: S.btn, disabled: Boolean(busy), onClick: () => act('cancel') }, '取消排队') : null,
+          h('button', { type: 'button', style: S.btnPrimary, disabled: Boolean(busy), onClick: () => act('pull-now') }, M('立即拉取（会关闭 DSH）', 'Pull now (closes DSH)')),
+          h('button', { type: 'button', style: S.btn, disabled: Boolean(busy), onClick: () => act('push-now') }, M('退出后推送', 'Push after exit')),
+          pending ? h('button', { type: 'button', style: S.btn, disabled: Boolean(busy), onClick: () => act('cancel') }, M('取消排队', 'Cancel queue')) : null,
         ),
         msg ? h('div', { style: S.hint }, msg) : null,
         err ? h('div', { style: { ...S.hint, color: 'var(--dsw-alias-state-error-primary)' } }, err) : null,
@@ -621,10 +734,13 @@ window.__ModuleLoader__.load({
         setUpdBusy(true)
         try {
           const r = await callUpdate({ action: 'apply' })
-          if (r && r.cancelled) showToast('已取消更新')
-          else showToast(`正在更新到 ${(r.remote && r.remote.version) || '新版本'}：DSH 会先退出，下载安装完自动重启`)
+          if (r && r.cancelled) showToast(M('已取消更新', 'Update cancelled'))
+          else showToast(M(
+            `正在更新到 ${(r.remote && r.remote.version) || '新版本'}：DSH 会先退出，下载安装完自动重启`,
+            `Updating to ${(r.remote && r.remote.version) || 'the new version'}: DSH exits first, then it downloads, installs and relaunches`,
+          ))
         } catch (e) {
-          showToast('更新失败：' + String((e && e.message) || e))
+          showToast(M('更新失败：', 'Update failed: ') + String((e && e.message) || e))
         } finally {
           setUpdBusy(false)
         }
@@ -658,7 +774,7 @@ window.__ModuleLoader__.load({
           await callSettings(payload)
           setUpdEdit(false)
           setUpdToken('')
-          setUpdMsg('已保存')
+          setUpdMsg(M('已保存', 'Saved'))
           setUpd(await callUpdate({ action: 'check' }))
         } catch (e) {
           setUpdErr(String((e && e.message) || e))
@@ -668,7 +784,7 @@ window.__ModuleLoader__.load({
         setUpdBusy(true); setUpdErr(''); setUpdMsg('')
         try {
           await callSettings({ clearUpdateToken: true })
-          setUpdMsg('已清除本机保存的更新令牌')
+          setUpdMsg(M('已清除本机保存的更新令牌', 'Cleared the update token stored on this machine'))
           setUpd(await callUpdate({ action: 'check' }))
         } catch (e) {
           setUpdErr(String((e && e.message) || e))
@@ -705,23 +821,23 @@ window.__ModuleLoader__.load({
       // 后面跟一句具体状态；全自动检查（挂载即查 + 每 2 分钟复查），不给手动按钮。
       const cloudLine = (() => {
         const auto = (data && data.auto) || {}
-        if (auto.checking || checking) return { kind: 'idle', text: '云端检查中…' }
+        if (auto.checking || checking) return { kind: 'idle', text: M('云端检查中…', 'Checking the cloud…') }
         const drift = auto.drift
         if (drift) {
           const same = drift.behind === 0 && drift.ahead === 0
-          if (same) return { kind: 'ok', text: '云端已同步到最新，无需拉取' }
+          if (same) return { kind: 'ok', text: M('云端已同步到最新，无需拉取', 'Cloud is up to date — nothing to pull') }
           const parts = []
-          if (drift.behind > 0) parts.push(`落后 ${drift.behind} 个提交`)
-          if (drift.ahead > 0) parts.push(`领先 ${drift.ahead} 个提交`)
-          return { kind: 'error', text: `云端与本机不一致：${parts.join(' · ')}` }
+          if (drift.behind > 0) parts.push(M(`落后 ${drift.behind} 个提交`, `${drift.behind} commit(s) behind`))
+          if (drift.ahead > 0) parts.push(M(`领先 ${drift.ahead} 个提交`, `${drift.ahead} ahead`))
+          return { kind: 'error', text: M(`云端与本机不一致：${parts.join(' · ')}`, `Cloud differs from this machine: ${parts.join(' · ')}`) }
         }
         if (auto.lastCheckAt) {
-          return { kind: 'error', text: `云端检查失败：${auto.lastCheckError || '读不到远端'}` }
+          return { kind: 'error', text: M(`云端检查失败：${auto.lastCheckError || '读不到远端'}`, `Cloud check failed: ${auto.lastCheckError || 'cannot read the remote'}`) }
         }
-        return { kind: 'idle', text: '云端检查中…' }
+        return { kind: 'idle', text: M('云端检查中…', 'Checking the cloud…') }
       })()
 
-      const cloudLabel = cloudLine.kind === 'ok' ? '一致' : (cloudLine.kind === 'error' ? '不一致' : '检查中')
+      const cloudLabel = cloudLine.kind === 'ok' ? M('一致', 'In sync') : (cloudLine.kind === 'error' ? M('不一致', 'Out of sync') : M('检查中', 'Checking'))
 
       // 插件更新卡：老版本机器进来第一眼就能看到"有新版本 x.y.z"和更新按钮；
       // 更新相关的配置（清单地址、只读令牌）也收在这张卡里，别散到「云端仓库」去。
@@ -733,135 +849,185 @@ window.__ModuleLoader__.load({
         const has = u.hasUpdate === true
         const failed = !has && u.ok === false
         const kind = has ? 'warn' : (failed ? 'error' : 'ok')
-        const label = has ? `有新版本 ${remote}` : (failed ? '检查失败' : (u.checkedAt ? '已是最新' : '检查中'))
+        const notesText = (u.remote && (IS_ZH ? (u.remote.notes || u.remote.notesEn) : (u.remote.notesEn || u.remote.notes))) || ''
+        const label = has
+          ? M(`有新版本 ${remote}`, `New version ${remote}`)
+          : (failed ? M('检查失败', 'Check failed') : (u.checkedAt ? M('已是最新', 'Up to date') : M('检查中', 'Checking')))
         const text = has
-          ? `当前 ${local} → 可更新到 ${remote}${(u.remote && u.remote.notes) ? ` · ${u.remote.notes}` : ''}`
+          ? M(
+            `当前 ${local} → 可更新到 ${remote}${notesText ? ` · ${notesText}` : ''}`,
+            `Current ${local} → can update to ${remote}${notesText ? ` · ${notesText}` : ''}`,
+          )
           : (failed
-            ? `读不到更新清单：${u.error || '未知原因'}`
-            : (u.checkedAt ? `当前 ${local}，云端没有更新的版本` : '正在读云端版本清单…'))
+            ? M(`读不到更新清单：${u.error || '未知原因'}`, `Cannot read the manifest: ${u.error || 'unknown reason'}`)
+            : (u.checkedAt ? M(`当前 ${local}，云端没有更新的版本`, `Current ${local}; no newer version upstream`) : M('正在读云端版本清单…', 'Reading the cloud manifest…')))
         return h('div', { style: S.card },
-          h('div', { style: S.cardTitle }, '插件更新'),
+          h('div', { style: S.cardTitle }, M('插件更新', 'Plugin update')),
           h('div', { style: { display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' } },
             h('span', { style: chipStyle(kind) }, label),
             h('div', { style: { ...S.hint, flex: 1, minWidth: '200px' } }, text),
             has ? h('button', {
               type: 'button', style: S.btn, disabled: updBusy || !u.remote,
               onClick: applyUpdate,
-            }, updBusy ? '更新中…' : `更新到 ${remote}`) : null,
-            h('button', { type: 'button', style: S.btn, disabled: updBusy, onClick: checkUpdateNow }, '检查更新'),
+            }, updBusy ? M('更新中…', 'Updating…') : M(`更新到 ${remote}`, `Update to ${remote}`)) : null,
+            h('button', { type: 'button', style: S.btn, disabled: updBusy, onClick: checkUpdateNow }, M('检查更新', 'Check for updates')),
             updEdit
               ? null
-              : h('button', { type: 'button', style: S.btn, disabled: !u.local, onClick: startEditUpd }, '修改配置'),
+              : h('button', { type: 'button', style: S.btn, disabled: !u.local, onClick: startEditUpd }, M('修改配置', 'Edit config')),
           ),
           updEdit
             ? h('div', null,
               h('div', { style: S.kvRow },
-                h('div', { style: S.kvKey }, '更新清单'),
+                h('div', { style: S.kvKey }, M('更新清单', 'Manifest')),
                 h('input', {
                   type: 'text', style: S.input, value: updManifest, spellCheck: false,
-                  placeholder: cfg.manifestUrlIsDefault ? `留空 = 用内置默认（${cfg.manifestUrl || ''}）` : 'https://…/version.json',
+                  placeholder: cfg.manifestUrlIsDefault
+                    ? M(`留空 = 用内置默认（${cfg.manifestUrl || ''}）`, `Leave empty = built-in default (${cfg.manifestUrl || ''})`)
+                    : 'https://…/version.json',
                   onChange: (e) => setUpdManifest(e.target.value),
                 }),
               ),
               h('div', { style: S.kvRow },
-                h('div', { style: S.kvKey }, '更新令牌'),
+                h('div', { style: S.kvKey }, M('更新令牌', 'Token')),
                 h('input', {
                   type: 'text', style: S.input, value: updToken, spellCheck: false,
-                  placeholder: cfg.tokenSet ? '已配置；留空表示不改' : 'Gitee 私人令牌（私有库必填）',
+                  placeholder: cfg.tokenSet
+                    ? M('已配置；留空表示不改', 'Already set; leave empty to keep it')
+                    : M('Gitee 私人令牌（私有库必填）', 'Gitee personal token (required for private repos)'),
                   onChange: (e) => setUpdToken(e.target.value),
                 }),
               ),
               h('div', { style: S.actions },
-                h('button', { type: 'button', style: S.btnPrimary, disabled: updBusy, onClick: saveUpdConfig }, updBusy ? '保存中…' : '保存'),
-                h('button', { type: 'button', style: S.btn, disabled: updBusy, onClick: cancelEditUpd }, '取消'),
+                h('button', { type: 'button', style: S.btnPrimary, disabled: updBusy, onClick: saveUpdConfig }, updBusy ? M('保存中…', 'Saving…') : M('保存', 'Save')),
+                h('button', { type: 'button', style: S.btn, disabled: updBusy, onClick: cancelEditUpd }, M('取消', 'Cancel')),
                 cfg.tokenSet
-                  ? h('button', { type: 'button', style: S.btn, disabled: updBusy, onClick: clearUpdToken }, '清除已存令牌')
+                  ? h('button', { type: 'button', style: S.btn, disabled: updBusy, onClick: clearUpdToken }, M('清除已存令牌', 'Clear stored token'))
                   : null,
               ),
             )
             : h('div', null,
-              h(Kv, { k: '更新清单', v: cfg.manifestUrl ? `${cfg.manifestUrl}${cfg.manifestUrlIsDefault ? '（内置默认）' : ''}` : '…' }),
-              h(Kv, { k: '更新令牌', v: cfg.tokenSet ? '已配置（只存本机）' : '未配置（私有库会读不到清单）' }),
+              h(Kv, {
+                k: M('更新清单', 'Manifest'),
+                v: cfg.manifestUrl
+                  ? `${cfg.manifestUrl}${cfg.manifestUrlIsDefault ? M('（内置默认）', ' (built-in default)') : ''}`
+                  : '…',
+              }),
+              h(Kv, {
+                k: M('更新令牌', 'Token'),
+                v: cfg.tokenSet
+                  ? M('已配置（只存本机）', 'Set (stored on this machine only)')
+                  : M('未配置（私有库会读不到清单）', 'Not set (private repos cannot be read)'),
+              }),
             ),
           h('div', { style: S.hint },
-            '清单只读几百字节、30 分钟查一次；点更新会先退出 DSH，再下载校验、备份旧版、覆盖安装并自动重启。'
-            + '令牌只存本机设置文件，不进仓库。'),
-          updErr ? h('div', { style: { ...S.hint, color: 'var(--dsw-alias-state-error-primary)' } }, `保存失败：${updErr}`) : null,
+            M(
+              '清单只读几百字节、30 分钟查一次；点更新会先退出 DSH，再下载校验、备份旧版、覆盖安装并自动重启。令牌只存本机设置文件，不进仓库。',
+              'The manifest is a few hundred bytes and is re-read every 30 minutes. Updating exits DSH first, then downloads and verifies the package, backs up the old version, installs over it and relaunches. Tokens live only in the local settings file, never in the repo.',
+            )),
+          updErr ? h('div', { style: { ...S.hint, color: 'var(--dsw-alias-state-error-primary)' } }, M(`保存失败：${updErr}`, `Save failed: ${updErr}`)) : null,
           updMsg ? h('div', { style: { ...S.hint, color: 'var(--dsw-alias-state-success-primary)' } }, updMsg) : null,
         )
       })()
 
       const versionCard = h('div', { style: S.card },
-        h('div', { style: S.cardTitle }, '版本契约'),
-        h(Kv, { k: '本机 app', v: data ? (data.version.local || '读不到') : '…' }),
-        h(Kv, { k: '仓库契约', v: data ? (data.version.contract || '读不到') : '…' }),
-        h(Kv, { k: 'Electron', v: data ? (data.version.electron || '读不到') : '…' }),
+        h('div', { style: S.cardTitle }, M('版本契约', 'Version contract')),
+        h(Kv, { k: M('本机 app', 'Local app'), v: data ? (data.version.local || M('读不到', 'unavailable')) : '…' }),
+        h(Kv, { k: M('仓库契约', 'Repo contract'), v: data ? (data.version.contract || M('读不到', 'unavailable')) : '…' }),
+        h(Kv, { k: 'Electron', v: data ? (data.version.electron || M('读不到', 'unavailable')) : '…' }),
         data && data.version.local && data.version.contract && !data.version.match
           ? h('div', { style: { ...S.hint, color: 'var(--dsw-alias-state-warn-primary)' } },
-            '两端版本不同：实验性 bundle（含 cot-translation）会被剔除。要么把较旧那台升级到同版本，要么 pull 时加 -AllowVersionDrift。')
+            M(
+              '两端版本不同：实验性 bundle（含 cot-translation）会被剔除。要么把较旧那台升级到同版本，要么 pull 时加 -AllowVersionDrift。',
+              'The two machines are on different versions: experimental bundles (including cot-translation) get dropped. Upgrade the older machine, or pass -AllowVersionDrift when pulling.',
+            ))
           : null,
       )
 
       // 仓库路径可配：默认只读展示，点「修改」才编辑；没配过就强制停在编辑态（见 RepoCard）
       const repoCard = data ? h(RepoCard, { data, onSaved: refresh }) : h('div', { style: S.card },
-        h('div', { style: S.cardTitle }, '本机仓库'),
-        h(Kv, { k: '仓库路径', v: '…' }),
+        h('div', { style: S.cardTitle }, M('本机仓库', 'Local repo')),
+        h(Kv, { k: M('仓库路径', 'Repo path'), v: '…' }),
       )
 
       const healthCard = h('div', { style: S.card },
-        h('div', { style: S.cardTitle }, '本机健康'),
+        h('div', { style: S.cardTitle }, M('本机健康', 'Local health')),
         h(Kv, {
           k: 'bundle',
-          v: !data ? '…' : `${data.bundles.total} 项` + (data.bundles.unresolved.length
-            ? `，解析不到 ${data.bundles.unresolved.length} 项：${data.bundles.unresolved.join(', ')}`
-            : '，全部可解析'),
+          v: !data ? '…' : M(
+            `${data.bundles.total} 项` + (data.bundles.unresolved.length
+              ? `，解析不到 ${data.bundles.unresolved.length} 项：${data.bundles.unresolved.join(', ')}`
+              : '，全部可解析'),
+            `${data.bundles.total} total` + (data.bundles.unresolved.length
+              ? `, ${data.bundles.unresolved.length} unresolved: ${data.bundles.unresolved.join(', ')}`
+              : ', all resolvable'),
+          ),
         }),
         h(Kv, {
-          k: '依赖',
-          v: !data ? '…' : `${data.deps.total} 项` + (data.deps.missing.length
-            ? `，缺失 ${data.deps.missing.length} 项：${data.deps.missing.join(', ')}`
-            : '，无缺失'),
+          k: M('依赖', 'Dependencies'),
+          v: !data ? '…' : M(
+            `${data.deps.total} 项` + (data.deps.missing.length
+              ? `，缺失 ${data.deps.missing.length} 项：${data.deps.missing.join(', ')}`
+              : '，无缺失'),
+            `${data.deps.total} total` + (data.deps.missing.length
+              ? `, ${data.deps.missing.length} missing: ${data.deps.missing.join(', ')}`
+              : ', none missing'),
+          ),
         }),
         data ? h(Advice, { items: data.advice }) : null,
       )
 
       const actionCard = h('div', { style: S.card },
-        h('div', { style: S.cardTitle }, '生成退出后执行的脚本'),
+        h('div', { style: S.cardTitle }, M('生成退出后执行的脚本', 'Generate post-exit scripts')),
         h('div', { style: S.hint },
-          '推送 / 拉取不能在 DSH 运行时跑：抓取会读到正被写入的配置，落地结果会被退出时的回写覆盖。这里只把带本机参数的命令备好，退出 DSH 后双击执行。'),
+          M(
+            '推送 / 拉取不能在 DSH 运行时跑：抓取会读到正被写入的配置，落地结果会被退出时的回写覆盖。这里只把带本机参数的命令备好，退出 DSH 后双击执行。',
+            'Push/pull cannot run while DSH is running: capture would read configs that are being written, and the result would be overwritten on exit. This only prepares commands carrying your machine parameters — double-click them after DSH exits.',
+          )),
         h('div', { style: { ...S.kvRow, alignItems: 'center' } },
-          h('div', { style: S.kvKey }, '提交说明'),
+          h('div', { style: S.kvKey }, M('提交说明', 'Commit note')),
           h('input', {
             type: 'text',
             style: S.input,
             value: note,
-            placeholder: '可选：这次改了什么（生成推送脚本时写进提交信息，时间会自动附上）',
+            placeholder: M('可选：这次改了什么（生成推送脚本时写进提交信息，时间会自动附上）', 'Optional: what changed (written into the push commit message; the timestamp is added automatically)'),
             spellCheck: false,
             onChange: (e) => setNote(e.target.value),
           }),
         ),
         h('div', { style: S.hint },
           data && data.backup && data.backup.latest
-            ? `还原快照：${data.backup.latest}（共 ${data.backup.count} 份中的最新，含 ${data.backup.latestFiles} 个文件）`
-            : '还原快照：还没有任何备份快照（还原将无从下手，需拉取或指定 -FromCommit）'),
+            ? M(
+              `还原快照：${data.backup.latest}（共 ${data.backup.count} 份中的最新，含 ${data.backup.latestFiles} 个文件）`,
+              `Restore snapshot: ${data.backup.latest} (newest of ${data.backup.count}, ${data.backup.latestFiles} files)`,
+            )
+            : M('还原快照：还没有任何备份快照（还原将无从下手，需拉取或指定 -FromCommit）', 'Restore snapshot: no backups yet (restore has nothing to fall back to — pull first, or pass -FromCommit)')),
         data && data.repo && !data.repo.exists
           ? h('div', { style: { ...S.hint, color: 'var(--dsw-alias-state-error-primary)' } },
-            '仓库路径还没配置：先在上面「本机仓库」卡里设好并保存，否则这三份脚本生成不出来。')
+            M(
+              '仓库路径还没配置：先在上面「本机仓库」卡里设好并保存，否则这三份脚本生成不出来。',
+              'Repo path is not set: configure it in the Local repo card above and save, otherwise none of the three scripts can be generated.',
+            ))
           : null,
         data && data.remote && !data.remote.configured
           ? h('div', { style: { ...S.hint, color: 'var(--dsw-alias-state-error-primary)' } },
-            '云端仓库地址还没配置：推送 / 拉取生成不了，先在「云端仓库」卡里填远端地址并保存（只生成还原不受影响）。')
+            M(
+              '云端仓库地址还没配置：推送 / 拉取生成不了，先在「云端仓库」卡里填远端地址并保存（只生成还原不受影响）。',
+              'Cloud repo is not set: push/pull cannot be generated — fill in the remote URL in the Cloud repo card and save (restore alone still works).',
+            ))
           : null,
         data && data.repo && data.repo.ahead > 0
           ? h('div', { style: { ...S.hint, color: 'var(--dsw-alias-state-warn-primary)' } },
-            `注意：本机领先远端 ${data.repo.ahead} 个提交。本机改动要推送才入库；拉取会用仓库版本覆盖本机配置，别点错。`)
+            M(
+              `注意：本机领先远端 ${data.repo.ahead} 个提交。本机改动要推送才入库；拉取会用仓库版本覆盖本机配置，别点错。`,
+              `Note: this machine is ${data.repo.ahead} commit(s) ahead. Local changes only reach the repo by pushing; pulling overwrites local config with the repo version — do not mix them up.`,
+            ))
           : null,
         h('div', { style: S.actions },
-          h('button', { type: 'button', style: S.btnPrimary, disabled: busy || noRepo || noRemote, onClick: () => prepare('all', note) }, '一键生成 推送 / 拉取 / 还原'),
-          h('button', { type: 'button', style: S.btn, disabled: busy || noRepo || noRemote, onClick: () => prepare('push', note) }, '只生成推送'),
-          h('button', { type: 'button', style: S.btn, disabled: busy || noRepo || noRemote, onClick: () => prepare('pull') }, '只生成拉取'),
-          h('button', { type: 'button', style: S.btn, disabled: busy || noRepo, onClick: () => prepare('restore') }, '只生成还原'),
-          h('button', { type: 'button', style: S.btn, disabled: busy, onClick: refresh }, busy ? '检测中…' : '重新检测'),
+          h('button', { type: 'button', style: S.btnPrimary, disabled: busy || noRepo || noRemote, onClick: () => prepare('all', note) }, M('一键生成 推送 / 拉取 / 还原', 'Generate push / pull / restore')),
+          h('button', { type: 'button', style: S.btn, disabled: busy || noRepo || noRemote, onClick: () => prepare('push', note) }, M('只生成推送', 'Push only')),
+          h('button', { type: 'button', style: S.btn, disabled: busy || noRepo || noRemote, onClick: () => prepare('pull') }, M('只生成拉取', 'Pull only')),
+          h('button', { type: 'button', style: S.btn, disabled: busy || noRepo, onClick: () => prepare('restore') }, M('只生成还原', 'Restore only')),
+          h('button', { type: 'button', style: S.btn, disabled: busy, onClick: refresh }, busy ? M('检测中…', 'Checking…') : M('重新检测', 'Re-check')),
         ),
         h(MadeNote, { made }),
       )
@@ -894,13 +1060,16 @@ window.__ModuleLoader__.load({
             }, toast)
             : null,
           h('p', { style: S.pageLead },
-            '本页只做只读体检：读文件 + 只读 git 命令，不改仓库、不动 profile。同步动作由生成的脚本在 DSH 退出后执行。'),
-          err ? h('div', { style: { ...S.hint, color: 'var(--dsw-alias-state-error-primary)' } }, `读取失败：${err}`) : null,
+            M(
+              '本页只做只读体检：读文件 + 只读 git 命令，不改仓库、不动 profile。同步动作由生成的脚本在 DSH 退出后执行。',
+              'This page is a read-only health check: it reads files and runs read-only git commands — it never modifies the repo or the profile. Sync runs from generated scripts after DSH exits.',
+            )),
+          err ? h('div', { style: { ...S.hint, color: 'var(--dsw-alias-state-error-primary)' } }, M(`读取失败：${err}`, `Read failed: ${err}`)) : null,
           // 按内容分区：信息类在上、配置类居中、动作类在下；每区内部网格并排（宽屏两列）
-          Section('概览', '版本是否对齐、bundle 与依赖有没有缺', [versionCard, healthCard]),
-          Section('同步目标', '仓库放哪、远端连哪，都是本机配置，改完立即生效', [repoCard, remoteCard].filter(Boolean)),
-          Section('自动化与插件更新', '退出 DSH 后做什么、插件自己怎么升级', [autoCard, updCard].filter(Boolean)),
-          Section('退出后执行', null, [actionCard]),
+          Section(M('概览', 'Overview'), M('版本是否对齐、bundle 与依赖有没有缺', 'Versions, bundles and dependencies'), [versionCard, healthCard]),
+          Section(M('同步目标', 'Sync targets'), M('仓库放哪、远端连哪，都是本机配置，改完立即生效', 'Where the repo lives and which remote it points at — both local settings, applied immediately'), [repoCard, remoteCard].filter(Boolean)),
+          Section(M('自动化与插件更新', 'Automation & plugin update'), M('退出 DSH 后做什么、插件自己怎么升级', 'What runs after DSH exits, and how the plugin upgrades itself'), [autoCard, updCard].filter(Boolean)),
+          Section(M('退出后执行', 'After exit'), null, [actionCard]),
         ),
       )
     }
@@ -929,42 +1098,55 @@ window.__ModuleLoader__.load({
       const head = h('div', { style: S.head },
         h('div', { style: S.headText },
           h('div', { style: S.title }, TITLE),
-          h('div', { style: S.sub }, busy ? '检测中…' : summary.text),
-          data ? h('div', { style: S.sub }, `app ${data.version.local || '?'} / 契约 ${data.version.contract || '?'}`) : null,
+          h('div', { style: S.sub }, busy ? M('检测中…', 'Checking…') : summary.text),
+          data ? h('div', { style: S.sub }, `app ${data.version.local || '?'} / ${M('契约', 'contract')} ${data.version.contract || '?'}`) : null,
         ),
         h('div', { style: { display: 'flex', gap: '8px', alignItems: 'center', flexShrink: 0 } },
           h('span', { style: chipStyle(summary.kind) }, chipLabel(summary.kind)),
-          h('button', { type: 'button', style: S.btn, onClick: () => setOpen((v) => !v) }, open ? '收起' : '查看'),
-          h('button', { type: 'button', style: S.btn, disabled: busy, onClick: refresh }, '刷新'),
+          h('button', { type: 'button', style: S.btn, onClick: () => setOpen((v) => !v) }, open ? M('收起', 'Collapse') : M('查看', 'View')),
+          h('button', { type: 'button', style: S.btn, disabled: busy, onClick: refresh }, M('刷新', 'Refresh')),
         ),
       )
 
       if (!open) {
         return h('div', { style: S.row }, head,
-          err ? h('div', { style: { ...S.hint, color: 'var(--dsw-alias-state-error-primary)' } }, `读取失败：${err}`) : null)
+          err ? h('div', { style: { ...S.hint, color: 'var(--dsw-alias-state-error-primary)' } }, M(`读取失败：${err}`, `Read failed: ${err}`)) : null)
       }
 
       return h('div', { style: S.row },
         head,
-        err ? h('div', { style: { ...S.hint, color: 'var(--dsw-alias-state-error-primary)' } }, `读取失败：${err}`) : null,
+        err ? h('div', { style: { ...S.hint, color: 'var(--dsw-alias-state-error-primary)' } }, M(`读取失败：${err}`, `Read failed: ${err}`)) : null,
         h('div', { style: S.panel },
-          data ? h(Kv, { k: '仓库', v: data.repo.exists ? `${data.repo.path}（${data.repo.branch || '?'} @ ${data.repo.head || '?'}）` : '还没配置（请到面板里设置）' }) : null,
           data ? h(Kv, {
-            k: '远端',
-            v: data.repo.behind === null ? '读不到' : `落后 ${data.repo.behind} · 领先 ${data.repo.ahead} · 未提交 ${data.repo.dirty}`,
+            k: M('仓库', 'Repo'),
+            v: data.repo.exists
+              ? `${data.repo.path} (${data.repo.branch || '?'} @ ${data.repo.head || '?'})`
+              : M('还没配置（请到面板里设置）', 'Not configured (set it in the panel)'),
+          }) : null,
+          data ? h(Kv, {
+            k: M('远端', 'Remote'),
+            v: data.repo.behind === null
+              ? M('读不到', 'Unavailable')
+              : M(
+                `落后 ${data.repo.behind} · 领先 ${data.repo.ahead} · 未提交 ${data.repo.dirty}`,
+                `behind ${data.repo.behind} · ahead ${data.repo.ahead} · dirty ${data.repo.dirty}`,
+              ),
           }) : null,
           data ? h(Kv, {
             k: 'bundle',
-            v: `${data.bundles.total} 项，解析不到 ${data.bundles.unresolved.length} 项` + (data.bundles.unresolved.length ? `：${data.bundles.unresolved.join(', ')}` : ''),
+            v: M(
+              `${data.bundles.total} 项，解析不到 ${data.bundles.unresolved.length} 项` + (data.bundles.unresolved.length ? `：${data.bundles.unresolved.join(', ')}` : ''),
+              `${data.bundles.total} total, ${data.bundles.unresolved.length} unresolved` + (data.bundles.unresolved.length ? `: ${data.bundles.unresolved.join(', ')}` : ''),
+            ),
           }) : null,
-          data && data.remote ? h(Kv, { k: '远端地址', v: data.remote.url || '（未配置）' }) : null,
-          data && data.remote ? h(Kv, { k: 'SSH 私钥', v: data.remote.sshKey || '（未配置）' }) : null,
+          data && data.remote ? h(Kv, { k: M('远端地址', 'Remote URL'), v: data.remote.url || M('（未配置）', '(not set)') }) : null,
+          data && data.remote ? h(Kv, { k: M('SSH 私钥', 'SSH key'), v: data.remote.sshKey || M('（未配置）', '(not set)') }) : null,
           data ? h(Advice, { items: data.advice }) : null,
           h('div', { style: S.actions },
-            h('button', { type: 'button', style: S.btnPrimary, disabled: busy || !data || !data.repo.exists, onClick: () => prepare('all') }, '一键生成 推送 / 拉取 / 还原'),
-            h('button', { type: 'button', style: S.btn, disabled: busy || !data || !data.repo.exists, onClick: () => prepare('push') }, '只生成推送'),
-            h('button', { type: 'button', style: S.btn, disabled: busy || !data || !data.repo.exists, onClick: () => prepare('pull') }, '只生成拉取'),
-            h('button', { type: 'button', style: S.btn, disabled: busy || !data || !data.repo.exists, onClick: () => prepare('restore') }, '只生成还原'),
+            h('button', { type: 'button', style: S.btnPrimary, disabled: busy || !data || !data.repo.exists, onClick: () => prepare('all') }, M('一键生成 推送 / 拉取 / 还原', 'Generate push / pull / restore')),
+            h('button', { type: 'button', style: S.btn, disabled: busy || !data || !data.repo.exists, onClick: () => prepare('push') }, M('只生成推送', 'Push only')),
+            h('button', { type: 'button', style: S.btn, disabled: busy || !data || !data.repo.exists, onClick: () => prepare('pull') }, M('只生成拉取', 'Pull only')),
+            h('button', { type: 'button', style: S.btn, disabled: busy || !data || !data.repo.exists, onClick: () => prepare('restore') }, M('只生成还原', 'Restore only')),
           ),
           h(MadeNote, { made }),
         ),
@@ -983,10 +1165,13 @@ window.__ModuleLoader__.load({
       try { seen = window.localStorage.getItem('dsh-config-sync:lastResultAt') || '' } catch { }
       if (seen === String(last.at)) return ''
       try { window.localStorage.setItem('dsh-config-sync:lastResultAt', String(last.at)) } catch { }
-      const who = last.mode === 'pull' ? '自动拉取' : '自动推送'
+      const who = last.mode === 'pull' ? M('自动拉取', 'Auto pull') : M('自动推送', 'Auto push')
       return last.ok
-        ? `${who}完成：${last.message}`
-        : `${who}失败：${last.message}${last.log ? '（日志：' + last.log + '）' : ''}`
+        ? M(`${who}完成：${last.message}`, `${who} finished: ${last.message}`)
+        : M(
+          `${who}失败：${last.message}${last.log ? '（日志：' + last.log + '）' : ''}`,
+          `${who} failed: ${last.message}${last.log ? ' (log: ' + last.log + ')' : ''}`,
+        )
     }
 
     /**
@@ -1010,7 +1195,7 @@ window.__ModuleLoader__.load({
         document.body.appendChild(box)
         setTimeout(() => { try { box.remove() } catch { } }, 5000)
       } catch (error) {
-        try { console.warn('[dsh-config-sync] 启动提示没弹出来：', error) } catch { }
+        try { console.warn('[dsh-config-sync] startup toast failed:', error) } catch { }
       }
     }
 
@@ -1044,7 +1229,7 @@ window.__ModuleLoader__.load({
         }))
       } catch (error) {
         // 老版本宿主没有 sidebar.panellist 就静默降级到设置页；但要把原因留在控制台
-        try { console.warn('[dsh-config-sync] 侧栏入口注册失败：', error) } catch { }
+        try { console.warn('[dsh-config-sync] sidebar entry registration failed:', error) } catch { }
       }
 
       try {
@@ -1054,7 +1239,7 @@ window.__ModuleLoader__.load({
           order: 20,
         }, ConfigSyncRow))
       } catch (error) {
-        try { console.warn('[dsh-config-sync] 设置页入口注册失败：', error) } catch { }
+        try { console.warn('[dsh-config-sync] settings entry registration failed:', error) } catch { }
       }
 
       // 界面还没完全起来时 fetch 可能扑空，所以稍等一会儿再查；只查一次，不轮询。

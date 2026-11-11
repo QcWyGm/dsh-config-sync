@@ -1,8 +1,12 @@
 # dsh-config-sync
 
+中文 | [English](README.en.md)
+
 DSH 插件：左侧栏加一行「配置同步」，点开是整页体检面板；「设置 → 通用」另留一行摘要。它**只做体检 + 备命令**，同步动作不在应用内跑。
 
 ![panel](docs/panel.png)
+
+面板与宿主返回的文案是双语的：跟随客户端语言（`zh-*` → 中文，其余 → 英文），没有面板内切换开关。只有生成的 `.cmd` 脚本内部文字保持中文（它是本机命令行工具）。
 
 ## 安装
 
@@ -10,7 +14,7 @@ DSH 插件：左侧栏加一行「配置同步」，点开是整页体检面板�
 
 ```sh
 # 从本仓库的 release 包安装（无需构建，包内已含宿主/前端/runtime 脚本）
-dsh plugin add https://raw.githubusercontent.com/QcWyGm/dsh-config-sync/main/releases/dsh-config-sync-0.2.9.tgz
+dsh plugin add https://raw.githubusercontent.com/QcWyGm/dsh-config-sync/main/releases/dsh-config-sync-0.3.0.tgz
 ```
 
 或在 DSH 面板「插件 → 插件市场」里搜索 `dsh-config-sync`（本仓库已将 `dsh-plugin`、`deepseek-harness` 写进包关键词，并声明了 `dsh.bundle.patch`）。
