@@ -12,19 +12,31 @@
 // （文件从 900 KB 缩成 200 字节，会话只剩一个空壳）。所以这里只重写第一帧：
 // 用二分找出第一帧的结束偏移，替换该帧，后面的字节原样保留。
 //
-// 用法：node fix-session-cwd.mjs <spec.json>
+// 用法：node fix-session-cwd.mjs <spec.json> [结果输出文件]
 //   spec.json = { "home": "<DSH home>", "dirs": { "<编码目录名>": "<本机工作区路径>" } }
 // 只改 header 的 cwd，正文一帧都不动；已正确则跳过（幂等）。
+//
+// 第三个参数是给「客户端自带 Electron 当 node 跑」（ELECTRON_RUN_AS_NODE=1）用的：
+// Electron 是 GUI 子系统程序，stdout 抓不到，结果必须落到文件里由 PowerShell 读。
 
 import fs from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
 
 const specPath = process.argv[2];
+const outPath = process.argv[3] || '';
 if (!specPath) {
-  console.error('用法：node fix-session-cwd.mjs <spec.json>');
+  console.error('用法：node fix-session-cwd.mjs <spec.json> [out.json]');
   process.exit(2);
 }
+const emit = (obj) => {
+  const text = JSON.stringify(obj);
+  if (outPath) {
+    try { fs.writeFileSync(outPath, text, 'utf8'); } catch { console.log(text); }
+  } else {
+    console.log(text);
+  }
+};
 if (typeof zlib.zstdDecompressSync !== 'function' || typeof zlib.zstdCompressSync !== 'function') {
   console.error(`当前 Node ${process.version} 不支持 zstd，无法修正会话头部`);
   process.exit(2);
@@ -61,7 +73,7 @@ function firstFrameEnd(buf, expected) {
 }
 
 if (!fs.existsSync(sessionsRoot)) {
-  console.log(JSON.stringify(result));
+  emit(result);
   process.exit(0);
 }
 
@@ -99,5 +111,5 @@ for (const [dirName, cwd] of Object.entries(dirs)) {
   }
 }
 
-console.log(JSON.stringify(result));
+emit(result);
 process.exit(result.failed.length ? 1 : 0);

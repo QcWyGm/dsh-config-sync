@@ -231,6 +231,11 @@ function Sync-WorkspaceApply {
     $localTable = [ordered]@{}
     $localGlobal = [ordered]@{}
   }
+  # 记下「合并前本机登记表里已有的工作区 ID」。同一路径被两台机器各自建过工作区时，
+  # 两边 ID 必然不同；这时要保留**当前机器在用的那个 ID**，否则本机的 defaultWorkspaceId
+  # 会指向一个被丢掉的 ID，登记表校验不过、工作区列表和会话一起读不出来。
+  $localIdSet = @{}
+  foreach ($k in @($localTable.Keys)) { $localIdSet[[string]$k] = $true }
   # 全局归档/置顶会话：取「仓库 + 本机」并集（-ReplaceWorkspaceRegistry 时本机已清空，只剩仓库）
   # 注意：$null 在管道里会被当成一个元素流过 ForEach-Object，[string]$null 就是 ""，
   # 于是缺失的字段会变成 @("") 写进 json。"" 不是合法会话 id，这里统一滤掉。
@@ -289,9 +294,13 @@ function Sync-WorkspaceApply {
   foreach ($key in @($pathGroups.Keys)) {
     $group = @($pathGroups[$key])
     if ($group.Count -le 1) { continue }
-    # 保留哪一个：优先仓库登记表里的 ID（另一台机器一直在用，defaultWorkspaceId 通常指向它），
-    # 否则保留会话最多的那个。其余条目的会话/归档/置顶并入保留者，再删掉多余条目。
-    $keeper = @($group | Where-Object { $mfIdSet.ContainsKey($_) }) | Select-Object -First 1
+    # 保留哪一个：优先**本机原有的 ID**（当前机器在用的那个，defaultWorkspaceId 指向它），
+    # 本机没有这个路径时才用仓库的 ID，最后退到会话最多的那个。
+    # 早先版本反着来（优先仓库 ID），换机 pull 后本机 ID 被丢掉，defaultWorkspaceId 随之悬空。
+    $keeper = @($group | Where-Object { $localIdSet.ContainsKey($_) }) | Select-Object -First 1
+    if (-not $keeper) {
+      $keeper = @($group | Where-Object { $mfIdSet.ContainsKey($_) }) | Select-Object -First 1
+    }
     if (-not $keeper) {
       $keeper = @($group | Sort-Object -Property @{ Expression = { @($localTable[$_]['sessionIds']).Count } } -Descending) | Select-Object -First 1
     }
@@ -306,8 +315,16 @@ function Sync-WorkspaceApply {
   }
   $ids = @($localTable.Keys | ForEach-Object { [string]$_ } | Where-Object { -not $dropped.ContainsKey($_) })
   $mfDefault = if ($mf.global) { [string]$mf.global.defaultWorkspaceId } else { '' }
-  if ($mfDefault) { $localGlobal['defaultWorkspaceId'] = $mfDefault }
-  elseif (-not $localGlobal.Contains('defaultWorkspaceId')) { $localGlobal['defaultWorkspaceId'] = '' }
+  $localDefault = if ($localGlobal.Contains('defaultWorkspaceId')) { [string]$localGlobal['defaultWorkspaceId'] } else { '' }
+  # defaultWorkspaceId 一律以「当前机器」为准：本机原来那个只要还在表里就原样保留；
+  # 只有在它已经不存在（被合并掉/首次迁移）时才退到仓库值，再不行取第一条。
+  # 悬空的 defaultWorkspaceId 会让 DSH 的登记表校验失败，症状是工作区列表空、会话全读不出。
+  if (-not ($localDefault -and ($ids -contains $localDefault))) {
+    if ($mfDefault -and ($ids -contains $mfDefault)) { $localGlobal['defaultWorkspaceId'] = $mfDefault }
+    elseif ($ids.Count -gt 0) { $localGlobal['defaultWorkspaceId'] = $ids[0] }
+    else { $localGlobal['defaultWorkspaceId'] = '' }
+  }
+  elseif (-not $localGlobal.Contains('defaultWorkspaceId')) { $localGlobal['defaultWorkspaceId'] = $localDefault }
   $localGlobal['initialized'] = $true
   $localGlobal['workspaceIds'] = $ids
   $localGlobal['archivedSessionIds'] = @($gArchAll | Sort-Object -Unique)
@@ -437,6 +454,23 @@ function Sync-ConversationApply {
   }
 
   # 3) 四块数据字节还原（覆盖前备份同名文件；sessions 一级目录按 dirMap 改名）
+  #    前置校验：会话文件头部的 cwd 必须展开成本机路径，否则 DSH 判 corrupt，整层会话
+  #    都不登记（症状：工作区还在、会话一个都看不到）。这一步只能靠 Node 解 zstd。
+  #    找不到 Node / 缺 helper 时**宁可不铺**：铺进去的是 {{APP_ROOT}} 占位符文件，比不铺更糟。
+  $cwdHelper = Join-Path $PSScriptRoot 'tools\fix-session-cwd.mjs'
+  if (-not (Test-Path -LiteralPath $cwdHelper)) { $cwdHelper = Join-Path $RepoRoot 'tools\fix-session-cwd.mjs' }
+  $nodeRunner = Get-HostNodeRunner $AppRoot
+  if ($cwdMap.Count -gt 0) {
+    if (-not (Test-Path -LiteralPath $cwdHelper)) {
+      Warn ('缺少会话头部修正脚本 {0}，本次跳过会话还原（铺进去的会话 DSH 会判为损坏）' -f $cwdHelper)
+      return
+    }
+    if (-not $nodeRunner) {
+      Warn '这台机器既没有 Node，也找不到客户端本体，本次跳过会话还原（会话文件里的 {{APP_ROOT}} 占位符无法展开，铺进去 DSH 会全部不登记）'
+      Warn '本机配置与工作区资料不受影响；装一个 Node 后重新拉取即可'
+      return
+    }
+  }
   $blocks = @(
     @{ Repo = 'sessions';                     Dst = (Join-Path $DshHome 'sessions');                                         Remap = $true  },
     @{ Repo = 'attachments';                  Dst = (Join-Path $DshHome 'attachments');                                      Remap = $false },
@@ -489,17 +523,17 @@ function Sync-ConversationApply {
     $specPath = Join-Path ([IO.Path]::GetTempPath()) ('dsh-session-cwd-{0}.json' -f $stamp)
     $specJson = [ordered]@{ home = $DshHome; dirs = $cwdMap } | ConvertTo-Json -Depth 4 -Compress
     [IO.File]::WriteAllText($specPath, $specJson, (New-Object Text.UTF8Encoding($false)))
-    $helper = Join-Path $PSScriptRoot 'tools\fix-session-cwd.mjs'
-    if (-not (Test-Path -LiteralPath $helper)) { $helper = Join-Path $RepoRoot 'tools\fix-session-cwd.mjs' }
-    $nodeExe = Join-Path $AppRoot 'resources\runtime\primary-runtime\dependencies\node\bin\node.exe'
-    if (-not (Test-Path -LiteralPath $nodeExe)) {
-      $cmd = Get-Command node -ErrorAction SilentlyContinue
-      if ($cmd) { $nodeExe = $cmd.Source }
-    }
-    if ((Test-Path -LiteralPath $helper) -and $nodeExe -and (Test-Path -LiteralPath $nodeExe)) {
+    $helper = $cwdHelper
+    # 结果落文件而不是抓 stdout：执行器可能是客户端自带的 Electron（GUI 子系统，stdout 抓不到）
+    $resultPath = Join-Path ([IO.Path]::GetTempPath()) ('dsh-session-cwd-{0}.out.json' -f $stamp)
+    $oldRunAsNode = $env:ELECTRON_RUN_AS_NODE
+    if ((Test-Path -LiteralPath $helper) -and $nodeRunner) {
       try {
-        $raw = & $nodeExe $helper $specPath 2>&1
-        $line = (@($raw) -join '').Trim()
+        if ($nodeRunner.Electron) { $env:ELECTRON_RUN_AS_NODE = '1' }
+        else { Remove-Item Env:\ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue }
+        & $nodeRunner.Exe $helper $specPath $resultPath | Out-Null
+        if (-not (Test-Path -LiteralPath $resultPath)) { throw '执行器没有产出结果文件（可能不是 Node/Electron）' }
+        $line = ([IO.File]::ReadAllText($resultPath)).Trim()
         $r = $line | ConvertFrom-Json -ErrorAction Stop
         if (@($r.failed).Count -gt 0) {
           foreach ($fe in @($r.failed)) { Warn ('会话头部修正失败：{0}（{1}）' -f $fe.file, $fe.error) }
@@ -510,10 +544,13 @@ function Sync-ConversationApply {
         Warn ('会话头部修正执行失败：{0}' -f $_.Exception.Message)
         Warn '未修正的会话会在 DSH 里被判为损坏，导致工作区/会话列表为空，请先跑一次拉取再还原'
       } finally {
+        if ($null -eq $oldRunAsNode) { Remove-Item Env:\ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue }
+        else { $env:ELECTRON_RUN_AS_NODE = $oldRunAsNode }
         Remove-Item -LiteralPath $specPath -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $resultPath -Force -ErrorAction SilentlyContinue
       }
     } else {
-      Warn ('没找到可用于修正会话头部的 Node（找过 {0}），本次未修正，DSH 里这些会话可能被判为损坏' -f $nodeExe)
+      Warn ('没找到可用于修正会话头部的执行器（Node / 客户端 Electron 都没找到，AppRoot={0}），本次未修正' -f $AppRoot)
     }
   }
   Ok ('会话数据全量还原：{0} 个目录映射，写入/更新 {1} 个文件、备份 {2} 个（四块数据字节保真，会话只增不删）' -f $dirMap.Count, $nAdd, $nBk)

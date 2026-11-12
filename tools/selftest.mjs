@@ -603,6 +603,8 @@ if (prevScope === null) { try { unlinkSync(scopeFile) } catch { } } else writeFi
   const commonSrc = pickRuntime('dsh-sync-common.ps1') ? readFileSync(pickRuntime('dsh-sync-common.ps1'), 'utf8') : ''
   const captureSrc = pickRuntime('capture.ps1') ? readFileSync(pickRuntime('capture.ps1'), 'utf8') : ''
   const applySrc = pickRuntime('apply.ps1') ? readFileSync(pickRuntime('apply.ps1'), 'utf8') : ''
+  const pickTool = (name) => [join(pluginRoot, 'runtime', 'tools', name), join(pluginRoot, 'tools', name)].find((p) => existsSync(p)) || ''
+  const helperSrc = pickTool('fix-session-cwd.mjs') ? readFileSync(pickTool('fix-session-cwd.mjs'), 'utf8') : ''
   const SCOPE_GROUPS = ['profile', 'prompt', 'skills', 'presets', 'storages-record', 'settings', 'mnemon', 'local-plugins', 'workspace', 'conversations']
   check('公共脚本提供 scope 读取与判断函数',
     ['Get-SyncScope', 'Test-SyncGroupEnabled', 'Test-SyncItemEnabled', 'Test-SyncDeleteCloud', 'Skip-SyncGroup', 'Skip-SyncItem']
@@ -639,6 +641,40 @@ if (prevScope === null) { try { unlinkSync(scopeFile) } catch { } } else writeFi
       && applySrc.includes('$skipBecauseReady'), 'apply.ps1')
   check('node_modules 不存在时仍然明确报错（不静默放过）',
     /if \(Test-Path -LiteralPath \$nodeModules\)[\s\S]{0,300}exit 1/.test(applySrc), 'apply.ps1')
+
+  // 登记表：同一路径撞了两台机器各自建的 ID 时，必须保留当前机器在用的 ID，
+  // 否则 defaultWorkspaceId 悬空、整张表校验不过（工作区列表空、会话读不出）。
+  check('登记表同路径冲突时保留本机 ID（不是仓库 ID）',
+    applySrc.includes('$localIdSet')
+      && applySrc.indexOf('Where-Object { $localIdSet.ContainsKey($_) }')
+         < applySrc.indexOf('Where-Object { $mfIdSet.ContainsKey($_) }'),
+    'apply.ps1')
+  check('defaultWorkspaceId 以本机为准（原值还在表里就不动）',
+    applySrc.includes('$localDefault')
+      && applySrc.includes('$ids -contains $localDefault')
+      && applySrc.includes("$localGlobal['defaultWorkspaceId'] = $ids[0]"),
+    'apply.ps1')
+
+  // 会话还原的前提：能展开 {{APP_ROOT}} 占位符。做不到就别铺 —— 铺了 DSH 一个都不登记，
+  // 用户看到的就是「工作区还在、会话全没了」（真实事故）。
+  check('node 探测覆盖常见安装位置（不只有 PATH）',
+    commonSrc.includes("nodejs\\node.exe")
+      && commonSrc.includes('function Get-HostNodeExe'),
+    'dsh-sync-common.ps1')
+  check('找不到 Node 时跳过会话还原而不是铺坏文件',
+    /if \(\$cwdMap\.Count -gt 0\) \{[\s\S]{0,400}跳过会话还原[\s\S]{0,200}return/.test(applySrc),
+    'apply.ps1')
+  check('会话还原用的是统一探测到的执行器（Node 或客户端 Electron）',
+    applySrc.includes('$nodeRunner = Get-HostNodeRunner $AppRoot')
+      && applySrc.includes('$nodeRunner.Electron')
+      && commonSrc.includes('function Get-HostNodeRunner'),
+    'apply.ps1')
+  // 客户端 Electron 是 GUI 子系统，stdout 抓不到 —— 结果必须落文件，否则面板/日志永远报失败
+  check('会话头部修正的结果写成文件（Electron 跑时 stdout 抓不到）',
+    helperSrc.includes('const outPath = process.argv[3]')
+      && helperSrc.includes('emit(result)')
+      && applySrc.includes('$resultPath'),
+    'fix-session-cwd.mjs')
   check('面板有「同步内容」卡：逐组勾选 + 展开明细 + deleteCloud 开关',
     clientSrc.includes('function ScopeCard') && clientSrc.includes('callScope(')
     && clientSrc.includes('同步内容') && clientSrc.includes('Sync content')

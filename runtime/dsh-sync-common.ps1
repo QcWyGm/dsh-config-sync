@@ -246,10 +246,40 @@ function Get-HostDshNodeModules([string]$appRoot) {
 function Get-HostNodeExe([string]$appRoot) {
   $p = Join-Path $appRoot 'resources\runtime\primary-runtime\dependencies\node\bin\node.exe'
   if (Test-Path -LiteralPath $p) { return $p }
+  # 后台自动同步是从客户端进程拉起来的，PATH 里往往**没有** node（用户交互终端里才有）。
+  # 只认 PATH 会让「会话头部 cwd 修正」在无人值守时静默跳过，拉取后会话全部变成
+  # 带 {{APP_ROOT}} 占位符的文件，DSH 一个都不登记 —— 用户看到的就是「工作区还在、会话没了」。
+  # 所以这里把常见安装位置也探一遍。
+  $guesses = @()
+  foreach ($base in @($env:ProgramFiles, ${env:ProgramFiles(x86)}, $env:LOCALAPPDATA)) {
+    if (-not $base) { continue }
+    $guesses += (Join-Path $base 'nodejs\node.exe')
+    $guesses += (Join-Path $base 'Programs\nodejs\node.exe')
+    $guesses += (Join-Path $base 'Volta\bin\node.exe')
+    $guesses += (Join-Path $base 'fnm\node.exe')
+  }
+  foreach ($g in $guesses) {
+    if (Test-Path -LiteralPath $g) { return $g }
+  }
   try {
     $c = Get-Command node -ErrorAction Stop
     if ($c -and $c.Source) { return $c.Source }
   } catch { }
+  return $null
+}
+
+# 能跑 Node 脚本的「执行器」：优先真 Node；没有的话用客户端自带的 Electron
+# （ELECTRON_RUN_AS_NODE=1 时它就是 node，自带 zstd，版本通常比用户装的还新）。
+# 用户机器上经常根本没装独立 Node —— 只认 node.exe 会让会话头部永远修不了。
+function Get-HostNodeRunner([string]$appRoot) {
+  $node = Get-HostNodeExe $appRoot
+  if ($node) { return @{ Exe = $node; Electron = $false } }
+  if (-not (Test-Path -LiteralPath $appRoot)) { return $null }
+  $exes = @(Get-ChildItem -LiteralPath $appRoot -Filter '*.exe' -File -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -notmatch 'Uninstall' })
+  $hostExe = $exes | Where-Object { $_.Name -match 'DeepSeek Harness' } | Select-Object -First 1
+  if (-not $hostExe) { $hostExe = $exes | Select-Object -First 1 }
+  if ($hostExe) { return @{ Exe = $hostExe.FullName; Electron = $true } }
   return $null
 }
 
