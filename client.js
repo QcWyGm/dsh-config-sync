@@ -1070,7 +1070,7 @@ window.__ModuleLoader__.load({
           : null,
         h('div', { style: S.actions },
           h('button', { type: 'button', style: S.btnPrimary, disabled: Boolean(busy), onClick: () => act('pull-now') }, M('立即拉取（会关闭 DSH）', 'Pull now (closes DSH)')),
-          h('button', { type: 'button', style: S.btnPrimary, disabled: Boolean(busy), onClick: () => act('push-now') }, M('退出后推送', 'Push after exit')),
+          h('button', { type: 'button', style: S.btnPrimary, disabled: Boolean(busy), onClick: () => act('push-now') }, M('立即推送（会关闭 DSH）', 'Push now (closes DSH)')),
           pending ? h('button', { type: 'button', style: S.btn, disabled: Boolean(busy), onClick: () => act('cancel') }, M('取消排队', 'Cancel queue')) : null,
         ),
         msg ? h('div', { style: S.hint }, msg) : null,
