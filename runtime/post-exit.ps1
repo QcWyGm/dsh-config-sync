@@ -476,8 +476,9 @@ Log ("sync.ps1 {0} 退出码：{1}" -f $Mode, $code)
 $failed = ($code -ne 0)
 
 # ---------- 失败自动回滚（仅 pull） ----------
+$conflictPending = ($code -eq 6)
 $restored = $false
-if ($failed -and $Mode -eq 'pull') {
+if ($failed -and $Mode -eq 'pull' -and (-not $conflictPending)) {
   Log '拉取失败：开始自动回滚'
   # 1) 仓库回到拉取前的提交（pull 可能已经把仓库更新了，失败的是后面的 apply）
   if ($git -and $headBefore) {
@@ -517,7 +518,10 @@ if ($failed -and $Mode -eq 'pull') {
 
 # ---------- 写结果文件（客户端下次启动弹提示用） ----------
 if ($Mode -eq 'pull') {
-  if ($failed) {
+  if ($conflictPending) {
+    # 冲突不是"失败"：本机文件挡住了快进，仓库没动、配置没动，等用户在面板里逐项选完再拉
+    Write-Result $false 6 '拉取被本机文件挡住：面板「同步冲突」里逐项选「用本机 / 用云端」后再拉取' $false
+  } elseif ($failed) {
     Write-Result $false $code ("拉取失败" + $(if ($restored) { '，已自动还原上一次的配置' } else { '，且未能完整还原' }) + '；详见日志') $restored
   } else {
     Write-Result $true 0 '云端配置已拉取到本机' $false
@@ -533,7 +537,8 @@ if ($Restart) { RestartClient }
 if ($failed) {
   # 文案按动作分开写（旧版一律写「pull 已尝试回滚」，push 失败时也这么报，误导排查）
   if ($Mode -eq 'pull') {
-    if ($restored) { Finish 5 '同步失败：拉取失败，已回滚到同步前的配置' }
+    if ($conflictPending) { Finish 6 '拉取待处理：本机有文件与云端冲突，打开面板「同步冲突」选择' }
+    elseif ($restored) { Finish 5 '同步失败：拉取失败，已回滚到同步前的配置' }
     else { Finish 5 '同步失败：拉取失败，回滚不完整，请打开日志核对' }
   } else {
     Finish 5 '同步失败：推送失败，改动仍在本地，下次启动可再推'

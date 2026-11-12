@@ -33,6 +33,7 @@ const ROUTE_PREPARE = '/config-sync/prepare'
 const ROUTE_SETTINGS = '/config-sync/settings'
 const ROUTE_UPDATE = '/config-sync/update'
 const ROUTE_SCOPE = '/config-sync/scope'
+const ROUTE_CONFLICT = '/config-sync/conflict'
 const SETTINGS_NAME = 'dsh-config-sync.json'
 
 /**
@@ -682,6 +683,13 @@ async function inspect(config) {
       // post-exit.ps1 上次执行的结果（成功/失败/是否回滚），客户端启动后据此弹 5 秒提示
       lastResult: readAutoResult(dshHome),
     },
+    // 拉取被本机文件挡住时 sync.ps1 留下的冲突清单，面板「同步冲突」卡据此渲染
+    conflicts: (() => {
+      const c = readConflicts(dshHome)
+      if (!c) return { exists: false, total: 0, pending: 0, at: '', backupDir: '' }
+      const pending = c.items.filter((it) => !it.choice).length
+      return { exists: true, total: c.items.length, pending, at: c.at || '', backupDir: c.backupDir || '' }
+    })(),
   }
 }
 
@@ -2219,6 +2227,134 @@ async function handleScope(req, res, config) {
   }
 }
 
+/**
+ * 「同步冲突」接口：pull 被本机文件挡住时，sync.ps1 会写 <DshHome>\sync-conflicts.json。
+ *   GET                          读清单（两侧预览 + 每项当前选择）
+ *   POST {items:[{path,choice}]} 保存选择（choice 只认 '' / 'local' / 'cloud'）
+ *   POST {action:'restore',path} 把某一项的本机副本从备份写回工作区
+ *   POST {action:'reset'}        放弃这份清单（下次拉取会重新算）
+ * 真正按选择落地的是 sync.ps1（下次「立即拉取」读同一份文件），这里只动 JSON 与备份。
+ */
+function conflictPath(dshHome) { return join(dshHome, 'sync-conflicts.json') }
+
+function readConflicts(dshHome) {
+  const p = conflictPath(dshHome)
+  if (!isFile(p)) return null
+  try {
+    const obj = JSON.parse(readFileSync(p, 'utf8'))
+    if (!obj || !Array.isArray(obj.items)) return null
+    return obj
+  } catch { return null }
+}
+
+function writeConflicts(dshHome, obj) {
+  const p = conflictPath(dshHome)
+  mkdirSync(dirname(p), { recursive: true })
+  writeFileSync(p, JSON.stringify(obj, null, 2) + '\n', 'utf8')
+  return p
+}
+
+async function handleConflict(req, res, config) {
+  const dshHome = config?.dshHome || process.env.DSH_HOME || join(homedir(), '.dsh')
+  try {
+    if (req.method === 'GET') {
+      const obj = readConflicts(dshHome)
+      if (!obj) { sendJson(res, 200, { ok: true, exists: false, path: conflictPath(dshHome) }); return }
+      const items = obj.items.map((it) => ({
+        path: String(it.path || ''),
+        kind: String(it.kind || ''),
+        localSize: Number(it.localSize) || 0,
+        remoteSize: Number(it.remoteSize) || 0,
+        binary: it.binary === true,
+        localPreview: String(it.localPreview || ''),
+        remotePreview: String(it.remotePreview || ''),
+        // 备份里到底有没有这一份（旧清单 / 备份失败时面板要把对应按钮置灰）
+        localSaved: it.localSaved !== false,
+        cloudSaved: it.cloudSaved === true,
+        choice: String(it.choice || ''),
+      }))
+      sendJson(res, 200, {
+        ok: true,
+        exists: true,
+        path: conflictPath(dshHome),
+        at: obj.at || '',
+        head: obj.head || '',
+        remoteHead: obj.remoteHead || '',
+        backupDir: obj.backupDir || '',
+        items,
+      })
+      return
+    }
+    if (req.method !== 'POST') { sendJson(res, 405, { ok: false, error: 'GET/POST only' }); return }
+    if (!originAllowed(req)) { sendJson(res, 403, { ok: false, error: 'cross-origin request rejected' }); return }
+    const raw = await readBody(req)
+    const body = raw.trim() ? JSON.parse(raw) : {}
+    const obj = readConflicts(dshHome)
+    if (!obj) {
+      throw new Error(t(
+        '当前没有待处理的冲突清单（下次拉取被本机文件挡住时会自动生成）',
+        'No pending conflict list (one is created automatically when a pull is blocked)',
+      ))
+    }
+
+    if (body.action === 'reset') {
+      try { unlinkSync(conflictPath(dshHome)) } catch { }
+      sendJson(res, 200, { ok: true, cleared: true })
+      return
+    }
+
+    if (body.action === 'restore') {
+      const rel = String(body.path || '').trim()
+      if (!rel) throw new Error(t('没有指定要还原的文件', 'No file was given to restore'))
+      const side = body.side === 'cloud' ? 'cloud' : 'local'
+      // 还原落到「当时发生冲突的那个仓库」（清单里记着），而不是此刻设置里的路径：
+      // 用户之后改过 repoPath 也不会把副本写进另一个仓库。
+      const repo = String(obj.repo || '') || resolveRepo(config?.repoPath, dshHome).repo || ''
+      if (!repo) throw new Error(t('还没有配置仓库目录', 'Repo directory is not configured'))
+      const known = obj.items.find((it) => String(it.path) === rel)
+      if (!known) throw new Error(t(`冲突清单里没有这个文件：${rel}`, `Not in the conflict list: ${rel}`))
+      const base = String(obj.backupDir || '')
+      if (!base) throw new Error(t('这份清单没有记录备份目录', 'The list has no backup directory'))
+      // 目录名带中英说明；旧清单（0.3.17 最早那版）是 files / files-cloud，这里兜底
+      const sub = side === 'cloud'
+        ? (isDir(join(base, '云端-Cloud')) ? '云端-Cloud' : 'files-cloud')
+        : (isDir(join(base, '本机-Local')) ? '本机-Local' : 'files')
+      const src = join(base, sub, rel)
+      if (!isFile(src)) {
+        throw new Error(side === 'cloud'
+          ? t('备份里没有这一项的云端副本（旧版清单不会存云端），无法还原', 'No cloud copy for this item (older lists did not save one)')
+          : t('备份里没有这一项的本机副本，无法还原', 'No local copy for this item in the backup'))
+      }
+      const dst = join(repo, rel)
+      mkdirSync(dirname(dst), { recursive: true })
+      writeFileSync(dst, readFileSync(src))
+      sendJson(res, 200, { ok: true, restored: rel, side })
+      return
+    }
+
+    const incoming = Array.isArray(body.items) ? body.items : []
+    const byPath = new Map(obj.items.map((it) => [String(it.path), it]))
+    for (const one of incoming) {
+      const p = String((one && one.path) || '')
+      const c = String((one && one.choice) || '')
+      const target = byPath.get(p)
+      if (!target) continue
+      target.choice = (c === 'local' || c === 'cloud') ? c : ''
+    }
+    const saved = writeConflicts(dshHome, obj)
+    const pending = obj.items.filter((it) => !it.choice).length
+    sendJson(res, 200, {
+      ok: true,
+      path: saved,
+      pending,
+      total: obj.items.length,
+      chosen: obj.items.length - pending,
+    })
+  } catch (error) {
+    sendJson(res, 400, { ok: false, error: String((error && error.message) || error) })
+  }
+}
+
 async function handleStatus(req, res, config) {
   try {
     sendJson(res, 200, await inspect(config))
@@ -2508,6 +2644,11 @@ export function apply(ctx, config) {
         kind: 'exact',
         path: ROUTE_SCOPE,
         handler: withLang(handleScope),
+      }))
+      scoped.effect(() => scoped.webServer.register({
+        kind: 'exact',
+        path: ROUTE_CONFLICT,
+        handler: withLang(handleConflict),
       }))
     })
     // 开关打开才排一次启动检查（默认关 = 什么都不做）

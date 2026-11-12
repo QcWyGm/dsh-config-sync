@@ -336,6 +336,27 @@ window.__ModuleLoader__.load({
       return body
     }
 
+    /**
+     * 同步冲突：GET 取清单（两侧预览 + 每项当前选择），POST 存选择 / 还原单项 / 放弃清单。
+     * 落地由 sync.ps1 在下次拉取时按同一份 JSON 执行，这里只改文件不动仓库。
+     */
+    async function callConflict(payload) {
+      const res = await fetch('/config-sync/conflict', payload
+        ? {
+          method: 'POST',
+          cache: 'no-store',
+          credentials: 'same-origin',
+          headers: jsonHeaders,
+          body: JSON.stringify(payload),
+        }
+        : { cache: 'no-store', credentials: 'same-origin', headers: langHeaders() })
+      const text = await res.text()
+      let body
+      try { body = text ? JSON.parse(text) : null } catch { throw badJson(res) }
+      if (!res.ok || !body || body.ok !== true) throw new Error((body && body.error) || `${res.status}`)
+      return body
+    }
+
     /** 插件更新：读版本清单（服务端缓存 30 分钟），check 时强制重查。 */
     async function callUpdate(payload) {
       const res = await fetch('/config-sync/update', payload
@@ -763,6 +784,198 @@ window.__ModuleLoader__.load({
           '留空 = 默认 ~\\.dsh\\backups；只能选该目录下的快照。还原只覆盖、不删除。',
           'Empty = default ~\\.dsh\\backups; only snapshots inside it are offered. Restore overwrites, never deletes.',
         )),
+      )
+    }
+
+    /**
+     * 「同步冲突」卡：拉取被本机文件挡住时，sync.ps1 会先备份本机副本、再写一份冲突清单
+     * （<DshHome>\sync-conflicts.json，含两侧预览）。
+     * 这里逐项列出，点行展开看两边内容，选「用本机 / 用云端」，保存后由 sync.ps1 在下次拉取时落地：
+     *   用云端 = 丢掉本机那份（备份里留着，随时可「还原」）
+     *   用本机 = 先让云端版本落地，再把本机那份写回工作区，下次推送带上
+     * 没冲突时这张卡不出现（不占版面）。
+     */
+    function ConflictCard(props) {
+      const [state, setState] = react.useState(null)
+      const [open, setOpen] = react.useState({})
+      const [busy, setBusy] = react.useState(false)
+      const [err, setErr] = react.useState('')
+      const [msg, setMsg] = react.useState('')
+
+      const load = async () => {
+        try { setState(await callConflict()) } catch (e) { setErr(String((e && e.message) || e)) }
+      }
+      react.useEffect(() => { load() }, [])
+
+      const size = (n) => {
+        const v = Number(n) || 0
+        if (v >= 1048576) return `${(v / 1048576).toFixed(1)} MB`
+        if (v >= 1024) return `${(v / 1024).toFixed(1)} KB`
+        return `${v} B`
+      }
+
+      if (!state) {
+        return h('div', { style: S.card },
+          h('div', { style: S.cardTitle }, M('同步冲突', 'Sync conflicts')),
+          h('div', { style: S.hint }, err
+            ? M(`读取失败：${err}`, `Read failed: ${err}`)
+            : M('正在读取冲突清单…', 'Loading conflicts…')),
+        )
+      }
+      if (!state.exists) return null
+
+      const items = Array.isArray(state.items) ? state.items : []
+      const pending = items.filter((it) => !it.choice).length
+      const chosen = items.length - pending
+
+      const setChoice = (path, choice) => {
+        setMsg('')
+        setState({ ...state, items: items.map((it) => (it.path === path ? { ...it, choice } : it)) })
+      }
+      const setAll = (choice) => {
+        setMsg('')
+        setState({ ...state, items: items.map((it) => ({ ...it, choice })) })
+      }
+      const save = async () => {
+        setBusy(true); setErr(''); setMsg('')
+        try {
+          const r = await callConflict({ items: items.map((it) => ({ path: it.path, choice: it.choice || '' })) })
+          setMsg(r.pending
+            ? M(`已保存：${r.chosen}/${r.total} 项已选，还有 ${r.pending} 项没选（选完才能拉取）`, `Saved: ${r.chosen}/${r.total} chosen, ${r.pending} still unset (a pull needs them all)`)
+            : M(`已保存：${r.chosen}/${r.total} 项都选好了，去点「立即拉取」`, `Saved: all ${r.chosen}/${r.total} chosen — now click "Pull now"`))
+          if (typeof props.onSaved === 'function') props.onSaved()
+        } catch (e) { setErr(String((e && e.message) || e)) } finally { setBusy(false) }
+      }
+      const restore = async (path, side) => {
+        setBusy(true); setErr(''); setMsg('')
+        try {
+          await callConflict({ action: 'restore', path, side })
+          setMsg(side === 'cloud'
+            ? M(`已从备份把云端副本还原到：${path}`, `Cloud copy restored from backup: ${path}`)
+            : M(`已从备份把本机副本还原到：${path}`, `Local copy restored from backup: ${path}`))
+        } catch (e) { setErr(String((e && e.message) || e)) } finally { setBusy(false) }
+      }
+      const discard = async () => {
+        setBusy(true); setErr(''); setMsg('')
+        try {
+          await callConflict({ action: 'reset' })
+          setState({ exists: false })
+          if (typeof props.onSaved === 'function') props.onSaved()
+        } catch (e) { setErr(String((e && e.message) || e)) } finally { setBusy(false) }
+      }
+
+      const preview = (title, text, empty) => h('div', { style: { display: 'flex', flexDirection: 'column', gap: '2px', minWidth: 0 } },
+        h('div', { style: S.hint }, title),
+        h('pre', {
+          style: {
+            margin: 0, padding: '6px 8px', maxHeight: '180px', overflow: 'auto',
+            fontSize: '11px', lineHeight: '16px', whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+            fontFamily: 'Consolas, ui-monospace, monospace',
+            border: '1px solid var(--dsw-alias-border-l1)', borderRadius: '6px',
+            background: 'var(--dsw-alias-bg-base)', color: 'var(--dsw-alias-label-secondary, var(--dsw-alias-label-primary))',
+          },
+        }, text || empty),
+      )
+
+      const rows = items.map((it) => {
+        const expanded = open[it.path] === true
+        return h('div', {
+          key: it.path,
+          style: { borderTop: '1px solid var(--dsw-alias-border-l1)', paddingTop: '6px', paddingBottom: '2px' },
+        },
+          h('div', {
+            style: { display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' },
+            onClick: () => setOpen({ ...open, [it.path]: !expanded }),
+          },
+            h('span', { style: { flexShrink: 0, width: '10px', fontSize: '11px', color: 'var(--dsw-alias-label-tertiary)' } }, expanded ? '▾' : '▸'),
+            h('div', { style: { flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: '1px' } },
+              h('div', {
+                style: { fontSize: '12px', lineHeight: '18px', fontFamily: 'Consolas, ui-monospace, monospace', wordBreak: 'break-all' },
+              }, it.path),
+              h('div', { style: S.hint },
+                M(
+                  `${it.kind === 'untracked' ? '本机未入库' : '本机已修改'} · 本机 ${size(it.localSize)} vs 云端 ${size(it.remoteSize)}${it.binary ? ' · 二进制，只看大小' : ''}`,
+                  `${it.kind === 'untracked' ? 'untracked' : 'modified'} · local ${size(it.localSize)} vs cloud ${size(it.remoteSize)}${it.binary ? ' · binary, size only' : ''}`,
+                )),
+            ),
+            h('div', { style: { display: 'flex', gap: '4px', flexShrink: 0 } },
+              h('button', {
+                type: 'button',
+                style: it.choice === 'local' ? S.btnPrimary : S.btn,
+                onClick: (e) => { e.stopPropagation(); setChoice(it.path, 'local') },
+              }, M('用本机', 'Keep local')),
+              h('button', {
+                type: 'button',
+                style: it.choice === 'cloud' ? S.btnPrimary : S.btn,
+                onClick: (e) => { e.stopPropagation(); setChoice(it.path, 'cloud') },
+              }, M('用云端', 'Use cloud')),
+            ),
+          ),
+          expanded
+            ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: '6px', marginLeft: '18px', marginTop: '6px' } },
+              h('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' } },
+                preview(M('本机版本（工作区）', 'Local (working tree)'), it.localPreview,
+                  M('（空文件 / 无法预览）', '(empty or not previewable)')),
+                preview(M('云端版本（远端提交）', 'Cloud (remote commit)'), it.remotePreview,
+                  M('（空文件 / 无法预览）', '(empty or not previewable)')),
+              ),
+              h('div', { style: { display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap' } },
+                h('button', {
+                  type: 'button',
+                  style: S.btn,
+                  disabled: busy || !it.localSaved,
+                  onClick: () => restore(it.path, 'local'),
+                }, M('还原本机副本', 'Restore local copy')),
+                h('button', {
+                  type: 'button',
+                  style: S.btn,
+                  disabled: busy || !it.cloudSaved,
+                  onClick: () => restore(it.path, 'cloud'),
+                }, M('还原云端副本', 'Restore cloud copy')),
+                h('span', { style: S.footnote },
+                  M(
+                    (it.localSaved ? '本机副本已备份' : '本机副本备份缺失') + ' · ' + (it.cloudSaved ? '云端副本已备份' : '云端副本备份缺失（旧清单或备份失败）'),
+                    (it.localSaved ? 'local copy saved' : 'local copy MISSING') + ' · ' + (it.cloudSaved ? 'cloud copy saved' : 'cloud copy MISSING (older list or backup failed)'),
+                  )),
+              ),
+              h('div', { style: S.footnote },
+                M('备份目录：' + (state.backupDir || '?'), 'Backup folder: ' + (state.backupDir || '?')),
+              ),
+            )
+            : null,
+        )
+      })
+
+      return h('div', { style: S.card },
+        h('div', { style: S.cardHead },
+          h('div', { style: S.cardTitle }, M('同步冲突', 'Sync conflicts')),
+          h('span', { style: { ...S.footnote } },
+            M(`${items.length} 个文件挡住拉取`, `${items.length} file(s) blocking the pull`)),
+          h('div', { style: { flex: 1 } }, null),
+          h('button', { type: 'button', style: S.btn, disabled: busy, onClick: load }, M('刷新', 'Refresh')),
+        ),
+        h('div', { style: S.hint },
+          M(
+            '这些文件本机有、云端也有同名版本，git 不肯直接覆盖。逐项选：用云端 = 丢弃本机那份；用本机 = 先让云端落地、再把本机版写回，下次推送带上。两份副本都会存进备份目录，展开后哪一份都能还原。',
+            'These paths exist both locally and in the cloud, so git refuses to overwrite them. Pick per file: Cloud = drop the local copy; Local = apply the cloud version, then write the local one back so the next push carries it. Both copies are saved in the backup folder and either one can be restored.',
+          )),
+        h('div', { style: { display: 'flex', flexDirection: 'column', gap: '2px', maxHeight: '420px', overflowY: 'auto' } }, rows),
+        h('div', { style: { display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap', marginTop: '4px' } },
+          h('span', { style: S.hint },
+            M(`已选 ${chosen}/${items.length}${pending ? `，${pending} 项未选` : ''}`, `${chosen}/${items.length} chosen${pending ? `, ${pending} unset` : ''}`)),
+          h('div', { style: { flex: 1 } }, null),
+          h('button', { type: 'button', style: S.btn, disabled: busy, onClick: () => setAll('cloud') }, M('全部用云端', 'All cloud')),
+          h('button', { type: 'button', style: S.btn, disabled: busy, onClick: () => setAll('local') }, M('全部用本机', 'All local')),
+          h('button', { type: 'button', style: S.btnPrimary, disabled: busy, onClick: save }, busy ? M('保存中…', 'Saving…') : M('保存选择', 'Save')),
+          h('button', { type: 'button', style: S.btn, disabled: busy, onClick: discard }, M('放弃清单', 'Discard')),
+        ),
+        err ? h('div', { style: { ...S.footnote, color: 'var(--dsw-alias-state-error-primary)' } }, M(`操作失败：${err}`, `Failed: ${err}`)) : null,
+        msg ? h('div', { style: { ...S.footnote, color: 'var(--dsw-alias-state-success-primary)' } }, msg) : null,
+        h('div', { style: S.footnote },
+          M(
+            '保存后点「立即拉取」：脚本按选择先移走被挡的文件、快进到云端，再把「用本机」的写回。清单与备份都留在本机。',
+            'After saving, click "Pull now": the script clears the blocked files, fast-forwards, then writes back the local ones. The list and backup stay on this machine.',
+          )),
       )
     }
 
@@ -1514,6 +1727,10 @@ window.__ModuleLoader__.load({
       const restoreCard = data ? h(RestoreCard, { data, onSaved: refresh }) : null
       // 「同步内容」卡自己拉 /config-sync/scope，不依赖 status（status 读的是仓库与本机，跟勾选无关）
       const scopeCard = h(ScopeCard, {})
+      // 冲突卡只在真有清单时才出现：没冲突就不占版面
+      const conflictCard = data && data.conflicts && data.conflicts.exists
+        ? h(ConflictCard, { data, onSaved: refresh })
+        : null
 
       return h('div', { style: S.page },
         h('div', { style: S.pageInner },
@@ -1555,6 +1772,9 @@ window.__ModuleLoader__.load({
           err ? h('div', { style: { ...S.hint, color: 'var(--dsw-alias-state-error-primary)' } }, M(`读取失败：${err}`, `Read failed: ${err}`)) : null,
           // 按内容分区：状态在上、配置居中、动作在下；每区内部网格并排（宽屏两列）
           Section(M('概览', 'Overview'), M('版本、依赖、快照一眼看完', 'Versions, dependencies and snapshots at a glance'), [overview]),
+          conflictCard
+            ? Section(M('同步冲突', 'Sync conflicts'), M('这些文件挡住了拉取：逐项选完保存，再点「立即拉取」', 'These files block the pull: pick per file, save, then pull'), [conflictCard])
+            : null,
           Section(M('同步目标', 'Sync targets'), M('仓库与远端都是本机配置，改完立即生效', 'Repo and remote are local settings, applied at once'), [repoCard, remoteCard].filter(Boolean)),
           Section(M('自动化与插件更新', 'Automation & plugin update'), M('退出后自动做什么、插件自己怎么升级', 'What runs automatically after exit, and how the plugin upgrades'), [autoCard, updCard].filter(Boolean)),
           Section(M('退出后执行', 'After exit'), null, [actionCard]),

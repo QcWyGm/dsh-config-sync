@@ -129,6 +129,275 @@ function Initialize-CommitIdentity {
   }
 }
 
+# ---------- 冲突协调（pull 专用） ----------
+<#
+  pull 被本地文件挡住时，git 只甩一句 "would be overwritten by merge" 就 Aborting；
+  旧做法是整仓库 reset 回拉取前 —— 但「失败 → 回滚 → 再失败」会原地打转
+  （真实案例：B 机落后 8 个提交，每次快进上去又被回滚打回 84f05a0，十几轮都推不上去）。
+  现在改成：不猜、不硬回滚，先把「谁跟云端撞了」算清楚 + 把本机那份备份好 + 写成清单，
+  面板列出来让用户逐项选「用本机 / 用云端」；选完再跑一次 pull，由本脚本按选择落地。
+#>
+
+function Get-ConflictPath { return (Join-Path $DshHome 'sync-conflicts.json') }
+
+function Read-ConflictFile {
+  $p = Get-ConflictPath
+  if (-not (Test-Path -LiteralPath $p)) { return $null }
+  try { return (Get-Content -LiteralPath $p -Raw -Encoding utf8 | ConvertFrom-Json) } catch { return $null }
+}
+
+function Write-ConflictFile($obj) {
+  $text = ((($obj | ConvertTo-Json -Depth 8) -replace "`r`n", "`n") + "`n")
+  [IO.File]::WriteAllText((Get-ConflictPath), $text, (New-Object Text.UTF8Encoding($false, $false)))
+}
+
+<#
+  git 在中文目录下的路径输出会被八进制转义（"workspace/DSH\347\240\264..."），
+  PowerShell 捕获外部程序输出时还会再按 ANSI 转一次码 —— 直接读 $raw 得到的路径没法用来操作文件。
+  所以凡是要「按路径干活」的查询，一律 core.quotepath=false + cmd 字节重定向到临时文件 + 按 UTF-8 读。
+#>
+function Read-GitLines([string]$ArgLine) {
+  $tmp = Join-Path ([IO.Path]::GetTempPath()) ('dsh-sync-' + [guid]::NewGuid().ToString('N') + '.txt')
+  $cmdLine = '"' + $git + '" -C "' + $RepoRoot + '" -c core.quotepath=false ' + $ArgLine + ' > "' + $tmp + '" 2>nul'
+  & "$env:ComSpec" /c $cmdLine | Out-Null
+  $code = $LASTEXITCODE
+  $lines = @()
+  if (Test-Path -LiteralPath $tmp) {
+    try {
+      $txt = [IO.File]::ReadAllText($tmp, (New-Object Text.UTF8Encoding($false, $false)))
+      $lines = @($txt -split "`n" | ForEach-Object { $_.TrimEnd("`r") } | Where-Object { $_ -ne '' })
+    } catch { $lines = @() }
+    Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
+  }
+  return [pscustomobject]@{ Lines = $lines; Code = $code }
+}
+
+# 取云端某版本文件的内容（文本）；取不到返回 $null
+function Get-BlobText([string]$Spec) {
+  $tmp = Join-Path ([IO.Path]::GetTempPath()) ('dsh-blob-' + [guid]::NewGuid().ToString('N') + '.txt')
+  $cmdLine = '"' + $git + '" -C "' + $RepoRoot + '" show "' + $Spec + '" > "' + $tmp + '" 2>nul'
+  & "$env:ComSpec" /c $cmdLine | Out-Null
+  $code = $LASTEXITCODE
+  $text = $null
+  if ($code -eq 0 -and (Test-Path -LiteralPath $tmp)) {
+    try { $text = [IO.File]::ReadAllText($tmp, (New-Object Text.UTF8Encoding($false, $false))) } catch { $text = $null }
+  }
+  if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue }
+  return $text
+}
+
+function Test-BinaryPath([string]$Path) {
+  $ext = [IO.Path]::GetExtension($Path).ToLowerInvariant()
+  return ($ext -in @('.zstd', '.zip', '.tgz', '.gz', '.png', '.jpg', '.jpeg', '.db', '.sqlite', '.bin', '.exe', '.dll', '.node', '.pdf', '.ico', '.wav', '.mp4'))
+}
+
+# ---------- 冲突备份目录：命名、本机/云端两份副本 ----------
+# 目录名带中英说明，打开 ~\.dsh\backups 一眼能看出这份是什么；
+# 本机版与云端版分目录存放，面板对两边都能单独还原。
+$ConflictBackupSuffix = '拉取冲突-Pull-conflict'
+$ConflictLocalDirName = '本机-Local'
+$ConflictCloudDirName = '云端-Cloud'
+$ConflictReadmeName = '说明-README.txt'
+$ConflictSnapshotName = '清单-Conflicts.json'
+
+function Get-LocalCopyDir([string]$BackupDir) {
+  $new = Join-Path $BackupDir $ConflictLocalDirName
+  if (Test-Path -LiteralPath $new) { return $new }
+  $old = Join-Path $BackupDir 'files'   # 0.3.17 最早那版用的目录名
+  if (Test-Path -LiteralPath $old) { return $old }
+  return $new
+}
+
+function Get-CloudCopyDir([string]$BackupDir) {
+  $new = Join-Path $BackupDir $ConflictCloudDirName
+  if (Test-Path -LiteralPath $new) { return $new }
+  $old = Join-Path $BackupDir 'files-cloud'
+  if (Test-Path -LiteralPath $old) { return $old }
+  return $new
+}
+
+<#
+  把 git 里的某个 blob（ref:path）按字节原样落盘。
+  不能用 Get-Content/Set-Content 中转 —— .zstd/.tgz 这类二进制会被转码写坏；
+  这里走 cmd 的 > 重定向（与 Read-GitLines 同一套），写完核对字节数。
+#>
+function Save-BlobToFile([string]$Spec, [string]$DstPath, [int64]$ExpectSize = -1) {
+  $dir = Split-Path -Parent $DstPath
+  if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+  $cmdLine = '"' + $git + '" -C "' + $RepoRoot + '" cat-file blob "' + $Spec + '" > "' + $DstPath + '" 2>nul'
+  & "$env:ComSpec" /c $cmdLine | Out-Null
+  if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $DstPath)) { return $false }
+  if ($ExpectSize -ge 0) {
+    try { if ((Get-Item -LiteralPath $DstPath -Force).Length -ne $ExpectSize) { return $false } } catch { return $false }
+  }
+  return $true
+}
+
+function Write-ConflictReadme([string]$BackupDir, $Report) {
+  $lines = @(
+    'DSH 配置同步 —— 拉取冲突备份',
+    'DSH config sync — pull conflict backup',
+    '',
+    ('生成时间 / Created at        : ' + $Report.at),
+    ('仓库目录 / Repo directory    : ' + $Report.repo),
+    ('同步前 HEAD / HEAD before    : ' + $Report.head),
+    ('云端引用 / Remote ref        : ' + $Report.remote),
+    ('云端 HEAD / Remote head      : ' + $Report.remoteHead),
+    ('冲突条目 / Conflicting files : ' + @($Report.items).Count),
+    '',
+    '目录里有什么 / What is inside',
+    ('  ' + $ConflictLocalDirName + '\      每个冲突文件的「本机版本」（冲突发生时工作区的原始内容）'),
+    ('  ' + $ConflictCloudDirName + '\      每个冲突文件的「云端版本」（git show ' + $Report.remote + ':<路径>）'),
+    ('  ' + $ConflictSnapshotName + '   本次冲突清单快照（JSON，含每项当时的选择）'),
+    ('  说明-README.txt             本文件（中英双语）'),
+    '',
+    '两种副本都在这里，结构与本机仓库一一对应（相对路径相同）。',
+    'Both copies are kept here, mirroring the repo layout (same relative paths).',
+    '',
+    '怎么还原 / How to restore',
+    '  面板 / Panel：配置同步 → 同步冲突 → 展开任一项 → 「还原本机副本」或「还原云端副本」。',
+    '                Config sync → Sync conflicts → expand a row → "Restore local copy" / "Restore cloud copy".',
+    '  命令行 / CLI：把本目录里对应副本复制回仓库的同名路径即可。',
+    '                Copy the corresponding file from this folder back to the same path in the repo.',
+    '',
+    '还原任意一份都不会删除另一份，也不改写 git 历史。',
+    'Restoring one never deletes the other and never rewrites git history.',
+    '',
+    '条目明细 / Files'
+  )
+  foreach ($it in @($Report.items)) {
+    $lines += ('  ' + $it.path + '  [' + $it.kind + ']  本机/Local ' + $it.localSize + 'B（备份 ' + $it.localSaved + '）  云端/Cloud ' + $it.remoteSize + 'B（备份 ' + $it.cloudSaved + '）')
+  }
+  $text = (($lines -join "`r`n") + "`r`n")
+  [IO.File]::WriteAllText((Join-Path $BackupDir $ConflictReadmeName), $text, (New-Object Text.UTF8Encoding($false, $false)))
+}
+
+function Get-PreviewText([string]$Text, [int]$Max = 1500) {
+  if ($null -eq $Text) { return '' }
+  if ($Text.Length -eq 0) { return '' }
+  # 二进制内容不往 JSON 里塞：含 NUL 就整体放弃预览
+  if ($Text.IndexOf([char]0) -ge 0) { return '' }
+  if ($Text.Length -gt $Max) { return ($Text.Substring(0, $Max) + "`n…[已截断，原文共 " + $Text.Length + " 字符]") }
+  return $Text
+}
+
+<#
+  算出「本地会被云端覆盖、因而挡住快进」的文件，落一份备份 + 清单 JSON，返回条目数（0 = 没冲突）。
+  只认 ff 可行的场景：本地领先远端时不叫冲突，那是另一回事（pull --ff-only 会明确报 not possible to fast-forward）。
+#>
+function New-ConflictReport([string]$RemoteRef, [string]$HeadBefore) {
+  $cloud = @((Read-GitLines ('diff --name-only HEAD ' + $RemoteRef)).Lines)
+  if ($cloud.Count -eq 0) { return 0 }
+  $untracked = @((Read-GitLines 'ls-files --others --exclude-standard').Lines)
+  $modified = @((Read-GitLines 'diff --name-only').Lines)
+  $remoteHead = (Get-GitText ('rev-parse --short ' + $RemoteRef)).Text
+
+  $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+  $backupDir = Join-Path (Join-Path $DshHome 'backups') ('conflict-' + $stamp + '-' + $ConflictBackupSuffix)
+  $localDir = Join-Path $backupDir $ConflictLocalDirName
+  $cloudDir = Join-Path $backupDir $ConflictCloudDirName
+  $items = @()
+  foreach ($rel in $cloud) {
+    $isUntracked = ($untracked -contains $rel)
+    $isModified = ($modified -contains $rel)
+    if (-not ($isUntracked -or $isModified)) { continue }
+    $full = Join-Path $RepoRoot $rel
+    $kind = 'modified'
+    if ($isUntracked) { $kind = 'untracked' }
+    $localSize = 0
+    $localSaved = $false
+    if (Test-Path -LiteralPath $full) {
+      try { $localSize = (Get-Item -LiteralPath $full -Force).Length } catch { $localSize = 0 }
+      $dst = Join-Path $localDir $rel
+      New-Item -ItemType Directory -Path (Split-Path -Parent $dst) -Force | Out-Null
+      Copy-Item -LiteralPath $full -Destination $dst -Force
+      try { $localSaved = ((Get-Item -LiteralPath $dst -Force).Length -eq $localSize) } catch { $localSaved = $false }
+      if (-not $localSaved) { Warn ('本机副本备份校验失败：' + $rel + '（这一项只能用云端副本）') }
+    }
+    $remoteSize = 0
+    $sz = (Get-GitText ('cat-file -s "' + $RemoteRef + ':' + $rel + '"')).Text
+    if ($sz -match '^\d+$') { $remoteSize = [int64]$sz }
+    # 云端也留一份，且必须字节原样：Save-BlobToFile 走 cmd 重定向，不经 PowerShell 转码
+    $cloudSaved = Save-BlobToFile ($RemoteRef + ':' + $rel) (Join-Path $cloudDir $rel) $remoteSize
+    if (-not $cloudSaved) { Warn ('云端副本备份失败：' + $rel + '（这一项只能用本机副本）') }
+    $binary = Test-BinaryPath $rel
+    $localPreview = ''
+    $remotePreview = ''
+    if (-not $binary) {
+      if (Test-Path -LiteralPath $full) {
+        try { $localPreview = Get-PreviewText ([IO.File]::ReadAllText($full, (New-Object Text.UTF8Encoding($false, $false))) ) } catch { $localPreview = '' }
+      }
+      $remotePreview = Get-PreviewText (Get-BlobText ($RemoteRef + ':' + $rel))
+    }
+    $items += [ordered]@{
+      path          = $rel
+      kind          = $kind
+      localSize     = $localSize
+      remoteSize    = $remoteSize
+      binary        = $binary
+      localPreview  = $localPreview
+      remotePreview = $remotePreview
+      localSaved    = $localSaved
+      cloudSaved    = $cloudSaved
+      choice        = ''
+    }
+  }
+  if ($items.Count -eq 0) { return 0 }
+  $report = [ordered]@{
+    at         = (Get-Date).ToString('o')
+    repo       = $RepoRoot
+    head       = $HeadBefore
+    remote     = $RemoteRef
+    remoteHead = $remoteHead
+    backupDir  = $backupDir
+    items      = $items
+  }
+  Write-ConflictFile $report
+  Write-ConflictReadme $backupDir $report
+  # 清单本身留一份在备份目录里，事后能核对「当时给了哪些选项、选了哪边」
+  try { [IO.File]::Copy((Get-ConflictPath), (Join-Path $backupDir $ConflictSnapshotName), $true) } catch { }
+  return $items.Count
+}
+
+<#
+  按清单里的 choice 落地：
+    cloud —— 删掉工作区那份（备份已在 conflict-<ts>\files），让云端版本能落地
+    local —— 同样先删（已备份）；pull 成功后由 Restore-LocalKept 写回，成为本地改动，下次 push 带上
+    ''    —— 没选，保持原样（这次 pull 仍会被它挡住）
+  只删普通文件：目录/链接不动，避免误删整棵会话树。
+#>
+function Resolve-ConflictChoices($Report) {
+  $cloud = 0; $local = 0; $pending = 0
+  foreach ($it in @($Report.items)) {
+    $choice = [string]$it.choice
+    $full = Join-Path $RepoRoot $it.path
+    if ($choice -eq 'cloud' -or $choice -eq 'local') {
+      if (Test-Path -LiteralPath $full) {
+        try {
+          $info = Get-Item -LiteralPath $full -Force
+          if (-not $info.PSIsContainer) { Remove-Item -LiteralPath $full -Force }
+        } catch { Warn ('清不掉：' + $it.path + ' — ' + $_.Exception.Message) }
+      }
+      if ($choice -eq 'cloud') { $cloud++ } else { $local++ }
+    } else { $pending++ }
+  }
+  return [pscustomobject]@{ Cloud = $cloud; Local = $local; Pending = $pending }
+}
+
+function Restore-LocalKept($Report) {
+  $n = 0
+  foreach ($it in @($Report.items)) {
+    if ([string]$it.choice -ne 'local') { continue }
+    $src = Join-Path (Get-LocalCopyDir $Report.backupDir) $it.path
+    if (-not (Test-Path -LiteralPath $src)) { continue }
+    $dst = Join-Path $RepoRoot $it.path
+    New-Item -ItemType Directory -Path (Split-Path -Parent $dst) -Force | Out-Null
+    Copy-Item -LiteralPath $src -Destination $dst -Force
+    $n++
+  }
+  return $n
+}
+
 # ---------- status ----------
 if ($Action -eq 'status') {
   $st = Get-RepoState
@@ -292,6 +561,42 @@ if ((Test-DshRunning) -and (-not $Force)) {
 }
 Say ""
 Say "== 拉取 =="
+
+# ---- 冲突协调：先把上一轮用户的选择落地，再决定这次能不能直接快进 ----
+$branchNow = (Get-GitText 'rev-parse --abbrev-ref HEAD').Text
+$remoteRef = 'origin/' + $branchNow
+$headBeforePull = (Get-GitText 'rev-parse HEAD').Text
+$report = Read-ConflictFile
+if ($report) {
+  $rc = Resolve-ConflictChoices $report
+  Say ("  上一轮选择：用云端 {0} 项，用本机 {1} 项，未选 {2} 项" -f $rc.Cloud, $rc.Local, $rc.Pending)
+  if ($rc.Pending -gt 0) {
+    Write-ConflictFile $report
+    Die ("还有 {0} 项冲突没选：打开面板「同步冲突」逐项选「用本机 / 用云端」，再点「立即拉取」。`n        清单：{1}" -f $rc.Pending, (Get-ConflictPath))
+  }
+} else {
+  # 没有清单：先 fetch（让 origin/<branch> 是最新的），再算「谁挡路」。
+  # 有冲突就生成清单并停下等用户选，绝不 reset 回滚 —— 回滚会把已经快进上去的提交又打回去，越拉越死。
+  $fetchOut = (& "$env:ComSpec" /c ('"' + $git + '" -C "' + $RepoRoot + '" fetch origin --prune 2>&1') 2>&1 | Out-String)
+  if ($LASTEXITCODE -ne 0) {
+    Say $fetchOut.TrimEnd()
+    Die "git fetch 失败：连不上远端或认证有问题（先 ssh -T git@gitee.com 自检，再重跑）。"
+  }
+  $anc = (Get-GitText ('merge-base --is-ancestor HEAD ' + $remoteRef))
+  if ($anc.Code -eq 0) {
+    $conflictCount = New-ConflictReport $remoteRef $headBeforePull
+    if ($conflictCount -gt 0) {
+      $rp = Read-ConflictFile
+      Say ""
+      Say ("  [!] 有 {0} 个本机文件会被云端版本覆盖，已备份本机副本并生成冲突清单" -f $conflictCount)
+      Say ("      清单：{0}" -f (Get-ConflictPath))
+      Say ("      备份：{0}" -f $rp.backupDir)
+      Say "      打开面板「同步冲突」逐项选「用本机 / 用云端」，再点「立即拉取」"
+      exit 6
+    }
+  }
+}
+
 # 新机器上 origin 可能是插件 later 补上的（remote add），这时分支没有 upstream，
 # 裸 `git pull --ff-only` 会报 "There is no tracking information for the current branch"。
 # 同时 git 的进度/提示都走 stderr，PowerShell 5.1 会包成 NativeCommandError 且 $LASTEXITCODE 不可靠，
@@ -324,6 +629,15 @@ if ($LASTEXITCODE -ne 0) {
 if (-not $upstream) {
   & "$env:ComSpec" /c ('"' + $git + '" -C "' + $RepoRoot + '" branch --set-upstream-to origin/' + $branch + ' 2>&1') | Out-Null
   if ($LASTEXITCODE -eq 0) { Ok "已把 $branch 的 upstream 设为 origin/$branch" }
+}
+
+# 拉取成功：把「用本机」的条目写回工作区（成为本地改动，下次 push 带上），然后清掉清单
+$reportAfter = Read-ConflictFile
+if ($reportAfter) {
+  $back = Restore-LocalKept $reportAfter
+  if ($back -gt 0) { Ok ("已把 {0} 个「用本机」的文件写回工作区（下次推送会带上）" -f $back) }
+  Remove-Item -LiteralPath (Get-ConflictPath) -Force -ErrorAction SilentlyContinue
+  Ok ("冲突清单已清除：{0}" -f (Get-ConflictPath))
 }
 
 Say ""

@@ -8,7 +8,7 @@
  *   3. POST /config-sync/prepare 能在仓库根生成 .cmd，且带进程检查与正确参数。
  * 不碰 DSH、不写 profile。
  */
-import { existsSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -94,7 +94,7 @@ function check(label, cond, detail = '') {
 }
 
 console.log('== dsh-config-sync 宿主半身自检 ==')
-check('apply() 注册了路由', routes.size === 6 && routes.has('/config-sync/update') && routes.has('/config-sync/scope'), `实际 ${routes.size} 条：${[...routes.keys()].join(', ')}`)
+check('apply() 注册了路由', routes.size === 7 && routes.has('/config-sync/update') && routes.has('/config-sync/scope') && routes.has('/config-sync/conflict'), `实际 ${routes.size} 条：${[...routes.keys()].join(', ')}`)
 
 const status = await call('/config-sync/status', { headers: { host: 'localhost:3080' } })
 const body = JSON.parse(status.body || '{}')
@@ -360,6 +360,115 @@ check('读回来的状态与保存的一致',
   (scopeAfter.groups || []).map((g) => `${g.id}:${g.enabled}`).join(', '))
 if (prevScope === null) { try { unlinkSync(scopeFile) } catch { } } else writeFileSync(scopeFile, prevScope, 'utf8')
 
+// --- 同步冲突清单：pull 被本机文件挡住时，脚本写清单、面板读清单、用户逐项选 ---
+const conflictFile = join(dshHomeDir, 'sync-conflicts.json')
+const prevConflict = existsSync(conflictFile) ? readFileSync(conflictFile, 'utf8') : null
+// 真机上可能正躺着一份待处理的清单（那是用户的数据）：先挪开再测，finally 原样放回
+if (prevConflict !== null) { try { unlinkSync(conflictFile) } catch { } }
+try {
+  const confEmpty = JSON.parse((await call('/config-sync/conflict', { headers: { host: 'localhost:3080' } })).body || '{}')
+  check('冲突接口：没有清单时 exists=false，不报错', confEmpty.ok === true && confEmpty.exists === false,
+    `exists=${confEmpty.exists}`)
+
+  // 备份目录：本机 / 云端两份副本分目录存，同一相对路径一一对应
+  const backupRoot = join(dshHomeDir, 'backups', 'conflict-selftest-拉取冲突-Pull-conflict')
+  mkdirSync(join(backupRoot, '本机-Local', 'mnemon'), { recursive: true })
+  mkdirSync(join(backupRoot, '云端-Cloud', 'mnemon'), { recursive: true })
+  mkdirSync(join(backupRoot, '本机-Local', '__selftest-probe__'), { recursive: true })
+  mkdirSync(join(backupRoot, '云端-Cloud', '__selftest-probe__'), { recursive: true })
+  writeFileSync(join(backupRoot, '本机-Local', 'mnemon', 'a.json'), 'LOCAL-COPY')
+  writeFileSync(join(backupRoot, '云端-Cloud', 'mnemon', 'a.json'), 'CLOUD-COPY')
+  writeFileSync(join(backupRoot, '本机-Local', '__selftest-probe__', 'probe.txt'), 'FROM-LOCAL')
+  writeFileSync(join(backupRoot, '云端-Cloud', '__selftest-probe__', 'probe.txt'), 'FROM-CLOUD')
+  writeFileSync(join(backupRoot, '说明-README.txt'), 'DSH 配置同步 —— 拉取冲突备份\r\n', 'utf8')
+  const probeDst = join(repoArg, '__selftest-probe__', 'probe.txt')
+
+  writeFileSync(conflictFile, JSON.stringify({
+    at: '2026-11-12 20:05:00',
+    repo: repoArg,
+    head: 'aaaaaaa',
+    remoteHead: 'bbbbbbb',
+    backupDir: backupRoot,
+    items: [
+      { path: 'mnemon/data/a.json', kind: 'untracked', localSize: 12, remoteSize: 20, binary: false, localPreview: 'L1', remotePreview: 'R1', localSaved: true, cloudSaved: true, choice: '' },
+      { path: '__selftest-probe__/probe.txt', kind: 'modified', localSize: 10, remoteSize: 10, binary: false, localPreview: 'LP', remotePreview: 'RP', localSaved: true, cloudSaved: true, choice: '' },
+    ],
+  }, null, 2), 'utf8')
+
+  const confGet = JSON.parse((await call('/config-sync/conflict', { headers: { host: 'localhost:3080' } })).body || '{}')
+  check('冲突清单：GET 带回条目、两侧预览、备份目录与两份副本标记',
+    confGet.ok === true && confGet.exists === true && (confGet.items || []).length === 2
+    && confGet.items[0].localPreview === 'L1' && confGet.items[0].remotePreview === 'R1'
+    && confGet.items[0].localSaved === true && confGet.items[0].cloudSaved === true
+    && String(confGet.backupDir || '').endsWith('拉取冲突-Pull-conflict'),
+    `${(confGet.items || []).length} 项`)
+
+  const confPost = JSON.parse((await call('/config-sync/conflict', {
+    method: 'POST',
+    headers: { host: 'localhost:3080', 'content-type': 'application/json' },
+    body: JSON.stringify({ items: [{ path: 'mnemon/data/a.json', choice: 'cloud' }] }),
+  })).body || '{}')
+  check('冲突清单：POST 保存选择（只覆盖传进来的项）',
+    confPost.ok === true && confPost.total === 2 && confPost.chosen === 1 && confPost.pending === 1,
+    `total=${confPost.total} chosen=${confPost.chosen} pending=${confPost.pending}`)
+  const confOnDisk = JSON.parse(readFileSync(conflictFile, 'utf8'))
+  check('冲突清单：选择落盘，未传的项保持原值',
+    confOnDisk.items[0].choice === 'cloud' && confOnDisk.items[1].choice === '')
+
+  const confUnknown = JSON.parse((await call('/config-sync/conflict', {
+    method: 'POST',
+    headers: { host: 'localhost:3080', 'content-type': 'application/json' },
+    body: JSON.stringify({ items: [{ path: 'not/in/list.txt', choice: 'cloud' }] }),
+  })).body || '{}')
+  check('冲突清单：清单外的 path 被忽略（不让面板往 JSON 里塞任意路径）',
+    confUnknown.ok === true && confOnDisk.items.every((it) => it.path !== 'not/in/list.txt')
+    && JSON.parse(readFileSync(conflictFile, 'utf8')).items.length === 2)
+
+  // 两份副本都能单独还原：写回的是同一相对路径，来源按 side 选
+  const restoreLocal = JSON.parse((await call('/config-sync/conflict', {
+    method: 'POST',
+    headers: { host: 'localhost:3080', 'content-type': 'application/json' },
+    body: JSON.stringify({ action: 'restore', path: '__selftest-probe__/probe.txt', side: 'local' }),
+  })).body || '{}')
+  check('冲突清单：还原本机副本（side=local，写回工作区）',
+    restoreLocal.ok === true && restoreLocal.side === 'local'
+    && existsSync(probeDst) && readFileSync(probeDst, 'utf8') === 'FROM-LOCAL',
+    restoreLocal.error || '')
+
+  const restoreCloud = JSON.parse((await call('/config-sync/conflict', {
+    method: 'POST',
+    headers: { host: 'localhost:3080', 'content-type': 'application/json' },
+    body: JSON.stringify({ action: 'restore', path: '__selftest-probe__/probe.txt', side: 'cloud' }),
+  })).body || '{}')
+  check('冲突清单：还原云端副本（side=cloud，写回工作区）',
+    restoreCloud.ok === true && restoreCloud.side === 'cloud'
+    && existsSync(probeDst) && readFileSync(probeDst, 'utf8') === 'FROM-CLOUD',
+    restoreCloud.error || '')
+
+  const restoreMissing = JSON.parse((await call('/config-sync/conflict', {
+    method: 'POST',
+    headers: { host: 'localhost:3080', 'content-type': 'application/json' },
+    body: JSON.stringify({ action: 'restore', path: 'mnemon/data/a.json', side: 'cloud' }),
+  })).body || '{}')
+  check('冲突清单：备份里缺某一侧副本时明确报错，不假装成功',
+    restoreMissing.ok === false && /云端副本/.test(String(restoreMissing.error || '')))
+
+  const confReset = JSON.parse((await call('/config-sync/conflict', {
+    method: 'POST',
+    headers: { host: 'localhost:3080', 'content-type': 'application/json' },
+    body: JSON.stringify({ action: 'reset' }),
+  })).body || '{}')
+  check('冲突清单：放弃清单会删掉文件', confReset.ok === true && confReset.cleared === true && !existsSync(conflictFile))
+
+  const statusConf = JSON.parse((await call('/config-sync/status', { headers: { host: 'localhost:3080' } })).body || '{}')
+  check('status 带回冲突概要（面板据此决定是否显示这张卡）',
+    statusConf.conflicts && statusConf.conflicts.exists === false && typeof statusConf.conflicts.total === 'number',
+    JSON.stringify(statusConf.conflicts || null))
+} finally {
+  if (prevConflict === null) { try { unlinkSync(conflictFile) } catch { } } else writeFileSync(conflictFile, prevConflict, 'utf8')
+  try { rmSync(join(repoArg, '__selftest-probe__'), { recursive: true, force: true }) } catch { }
+  try { rmSync(backupRoot, { recursive: true, force: true }) } catch { }
+}
 // --- 必需组：profile 是 apply 的前置条件（缺了直接 Die），所以不许取消勾选 ---
 const reqPost = await call('/config-sync/scope', {
   method: 'POST',
@@ -400,6 +509,18 @@ if (prevScope === null) { try { unlinkSync(scopeFile) } catch { } } else writeFi
   check('打包脚本会把 ps1 打进 runtime', Boolean(packScript), packScript || 'tools/pack-plugin.ps1')
   const syncScript = [join(pluginRoot, 'runtime', 'sync.ps1'), join(pluginRoot, 'sync.ps1'), join(repoRoot, 'runtime', 'sync.ps1')].find((p) => existsSync(p)) || ''
   check('sync.ps1 支持首次自动初始化仓库', Boolean(syncScript) && readFileSync(syncScript, 'utf8').includes('Initialize-RepoIfNeeded'), syncScript || 'sync.ps1')
+  // 冲突备份要「两份副本 + 中英文说明」，面板才能对哪一份都执行还原
+  const syncSrc = syncScript ? readFileSync(syncScript, 'utf8') : ''
+  check('冲突备份：本机/云端两份副本分目录（目录名带中英文）',
+    syncSrc.includes('本机-Local') && syncSrc.includes('云端-Cloud'), syncScript || 'sync.ps1')
+  check('冲突备份：云端副本按字节落盘（cat-file blob + cmd 重定向，不过 PowerShell 转码）',
+    syncSrc.includes('Save-BlobToFile') && /cat-file blob/.test(syncSrc), 'sync.ps1')
+  check('冲突备份：目录名写明用途（拉取冲突 / Pull conflict）',
+    syncSrc.includes('拉取冲突-Pull-conflict'), 'sync.ps1')
+  check('冲突备份：附中英双语说明文件与清单快照',
+    syncSrc.includes('说明-README.txt') && syncSrc.includes('清单-Conflicts.json'), 'sync.ps1')
+  check('冲突备份：每项都记录两份副本是否备份成功（面板据此置灰按钮）',
+    syncSrc.includes('localSaved') && syncSrc.includes('cloudSaved'), 'sync.ps1')
   // 重启客户端必须脱离进度窗口的控制台/作业，否则手动关窗口会把刚重启的客户端一起带走。
   const postExit = [join(pluginRoot, 'runtime', 'post-exit.ps1'), join(pluginRoot, 'post-exit.ps1'), join(repoRoot, 'post-exit.ps1')].find((p) => existsSync(p)) || ''
   const postExitSrc = postExit ? readFileSync(postExit, 'utf8') : ''
