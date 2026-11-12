@@ -99,7 +99,7 @@ Body: repo path and source, branch and HEAD, behind/ahead/uncommitted, **local d
 
 ## Sync scope (per-group and per-item checkboxes, since 0.3.8)
 
-The panel has a new "Sync content" card: the ten groups that sync to the cloud are listed individually and **checked by default**. Clicking a row expands that group's items and clicking it again collapses them (there is no separate "Details" button); both the group and each item can be unchecked — unchecked content is **no longer captured on push and no longer restored on pull**; tick it again and syncing resumes (push and pull share the same file).
+The panel has a new "Sync content" card (placed at the very bottom of the page, after "After exit"): the ten groups that sync to the cloud are listed individually and **checked by default**. Clicking a row expands that group's items and clicking it again collapses them (there is no separate "Details" button); both the group and each item can be unchecked — unchecked content is **no longer captured on push and no longer restored on pull**; tick it again and syncing resumes (push and pull share the same file).
 
 - **It opens read-only**: every checkbox is greyed out and only reflects the current selection. Click "Edit" to unlock them, then "Save" to write the file (or "Cancel" to drop the change and re-read the saved state). This prevents a stray click from silently changing what gets synced.
 
