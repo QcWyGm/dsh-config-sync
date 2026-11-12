@@ -524,6 +524,9 @@ if (prevScope === null) { try { unlinkSync(scopeFile) } catch { } } else writeFi
     !clientSrc.includes("M('明细', 'Details')")
     && clientSrc.includes('onClick: canExpand')
     && clientSrc.includes("expanded ? '▾' : '▸'"), 'client.js')
+  check('同步内容卡挂在页面最下面（最后一个 Section）',
+    /Section\(M\('退出后执行'[\s\S]{0,240}?Section\(M\('同步内容'/.test(clientSrc)
+    && !/Section\(M\('同步内容'[^\n]*\n\s*Section\(M\('自动化与插件更新'/.test(clientSrc), 'client.js')
 }
 
 // 提交说明：面板里填的那句要进 push 脚本，时间由 sync.ps1 执行时追加

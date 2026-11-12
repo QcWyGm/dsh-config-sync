@@ -1382,9 +1382,10 @@ window.__ModuleLoader__.load({
           // 按内容分区：信息类在上、配置类居中、动作类在下；每区内部网格并排（宽屏两列）
           Section(M('概览', 'Overview'), M('版本是否对齐、bundle 与依赖有没有缺', 'Versions, bundles and dependencies'), [versionCard, healthCard]),
           Section(M('同步目标', 'Sync targets'), M('仓库放哪、远端连哪，都是本机配置，改完立即生效', 'Where the repo lives and which remote it points at — both local settings, applied immediately'), [repoCard, remoteCard].filter(Boolean)),
-          Section(M('同步内容', 'Sync content'), M('云端同步哪十组内容：逐组勾选，组内还能单独排除；默认全勾', 'What syncs to the cloud: ten groups, per-item exclusions included; everything is checked by default'), [scopeCard]),
           Section(M('自动化与插件更新', 'Automation & plugin update'), M('退出 DSH 后做什么、插件自己怎么升级', 'What runs after DSH exits, and how the plugin upgrades itself'), [autoCard, updCard].filter(Boolean)),
           Section(M('退出后执行', 'After exit'), null, [actionCard]),
+          // 「同步内容」放在整页最下面：它是"细项配置"，看清前面的状态与动作后才会来调整
+          Section(M('同步内容', 'Sync content'), M('云端同步哪十组内容：逐组勾选，组内还能单独排除；默认全勾', 'What syncs to the cloud: ten groups, per-item exclusions included; everything is checked by default'), [scopeCard]),
         ),
       )
     }
