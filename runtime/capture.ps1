@@ -109,9 +109,9 @@ function Sync-WorkspaceCapture {
         Title              = $title
         LocalPath          = [string]$w.path
         Slot               = ''
-        SessionIds         = @($w.sessionIds         | ForEach-Object { [string]$_ })
-        ArchivedSessionIds = @($w.archivedSessionIds | ForEach-Object { [string]$_ })
-        PinnedSessionIds   = @($w.pinnedSessionIds   | ForEach-Object { [string]$_ })
+        SessionIds         = @($w.sessionIds         | ForEach-Object { [string]$_ } | Where-Object { $_ -ne '' })
+        ArchivedSessionIds = @($w.archivedSessionIds | ForEach-Object { [string]$_ } | Where-Object { $_ -ne '' })
+        PinnedSessionIds   = @($w.pinnedSessionIds   | ForEach-Object { [string]$_ } | Where-Object { $_ -ne '' })
         CreatedAt          = [string]$w.createdAt
         UpdatedAt          = [string]$w.updatedAt
       }
@@ -150,12 +150,13 @@ function Sync-WorkspaceCapture {
   $manifest = [ordered]@{}
   $manifest['unit'] = [ordered]@{ name = 'dsh-workspace-sync'; version = 1 }
   $manifest['workspaces'] = @($wsList)
+  # 会话 id 集合里不能留 ""：$null 过管道会被 [string] 化成空串，DSH 那边不是合法会话 id
   $manifest['global'] = [ordered]@{
     initialized        = $true
     defaultWorkspaceId = $gDefault
     workspaceIds       = $allIds
-    archivedSessionIds = $(if ($g) { @($g.archivedSessionIds | ForEach-Object { [string]$_ }) } else { @() })
-    pinnedSessionIds   = $(if ($g) { @($g.pinnedSessionIds   | ForEach-Object { [string]$_ }) } else { @() })
+    archivedSessionIds = $(if ($g) { @($g.archivedSessionIds | ForEach-Object { [string]$_ } | Where-Object { $_ -ne '' }) } else { @() })
+    pinnedSessionIds   = $(if ($g) { @($g.pinnedSessionIds   | ForEach-Object { [string]$_ } | Where-Object { $_ -ne '' }) } else { @() })
   }
   $manifestText = (($manifest | ConvertTo-Json -Depth 12) -replace "`r`n", "`n") + "`n"
   $manifestPath = Join-Path $wsDir 'workspace-registry.json'

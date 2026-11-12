@@ -267,7 +267,10 @@ if (existsSync(againPayload.path || '')) {
     headers: { host: 'localhost:3080', 'content-type': 'application/json' },
     body: JSON.stringify({ action: 'restore' }),
   })
-  check('失效路径下生成被拦（400）', blocked.statusCode === 400, String(blocked.statusCode))
+  // 路径不存在/还是空目录时按设计是允许生成的（新机器第一步 pull 会自动克隆），
+  // 但必须带 bootstrap 说明，不能静默当作仓库已就绪。
+  const blockedPayload = JSON.parse(blocked.body || '{}')
+  check('失效路径下生成带 bootstrap 提示', blockedPayload.ok === true && Boolean(blockedPayload.bootstrap), blocked.body.slice(0, 160))
   if (currentRaw === null) { try { unlinkSync(settingsFile) } catch { } } else writeFileSync(settingsFile, currentRaw, 'utf8')
   rmSync(dead, { recursive: true, force: true })
 }
@@ -310,9 +313,15 @@ else writeFileSync(settingsFile, prevSettings, 'utf8')
   // 「只装了插件、仓库还没克隆」也要能生成脚本：执行体退回插件自带的 runtime。
   check('生成脚本时执行体有 runtime 兜底', /pluginRoot\(\)[\s\S]{0,80}'runtime'/ .test(src) || /'runtime', name/.test(src), 'index.js')
   check('仓库未克隆时返回 bootstrap 提示', src.includes('bootstrap'), 'index.js')
+  // 同一份 selftest 会跑在两种布局里：发布仓库（<root>\tools\ + <root>\runtime\）
+  // 和配置仓库里的 plugin\dsh-config-sync\tools\（<root>\sync.ps1 + <root>\tools\）。
+  // 所以这里按实际文件探测，而不是写死向下几层。
+  const pluginRoot = existsSync(join(here, '..', 'package.json')) ? join(here, '..') : join(here, '..', '..')
   const repoRoot = join(here, '..', '..', '..')
-  check('打包脚本会把 ps1 打进 runtime', existsSync(join(repoRoot, 'tools', 'pack-plugin.ps1')), 'tools/pack-plugin.ps1')
-  check('sync.ps1 支持首次自动初始化仓库', existsSync(join(repoRoot, 'sync.ps1')) && readFileSync(join(repoRoot, 'sync.ps1'), 'utf8').includes('Initialize-RepoIfNeeded'), 'sync.ps1')
+  const packScript = [join(pluginRoot, 'tools', 'pack-plugin.ps1'), join(repoRoot, 'tools', 'pack-plugin.ps1')].find((p) => existsSync(p)) || ''
+  check('打包脚本会把 ps1 打进 runtime', Boolean(packScript), packScript || 'tools/pack-plugin.ps1')
+  const syncScript = [join(pluginRoot, 'runtime', 'sync.ps1'), join(pluginRoot, 'sync.ps1'), join(repoRoot, 'runtime', 'sync.ps1')].find((p) => existsSync(p)) || ''
+  check('sync.ps1 支持首次自动初始化仓库', Boolean(syncScript) && readFileSync(syncScript, 'utf8').includes('Initialize-RepoIfNeeded'), syncScript || 'sync.ps1')
 }
 
 // 提交说明：面板里填的那句要进 push 脚本，时间由 sync.ps1 执行时追加

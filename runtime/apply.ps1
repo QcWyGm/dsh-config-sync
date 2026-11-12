@@ -11,14 +11,17 @@ DSH 配置同步 —— 应用脚本（把本仓库的配置还原到当前电�
   pwsh -File apply.ps1 -WorkspaceOnly                    # 只还原工作区资料与登记表（不碰配置/插件/预设，无需退出 DSH、无需本机装 profile）
   pwsh -File apply.ps1 -SkipWorkspace                    # 跳过工作区还原（应急；默认全量还原所有工作区）
   pwsh -File apply.ps1 -PruneWorkspace                   # 额外删除本机工作区里仓库没有的文件（默认留着并提示）
-  pwsh -File apply.ps1 -ReplaceWorkspaceRegistry         # 整份覆盖本机 workspace.json（默认按 ID 合并，保留本机自建工作区）
+  pwsh -File apply.ps1 -ReplaceWorkspaceRegistry         # 整份覆盖本机 workspace.json（默认按 ID 合并、同路径去重，保留本机自建工作区）
   pwsh -File apply.ps1 -WorkspaceHome "D:\其它\根"      # B 机上 {{WORKSPACE_HOME}} 展开到哪个根（默认 %USERPROFILE%\Documents\deepseek-harness）
   pwsh -File apply.ps1 -Force                            # 检测到 DSH 仍在运行时强制继续（不推荐）
 
 工作区还原（默认开、全量）
   读仓库里的 workspace\workspace-registry.json，把每个工作区的资料按字节还原到占位符展开后的路径，
   再按 ID 把登记表合并进 $DshHome\storages\workspace.json（本机自建工作区保留，workspaceIds 取并集，
-  sessionIds 取「仓库 + 本机」并集）。{{APP_ROOT}} 用 -AppRoot 展开，{{WORKSPACE_HOME}} 用 -WorkspaceHome
+  sessionIds 取「仓库 + 本机」并集）。合并完还会按 path 去重：DSH 启动时校验 duplicate paths，
+  同一路径留两条会让整张登记表打不开（工作区列表全空、会话也读不出），换机时本机自建的
+  default-workspace 与仓库那条 ID 不同正好会撞，所以同路径只保留一条、其余条目的会话并入。
+  {{APP_ROOT}} 用 -AppRoot 展开，{{WORKSPACE_HOME}} 用 -WorkspaceHome
   展开，所以 A/B 机盘符不同也能落地。
 
 对话/会话数据还原（默认开、全量，随工作区一起；-SkipWorkspace 会连会话一起跳过）
@@ -224,13 +227,15 @@ function Sync-WorkspaceApply {
     $localGlobal = [ordered]@{}
   }
   # 全局归档/置顶会话：取「仓库 + 本机」并集（-ReplaceWorkspaceRegistry 时本机已清空，只剩仓库）
+  # 注意：$null 在管道里会被当成一个元素流过 ForEach-Object，[string]$null 就是 ""，
+  # 于是缺失的字段会变成 @("") 写进 json。"" 不是合法会话 id，这里统一滤掉。
   $gArchAll = @(); $gPinAll = @()
   if ($mf.global) {
-    $gArchAll += @($mf.global.archivedSessionIds | ForEach-Object { [string]$_ })
-    $gPinAll  += @($mf.global.pinnedSessionIds   | ForEach-Object { [string]$_ })
+    $gArchAll += @($mf.global.archivedSessionIds | ForEach-Object { [string]$_ } | Where-Object { $_ -ne '' })
+    $gPinAll  += @($mf.global.pinnedSessionIds   | ForEach-Object { [string]$_ } | Where-Object { $_ -ne '' })
   }
-  if ($localGlobal.Contains('archivedSessionIds')) { $gArchAll += @($localGlobal['archivedSessionIds'] | ForEach-Object { [string]$_ }) }
-  if ($localGlobal.Contains('pinnedSessionIds'))   { $gPinAll  += @($localGlobal['pinnedSessionIds']   | ForEach-Object { [string]$_ }) }
+  if ($localGlobal.Contains('archivedSessionIds')) { $gArchAll += @($localGlobal['archivedSessionIds'] | ForEach-Object { [string]$_ } | Where-Object { $_ -ne '' }) }
+  if ($localGlobal.Contains('pinnedSessionIds'))   { $gPinAll  += @($localGlobal['pinnedSessionIds']   | ForEach-Object { [string]$_ } | Where-Object { $_ -ne '' }) }
 
   foreach ($e in $plan) {
     # 运行时字段取「仓库 + 本机」并集：既把 A 机历史会话带过来，也不丢 B 机自建会话
@@ -242,9 +247,9 @@ function Sync-WorkspaceApply {
       $prev = $localTable[$e.Id]
       foreach ($k in @('sessionIds','archivedSessionIds','pinnedSessionIds')) {
         if ($prev.Contains($k)) {
-          if     ($k -eq 'sessionIds')         { $repoSess += @($prev[$k] | ForEach-Object { [string]$_ }) }
-          elseif ($k -eq 'archivedSessionIds') { $repoArch += @($prev[$k] | ForEach-Object { [string]$_ }) }
-          else                                  { $repoPin  += @($prev[$k] | ForEach-Object { [string]$_ }) }
+          if     ($k -eq 'sessionIds')         { $repoSess += @($prev[$k] | ForEach-Object { [string]$_ } | Where-Object { $_ -ne '' }) }
+          elseif ($k -eq 'archivedSessionIds') { $repoArch += @($prev[$k] | ForEach-Object { [string]$_ } | Where-Object { $_ -ne '' }) }
+          else                                  { $repoPin  += @($prev[$k] | ForEach-Object { [string]$_ } | Where-Object { $_ -ne '' }) }
         }
       }
       if ($prev.Contains('createdAt')) { $created = [string]$prev['createdAt'] }
@@ -253,15 +258,48 @@ function Sync-WorkspaceApply {
     $entry = [ordered]@{
       path               = $e.LocalPath
       title              = $e.Title
-      sessionIds         = @($repoSess | Sort-Object -Unique)
-      archivedSessionIds = @($repoArch | Sort-Object -Unique)
-      pinnedSessionIds   = @($repoPin  | Sort-Object -Unique)
+      sessionIds         = @($repoSess | Where-Object { $_ -ne '' } | Sort-Object -Unique)
+      archivedSessionIds = @($repoArch | Where-Object { $_ -ne '' } | Sort-Object -Unique)
+      pinnedSessionIds   = @($repoPin  | Where-Object { $_ -ne '' } | Sort-Object -Unique)
       createdAt          = $created
       updatedAt          = $updated
     }
     $localTable[$e.Id] = $entry
   }
-  $ids = @($localTable.Keys | ForEach-Object { [string]$_ })
+  # 同一路径只能登记一个工作区：DSH 启动时会校验 duplicate paths，一张表里出现重复即
+  # 整张登记表打不开（表现为左侧工作区列表全空、会话列表也一起读不出来）。
+  # 换机时本机自建的 default-workspace 与仓库里同名工作区 ID 不同，按 ID 合并必然撞车，
+  # 所以这里按 path 收敛成一条，其余条目的会话并入保留者。
+  $pathGroups = [ordered]@{}
+  foreach ($id in @($localTable.Keys)) {
+    $p = [string]$localTable[$id]['path']
+    if (-not $p) { continue }
+    $key = $p.Replace('/', '\').TrimEnd('\').ToLowerInvariant()
+    if (-not $pathGroups.Contains($key)) { $pathGroups[$key] = @() }
+    $pathGroups[$key] += $id
+  }
+  $mfIdSet = @{}
+  foreach ($e in $plan) { $mfIdSet[$e.Id] = $true }
+  $dropped = @{}
+  foreach ($key in @($pathGroups.Keys)) {
+    $group = @($pathGroups[$key])
+    if ($group.Count -le 1) { continue }
+    # 保留哪一个：优先仓库登记表里的 ID（另一台机器一直在用，defaultWorkspaceId 通常指向它），
+    # 否则保留会话最多的那个。其余条目的会话/归档/置顶并入保留者，再删掉多余条目。
+    $keeper = @($group | Where-Object { $mfIdSet.ContainsKey($_) }) | Select-Object -First 1
+    if (-not $keeper) {
+      $keeper = @($group | Sort-Object -Property @{ Expression = { @($localTable[$_]['sessionIds']).Count } } -Descending) | Select-Object -First 1
+    }
+    foreach ($other in @($group | Where-Object { $_ -ne $keeper })) {
+      $localTable[$keeper]['sessionIds']         = @(@($localTable[$keeper]['sessionIds'])         + @($localTable[$other]['sessionIds'])         | Where-Object { $_ -ne '' } | Sort-Object -Unique)
+      $localTable[$keeper]['archivedSessionIds'] = @(@($localTable[$keeper]['archivedSessionIds']) + @($localTable[$other]['archivedSessionIds']) | Where-Object { $_ -ne '' } | Sort-Object -Unique)
+      $localTable[$keeper]['pinnedSessionIds']   = @(@($localTable[$keeper]['pinnedSessionIds'])   + @($localTable[$other]['pinnedSessionIds'])   | Where-Object { $_ -ne '' } | Sort-Object -Unique)
+      Warn ('同一路径撞了两个工作区，已合并为一条：{0}（ID {1} 的会话并入 ID {2}）' -f $localTable[$keeper]['path'], $other, $keeper)
+      $dropped[$other] = $true
+      $localTable.Remove($other)
+    }
+  }
+  $ids = @($localTable.Keys | ForEach-Object { [string]$_ } | Where-Object { -not $dropped.ContainsKey($_) })
   $mfDefault = if ($mf.global) { [string]$mf.global.defaultWorkspaceId } else { '' }
   if ($mfDefault) { $localGlobal['defaultWorkspaceId'] = $mfDefault }
   elseif (-not $localGlobal.Contains('defaultWorkspaceId')) { $localGlobal['defaultWorkspaceId'] = '' }

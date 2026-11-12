@@ -14,7 +14,7 @@ DSH 插件：左侧栏加一行「配置同步」，点开是整页体检面板�
 
 ```sh
 # 从本仓库的 release 包安装（无需构建，包内已含宿主/前端/runtime 脚本）
-dsh plugin add https://raw.githubusercontent.com/QcWyGm/dsh-config-sync/main/releases/dsh-config-sync-0.3.1.tgz
+dsh plugin add https://raw.githubusercontent.com/QcWyGm/dsh-config-sync/main/releases/dsh-config-sync-0.3.2.tgz
 ```
 
 或在 DSH 面板「插件 → 插件市场」里搜索 `dsh-config-sync`（本仓库已将 `dsh-plugin`、`deepseek-harness` 写进包关键词，并声明了 `dsh.bundle.patch`）。
@@ -46,7 +46,7 @@ https://raw.githubusercontent.com/QcWyGm/dsh-config-sync/main/market-index.json
 
 在 DSH 里「插件 → 插件市场 / 发现 → 管理索引源 → 添加索引源」填入上面的 URL，即可在列表里看到「配置同步」，点安装即按该 commit 拉取本仓库。
 
-升级流程：改代码 → 打包 `releases/dsh-config-sync-<版本>.tgz` → 更新 `version.json` 的 `version/sha256` → 把 `market-index.json` 里那条 `versions` 的 `version` 与 `commit` 换成新提交 → 推送。索引只引用 commit，所以旧版本也能随时装回。
+升级流程：改代码 → `pwsh -File tools\pack-plugin.ps1` 打包 `releases/dsh-config-sync-<版本>.tgz`（脚本会按 `package.json` 的 `files` 收内容，并自动把 sha256 回填进 `version.json`）→ 手动改 `version.json` 的 `version`（以及 `notes`）→ 把 `market-index.json` 里那条 `versions` 的 `version` 与 `commit` 换成新提交 → 推送。索引只引用 commit，所以旧版本也能随时装回。打完包先跑 `node tools\selftest.mjs .` + `node tools\clientcheck.mjs` 自检。
 
 `capture` 要读 `cordis.patch.yml`，DSH 运行时这个文件正被应用持有，抓到的是半截状态；`apply` 写完以后，DSH 退出时又会回写覆盖。所以边界固定为：判断该跑什么、把命令写好，退出 DSH 后双击跑。
 
