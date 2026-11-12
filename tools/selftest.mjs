@@ -513,6 +513,17 @@ if (prevScope === null) { try { unlinkSync(scopeFile) } catch { } } else writeFi
     'index.js')
   check('必需组在面板上不可勾掉（复选框禁用 + 标注）',
     clientSrc.includes('g.required === true') && clientSrc.includes('必需内容'), 'client.js')
+  // 只读优先：不做「勾一下就写盘」，要先点「修改」、再点「保存」
+  check('面板默认只读：勾选前必须先点「修改」',
+    clientSrc.includes('const [editing, setEditing]')
+    && clientSrc.includes("disabled: busy || !editing")
+    && clientSrc.includes("M('修改', 'Edit')")
+    && /onClick: \(\) => save\(state\)/.test(clientSrc), 'client.js')
+  // 展开/收起改成点整行，单独的「明细」按钮要消失
+  check('取消「明细」按钮：展开收起靠点当前行',
+    !clientSrc.includes("M('明细', 'Details')")
+    && clientSrc.includes('onClick: canExpand')
+    && clientSrc.includes("expanded ? '▾' : '▸'"), 'client.js')
 }
 
 // 提交说明：面板里填的那句要进 push 脚本，时间由 sync.ps1 执行时追加

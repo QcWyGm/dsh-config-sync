@@ -625,14 +625,16 @@ window.__ModuleLoader__.load({
 
     /** 面板整页：左侧栏「配置同步」点开后看到的就是这个。 */
     /**
-     * 「同步内容」卡：把云端同步的十组内容逐组列出，组可展开看明细，明细项也能单独取消。
+     * 「同步内容」卡：把云端同步的十组内容逐组列出，点行即可展开看明细，明细项也能单独取消。
      * 默认全勾；取消勾选后推送不再抓、拉取不再还原（两侧共用 <DshHome>\config-sync-scope.json）。
      * deleteCloud（默认关）是唯一的破坏性选项：打开后取消勾选会顺手删掉仓库里的副本。
+     * 只读优先：进卡先只看不改，点「修改」才解锁勾选，改完点「保存」才落盘（取消=丢弃这次改动）。
      */
     function ScopeCard() {
       const [state, setState] = react.useState(null)
       const [open, setOpen] = react.useState({})
       const [busy, setBusy] = react.useState(false)
+      const [editing, setEditing] = react.useState(false)
       const [msg, setMsg] = react.useState('')
       const [err, setErr] = react.useState('')
 
@@ -657,6 +659,7 @@ window.__ModuleLoader__.load({
           }
           await callScope({ deleteCloud: next.deleteCloud === true, groups })
           setState(next)
+          setEditing(false)
           const offGroups = (next.groups || []).filter((g) => g.enabled === false).length
           const offItems = (next.groups || []).reduce((n, g) => n + (g.items || []).filter((i) => i.enabled === false).length, 0)
           setMsg(offGroups || offItems
@@ -667,25 +670,30 @@ window.__ModuleLoader__.load({
         } finally { setBusy(false) }
       }
 
+      // 勾选只改本次编辑的草稿，不落盘；「保存」才发请求，「取消」直接 reload 丢弃
       const toggleGroup = (id) => {
-        if (!state) return
+        if (!state || !editing) return
         const g0 = state.groups.find((x) => x.id === id)
-        if (g0 && g0.required === true) return   // 必需组钉死，连请求都不发
-        save({ ...state, groups: state.groups.map((g) => (g.id === id ? { ...g, enabled: g.enabled === false } : g)) })
+        if (g0 && g0.required === true) return   // 必需组钉死，点也点不动
+        setState({ ...state, groups: state.groups.map((g) => (g.id === id ? { ...g, enabled: g.enabled === false } : g)) })
+        setMsg('')
       }
       const toggleItem = (gid, iid) => {
-        if (!state) return
-        save({
+        if (!state || !editing) return
+        setState({
           ...state,
           groups: state.groups.map((g) => (g.id === gid
             ? { ...g, items: g.items.map((i) => (i.id === iid ? { ...i, enabled: i.enabled === false } : i)) }
             : g)),
         })
+        setMsg('')
       }
       const toggleDeleteCloud = () => {
-        if (!state) return
-        save({ ...state, deleteCloud: state.deleteCloud !== true })
+        if (!state || !editing) return
+        setState({ ...state, deleteCloud: state.deleteCloud !== true })
+        setMsg('')
       }
+      const cancelEdit = () => { setMsg(''); setErr(''); setEditing(false); load() }
 
       if (!state) {
         return h('div', { style: S.card },
@@ -701,15 +709,23 @@ window.__ModuleLoader__.load({
         h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' } },
           h('div', { style: S.cardTitle }, M('同步内容', 'Sync content')),
           h('div', { style: { ...S.hint, flex: 1, minWidth: '160px' } },
-            M(
-              `默认全勾；取消勾选后推送不再抓、拉取不再还原（当前 ${checked}/${total} 项参与同步）`,
-              `Checked by default; unchecked content is neither captured on push nor restored on pull (${checked}/${total} items active)`,
-            )),
+            editing
+              ? M(`改完点「保存」才生效（当前 ${checked}/${total} 项参与同步）`, `Click Save to apply (${checked}/${total} items currently active)`)
+              : M(`只读：点「修改」后才能取消勾选（当前 ${checked}/${total} 项参与同步）`, `Read-only: click Edit to change the selection (${checked}/${total} items currently active)`)),
+          editing
+            ? h('button', { type: 'button', style: S.btnPrimary, disabled: busy, onClick: () => save(state) }, busy ? M('保存中…', 'Saving…') : M('保存', 'Save'))
+            : null,
+          editing
+            ? h('button', { type: 'button', style: S.btn, disabled: busy, onClick: cancelEdit }, M('取消', 'Cancel'))
+            : null,
+          editing
+            ? null
+            : h('button', { type: 'button', style: S.btn, disabled: busy, onClick: () => { setMsg(''); setErr(''); setEditing(true) } }, M('修改', 'Edit')),
           h('button', { type: 'button', style: S.btn, disabled: busy, onClick: load }, M('刷新', 'Refresh')),
         ),
-        h('label', { style: { display: 'flex', gap: '8px', alignItems: 'flex-start', cursor: 'pointer' } },
+        h('label', { style: { display: 'flex', gap: '8px', alignItems: 'flex-start', cursor: editing ? 'pointer' : 'default' } },
           h('input', {
-            type: 'checkbox', checked: state.deleteCloud === true, disabled: busy,
+            type: 'checkbox', checked: state.deleteCloud === true, disabled: busy || !editing,
             onChange: toggleDeleteCloud, style: { marginTop: '2px', flexShrink: 0 },
           }),
           h('div', { style: { minWidth: 0 } },
@@ -728,13 +744,26 @@ window.__ModuleLoader__.load({
             const excluded = items.filter((i) => i.enabled === false).length
             const expanded = open[g.id] === true
             const groupOn = g.enabled !== false
+            const canExpand = items.length > 0
             return h('div', {
               style: { borderTop: '1px solid var(--dsw-alias-border-l1)', paddingTop: '6px', paddingBottom: '2px' },
             },
-              h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px' } },
+              // 整行可点：点一下展开明细，再点收起（不再单独放「明细」按钮）
+              h('div', {
+                style: { display: 'flex', alignItems: 'center', gap: '8px', cursor: canExpand ? 'pointer' : 'default' },
+                onClick: canExpand ? () => setOpen({ ...open, [g.id]: !expanded }) : undefined,
+              },
+                canExpand
+                  ? h('span', {
+                    style: { flexShrink: 0, width: '10px', fontSize: '11px', color: 'var(--dsw-alias-label-tertiary)' },
+                  }, expanded ? '▾' : '▸')
+                  : h('span', { style: { flexShrink: 0, width: '10px' } }),
                 h('input', {
-                  type: 'checkbox', checked: groupOn, disabled: busy || g.required === true,
-                  title: g.required === true ? M('必需内容：取消会让另一台机器拉取时直接报错', 'Required: unchecking it makes the other machine fail on pull') : '',
+                  type: 'checkbox', checked: groupOn, disabled: busy || !editing || g.required === true,
+                  title: g.required === true
+                    ? M('必需内容：取消会让另一台机器拉取时直接报错', 'Required: unchecking it makes the other machine fail on pull')
+                    : (editing ? '' : M('只读：先点「修改」', 'Read-only: click Edit first')),
+                  onClick: (e) => e.stopPropagation(),   // 勾选别当成"点行展开"
                   onChange: () => toggleGroup(g.id), style: { flexShrink: 0 },
                 }),
                 h('div', { style: { flex: 1, minWidth: 0 } },
@@ -751,12 +780,6 @@ window.__ModuleLoader__.load({
                       : g.desc),
                 ),
                 h('span', { style: S.hint }, items.length ? `${items.length - excluded}/${items.length}` : M('无明细', 'no items')),
-                items.length
-                  ? h('button', {
-                    type: 'button', style: S.btn, disabled: busy,
-                    onClick: () => setOpen({ ...open, [g.id]: !expanded }),
-                  }, expanded ? M('收起', 'Hide') : M('明细', 'Details'))
-                  : null,
               ),
               expanded
                 ? h('div', {
@@ -766,10 +789,14 @@ window.__ModuleLoader__.load({
                   },
                 },
                   items.map((i) => h('label', {
-                    style: { display: 'flex', gap: '8px', alignItems: 'center', fontSize: '12px', cursor: 'pointer', opacity: groupOn ? 1 : 0.6 },
+                    style: {
+                      display: 'flex', gap: '8px', alignItems: 'center', fontSize: '12px',
+                      cursor: editing ? 'pointer' : 'default', opacity: groupOn ? 1 : 0.6,
+                    },
                   },
                     h('input', {
-                      type: 'checkbox', checked: i.enabled !== false, disabled: busy,
+                      type: 'checkbox', checked: i.enabled !== false, disabled: busy || !editing,
+                      title: editing ? '' : M('只读：先点「修改」', 'Read-only: click Edit first'),
                       onChange: () => toggleItem(g.id, i.id), style: { flexShrink: 0 },
                     }),
                     h('span', { style: { wordBreak: 'break-all' } }, i.label),
