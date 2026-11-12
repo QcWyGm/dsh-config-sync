@@ -1944,13 +1944,21 @@ function writeScope(dshHome, scope) {
   return file
 }
 
+// 必需组：不许取消勾选 —— 因为不勾就会报错，而不是"少同步一点"。
+// profile 里的 package.json / cordis.patch.yml 是 apply 的前置条件（仓库里缺它们 apply.ps1 直接 Die），
+// host-contract.json 是两端版本一致性校验（丢了它版本不一致也照铺，客户端可能起不来）。
+const SCOPE_REQUIRED_GROUPS = ['profile']
+function scopeGroupRequired(id) { return SCOPE_REQUIRED_GROUPS.includes(id) }
+
 function scopeGroupEnabled(scope, id) {
+  if (scopeGroupRequired(id)) return true
   const g = scope && scope.groups ? scope.groups[id] : null
   if (!g || typeof g !== 'object') return true
   return g.enabled !== false
 }
 
 function scopeItemEnabled(scope, id, item) {
+  if (scopeGroupRequired(id)) return true
   if (!scopeGroupEnabled(scope, id)) return false
   const g = scope.groups ? scope.groups[id] : null
   const ex = g && Array.isArray(g.excluded) ? g.excluded : []
@@ -2035,6 +2043,7 @@ function collectScopeGroups(dshHome, appRoot) {
   groups.push({ id: 'profile', titleZh: '本机 profile', titleEn: 'Local profile',
     descZh: 'package.json / lock / cordis 等宿主启动要读的配置', descEn: 'package.json, lockfiles and cordis config the host loads at startup',
     // 这几个文件互相咬合（lock 与 package.json 的 specifier 必须一致），只做整体开关
+    required: true,
     items: profileFiles.map((f) => ({ id: f, label: f, excludable: false })) })
 
   const promptFiles = ['AGENTS.md', 'prompt-inject.md'].filter((f) => existsSync(join(dshHome, f)))
@@ -2114,6 +2123,7 @@ async function handleScope(req, res, config) {
           title: t(g.titleZh, g.titleEn),
           desc: t(g.descZh, g.descEn),
           enabled: g.enabled,
+          required: g.required === true,
           items: g.items.map((it) => ({ id: it.id, label: it.label, enabled: it.enabled, excludable: it.excludable !== false })),
         })),
       })
@@ -2134,6 +2144,8 @@ async function handleScope(req, res, config) {
     const clean = {}
     for (const [id, g] of Object.entries(groupsIn)) {
       if (!g || typeof g !== 'object') continue
+      // 必需组一律按"开启、无排除"处理：关掉它会让另一台 apply 直接报错，不是"少同步一点"
+      if (scopeGroupRequired(id)) continue
       const entry = {}
       if (g.enabled === false) entry.enabled = false
       let ex = Array.isArray(g.excluded) ? g.excluded.filter((x) => typeof x === 'string' && x) : []

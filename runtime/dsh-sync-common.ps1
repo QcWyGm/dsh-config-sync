@@ -374,6 +374,14 @@ function Resolve-DshAppRoot([string]$explicit) {
 #       只有 deleteCloud 打开时才顺手删掉仓库里那份副本（默认关闭，删了就不可逆）。
 $SyncScopeGroups = @('profile', 'prompt', 'skills', 'presets', 'storages-record', 'settings', 'mnemon', 'local-plugins', 'workspace', 'conversations')
 
+# 必需组：不许取消勾选。理由都是"不勾就报错"这一个事实：
+#   profile 里的 package.json / cordis.patch.yml 是 apply 的前置条件 —— 仓库缺它们，apply.ps1 直接 Die；
+#   同一组的 host-contract.json 是两端版本一致性校验，丢了它版本不一致也照铺，客户端可能起不来。
+# 所以这里（以及面板）都把 profile 钉死为开启，手改 JSON 关掉也按开启处理。
+$SyncRequiredGroups = @('profile')
+
+function Test-SyncRequiredGroup([string]$Group) { return ($SyncRequiredGroups -contains $Group) }
+
 function Get-SyncScopePath([string]$DshHome) { return (Join-Path $DshHome 'config-sync-scope.json') }
 
 function Get-SyncScope([string]$DshHome) {
@@ -406,6 +414,8 @@ function Get-SyncScopeGroup($Scope, [string]$Group) {
 }
 
 function Test-SyncGroupEnabled($Scope, [string]$Group) {
+  # 必需组永远为真：否则取消勾选 → 仓库缺 profile → 另一台 apply 直接 Die
+  if (Test-SyncRequiredGroup $Group) { return $true }
   $g = Get-SyncScopeGroup $Scope $Group
   if ($null -eq $g) { return $true }
   $p = $g.PSObject.Properties['enabled']
@@ -414,6 +424,7 @@ function Test-SyncGroupEnabled($Scope, [string]$Group) {
 }
 
 function Test-SyncItemEnabled($Scope, [string]$Group, [string]$Item) {
+  if (Test-SyncRequiredGroup $Group) { return $true }
   if (-not (Test-SyncGroupEnabled $Scope $Group)) { return $false }
   $g = Get-SyncScopeGroup $Scope $Group
   if ($null -eq $g) { return $true }

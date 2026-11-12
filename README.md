@@ -118,6 +118,7 @@ https://raw.githubusercontent.com/QcWyGm/dsh-config-sync/main/market-index.json
 - 跳过**两侧都生效**：`capture.ps1` 不抓（不再写进仓库）、`apply.ps1` 不还原（不动本机）。`-PruneSkills` 也不会把"你勾掉的本机技能"当成多出来的项删掉。
 - 卡里另有一个开关「取消勾选时顺手删掉云端副本」，**默认关闭**：关着时取消勾选只是"这边不再管它"，云端那份留着，重新勾上立刻继续同步；打开后取消勾选会真的删掉仓库里的对应目录/子路径（推送时删、提交后另一台机器也拉不到），**删除不可恢复**。
 - 点不动的明细项（profile 五个文件、mnemon）是刻意做成"整组开关"：lock 与 package.json 的 specifier 必须一致，单独排除会装不起来。
+- **`本机 profile` 这一组是必需内容，不能取消勾选**（面板上显示「必需」、复选框是灰的）。它不是"可省的一项"，而是 `apply.ps1` 的前置条件：仓库里没有 `profile\package.json` 或 `profile\cordis.patch.yml` 时，拉取会直接 `[X] 仓库内容不完整` 退出；同一组的 `profile\host-contract.json` 还是两台机器的版本一致性校验，丢了它版本不一致也照铺，客户端可能起不来。手改 `config-sync-scope.json` 把这一组写成 `false` 也无效：`capture.ps1` / `apply.ps1` 与面板都按"开启"处理（`Test-SyncGroupEnabled` 里钉死）。
 
 ## 自动同步 / 自动推送（两个开关，默认关）
 

@@ -360,7 +360,24 @@ check('读回来的状态与保存的一致',
   (scopeAfter.groups || []).map((g) => `${g.id}:${g.enabled}`).join(', '))
 if (prevScope === null) { try { unlinkSync(scopeFile) } catch { } } else writeFileSync(scopeFile, prevScope, 'utf8')
 
-// 「没配仓库就生成不了」这条分支只能在没有仓库的机器上跑到：本机自动探测一定命中
+// --- 必需组：profile 是 apply 的前置条件（缺了直接 Die），所以不许取消勾选 ---
+const reqPost = await call('/config-sync/scope', {
+  method: 'POST',
+  headers: { host: 'localhost:3080', 'content-type': 'application/json' },
+  body: JSON.stringify({ deleteCloud: false, groups: { profile: { enabled: false, excluded: ['package.json'] } } }),
+})
+check('必需组不能取消：POST 关掉 profile 也不落盘',
+  reqPost.statusCode === 200
+  && (!existsSync(scopeFile) || !readFileSync(scopeFile, 'utf8').includes('"profile"')),
+  existsSync(scopeFile) ? readFileSync(scopeFile, 'utf8').slice(0, 120) : '(文件不存在)')
+const reqAfter = JSON.parse((await call('/config-sync/scope', { headers: { host: 'localhost:3080' } })).body || '{}')
+const profileGroup = (reqAfter.groups || []).find((g) => g.id === 'profile') || {}
+check('回读里 profile 仍是勾选、并标了 required',
+  profileGroup.enabled === true && profileGroup.required === true,
+  `enabled=${profileGroup.enabled} required=${profileGroup.required}`)
+check('其余组没有 required 标记（只有真正会报错的那组被钉死）',
+  (reqAfter.groups || []).filter((g) => g.id !== 'profile').every((g) => g.required !== true))
+if (prevScope === null) { try { unlinkSync(scopeFile) } catch { } } else writeFileSync(scopeFile, prevScope, 'utf8')
 // D:\dsh-config，所以这里退一步做静态断言——宿主源码里确实有这道守卫，且提示指向面板。
 {
   const here = dirname(fileURLToPath(import.meta.url))
@@ -485,6 +502,17 @@ if (prevScope === null) { try { unlinkSync(scopeFile) } catch { } } else writeFi
     clientSrc.includes('function ScopeCard') && clientSrc.includes('callScope(')
     && clientSrc.includes('同步内容') && clientSrc.includes('Sync content')
     && clientSrc.includes('取消勾选时顺手删掉云端副本'), 'client.js')
+  // 必需组（profile）三处钉死：脚本侧判断、宿主保存、面板复选框
+  check('必需组在脚本侧钉死（手改 JSON 关掉也按开启处理）',
+    commonSrc.includes('$SyncRequiredGroups')
+    && /function Test-SyncGroupEnabled[\s\S]{0,260}Test-SyncRequiredGroup/.test(commonSrc),
+    'dsh-sync-common.ps1')
+  check('必需组在宿主侧钉死（保存时拒绝写入关闭状态）',
+    indexSrc.includes('SCOPE_REQUIRED_GROUPS')
+    && /for \(const \[id, g\] of Object\.entries\(groupsIn\)\)[\s\S]{0,260}scopeGroupRequired\(id\)\) continue/.test(indexSrc),
+    'index.js')
+  check('必需组在面板上不可勾掉（复选框禁用 + 标注）',
+    clientSrc.includes('g.required === true') && clientSrc.includes('必需内容'), 'client.js')
 }
 
 // 提交说明：面板里填的那句要进 push 脚本，时间由 sync.ps1 执行时追加

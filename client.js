@@ -669,6 +669,8 @@ window.__ModuleLoader__.load({
 
       const toggleGroup = (id) => {
         if (!state) return
+        const g0 = state.groups.find((x) => x.id === id)
+        if (g0 && g0.required === true) return   // 必需组钉死，连请求都不发
         save({ ...state, groups: state.groups.map((g) => (g.id === id ? { ...g, enabled: g.enabled === false } : g)) })
       }
       const toggleItem = (gid, iid) => {
@@ -731,7 +733,8 @@ window.__ModuleLoader__.load({
             },
               h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px' } },
                 h('input', {
-                  type: 'checkbox', checked: groupOn, disabled: busy,
+                  type: 'checkbox', checked: groupOn, disabled: busy || g.required === true,
+                  title: g.required === true ? M('必需内容：取消会让另一台机器拉取时直接报错', 'Required: unchecking it makes the other machine fail on pull') : '',
                   onChange: () => toggleGroup(g.id), style: { flexShrink: 0 },
                 }),
                 h('div', { style: { flex: 1, minWidth: 0 } },
@@ -741,8 +744,11 @@ window.__ModuleLoader__.load({
                       color: groupOn ? 'var(--dsw-alias-label-primary)' : 'var(--dsw-alias-label-tertiary)',
                       textDecoration: groupOn ? 'none' : 'line-through',
                     },
-                  }, g.title),
-                  h('div', { style: S.hint }, g.desc),
+                  }, g.required === true ? `${g.title} · ${M('必需', 'required')}` : g.title),
+                  h('div', { style: S.hint },
+                    g.required === true
+                      ? `${g.desc}　${M('必需内容：拉取时要靠它才能铺配置，缺了会直接报错，所以不能取消。', 'Required: pulling needs it to lay down the config — without it the pull fails outright, so it cannot be unchecked.')}`
+                      : g.desc),
                 ),
                 h('span', { style: S.hint }, items.length ? `${items.length - excluded}/${items.length}` : M('无明细', 'no items')),
                 items.length
