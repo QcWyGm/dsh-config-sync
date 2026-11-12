@@ -856,6 +856,48 @@ console.log('== 内置运行时链接修复 ==')
     '探针路径不是 pnpm.mjs，运行时缺文件时会被误判为已就绪')
 }
 
+// 空白本机仓库 → 只允许拉取（0.3.26）：新机器把路径指到一个空目录不是错误，
+// 而是「等着从云端拉」的正常状态。断言盯四件事：状态判定、不报异常、push 全线拦住、pull 放行。
+console.log('')
+console.log('== 空白本机仓库：只允许拉取 ==')
+{
+  const indexNew = readFileSync(join(pluginRootSelf, 'index.js'), 'utf8')
+  const clientNew = readFileSync(join(pluginRootSelf, 'client.js'), 'utf8')
+  const syncNew = existsSync(join(pluginRuntime, 'sync.ps1')) ? readFileSync(join(pluginRuntime, 'sync.ps1'), 'utf8') : ''
+  check('index.js 提供 repoPhase 四态判定（ok/empty/missing/unusable）',
+    /function repoPhase\(dir\)/.test(indexNew) && /return others\.length === 0 \? 'empty' : 'unusable'/.test(indexNew),
+    'repoPhase 缺失或 empty 判据变了：空目录会被当成「不像仓库」继续报异常')
+  check('只有插件自己生成的 同步-*.cmd 与隐藏项算「空」',
+    /同步-\[\\s\\S\]\*\\?\.cmd/i.test(indexNew) || /同步-\[/i.test(indexNew),
+    'empty 判据没有排除 同步-*.cmd：生成过脚本之后就会被误判成 unusable')
+  check('status 暴露 phase / empty / pushAllowed / pullAllowed',
+    /pushAllowed: phase === 'ok'/.test(indexNew) && /pullAllowed: phase === 'ok' \|\| phase === 'empty'/.test(indexNew),
+    'status 没有暴露门禁字段，面板只能靠 exists 猜，空目录会被整块禁掉')
+  check('空目录的 advice 改成「执行拉取」而不是报错',
+    /本机仓库还是空目录：/.test(indexNew) && /既不是空目录、也不像 dsh-config 仓库/.test(indexNew),
+    'advice 分支没区分 empty 与 unusable')
+  check('check 在非 ok 状态短路，不去撞空目录的 git',
+    /if \(phase !== 'ok'\) \{[\s\S]{0,220}?autoState\.checking = false/.test(indexNew),
+    'check 仍会对空目录跑 fetch/drift：lastCheckError 会被填成「读不到远端」')
+  check('push-now 在空目录被拒并给出去拉取的提示', /mode === 'push' && repoPhase\(repo\) !== 'ok'/.test(indexNew),
+    'handleAuto 的 push-now 没有门禁')
+  check('prepare 拒绝单独生成推送、all 时跳过 push',
+    /\(action === 'push' \|\| action === 'all'\) && phase !== 'ok'/.test(indexNew)
+    && /wanted = phase === 'ok' \? \['push', 'pull', 'restore'\] : \['pull', 'restore'\]/.test(indexNew),
+    'prepare 仍会为空目录生成推送脚本')
+  check('sync.ps1 的 push 分支有空仓库守卫', /本机仓库还没有内容/.test(syncNew),
+    'sync.ps1 push 仍会对空目录 init + 抓取 + 推送')
+  check('面板：空目录不算「必须设置」，徽标不标红',
+    /const missing = Boolean\(props\.data\) && !repo\.exists && !repo\.empty/.test(clientNew)
+    && /if \(repo\.empty\) \{/.test(clientNew)
+    && /const canPush = Boolean\(data && data\.repo && data\.repo\.exists && data\.repo\.pushAllowed !== false\)/.test(clientNew),
+    'panel 仍把空目录当成未配置（强制编辑态 + 红色错误）')
+  check('面板：推送按钮单独门禁（拉取仍可点）',
+    /const pushAllowed = Boolean\(repo\.exists\) && repo\.pushAllowed !== false/.test(clientNew)
+    && /const canPush = Boolean\(data && data\.repo && data\.repo\.exists && data\.repo\.pushAllowed !== false\)/.test(clientNew),
+    '面板的推送按钮没有单独门禁')
+}
+
 console.log('')
 console.log(failures === 0 ? '结论：全部通过' : `结论：${failures} 项失败`)
 process.exit(failures === 0 ? 0 : 1)

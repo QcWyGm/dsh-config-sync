@@ -178,6 +178,7 @@ window.__ModuleLoader__.load({
       const map = {
         ok: 'var(--dsw-alias-state-success-secondary)',
         warn: 'var(--dsw-alias-state-warn-secondary)',
+        pull: 'var(--dsw-alias-state-warn-secondary)',
         error: 'var(--dsw-alias-state-error-secondary)',
         idle: 'var(--dsw-alias-fill-l1)',
       }
@@ -210,7 +211,7 @@ window.__ModuleLoader__.load({
     function summarize(data) {
       if (!data) return { kind: 'idle', text: M('尚未检测', 'Not checked yet') }
       const { repo, version, bundles, deps } = data
-      if (!repo || !repo.exists) return { kind: 'error', text: M('仓库路径未配置（见「本机仓库」卡）', 'Repo path not set (see the Local repo card)') }
+      if (!repo || (!repo.exists && !repo.empty)) return { kind: 'error', text: M('仓库路径未配置（见「本机仓库」卡）', 'Repo path not set (see the Local repo card)') }
       // 云端地址缺失只算"待处理"：云端有没有更新由右侧云端徽标讲，这里不重复报错
       if (!data.remote || !data.remote.configured) return { kind: 'warn', text: M('云端仓库地址未配置', 'Cloud remote not set') }
       if (bundles.unresolved.length || deps.missing.length) {
@@ -221,6 +222,10 @@ window.__ModuleLoader__.load({
             `${bundles.unresolved.length} bundle(s) unresolved · ${deps.missing.length} dependency(ies) missing`,
           ),
         }
+      }
+      // 本机自身问题优先报完之后，才轮到「仓库还是空的」——空目录只是等首次拉取，不是错误
+      if (repo.empty) {
+        return { kind: 'pull', text: M('本机仓库是空目录：待从云端「拉取」', 'Local repo is an empty folder — pull it from the cloud') }
       }
       if (version.local && version.contract && !version.match) {
         return {
@@ -251,6 +256,7 @@ window.__ModuleLoader__.load({
     function chipLabel(kind) {
       if (kind === 'ok') return M('一致', 'In sync')
       if (kind === 'error') return M('有问题', 'Problem')
+      if (kind === 'pull') return M('待拉取', 'To pull')
       if (kind === 'warn') return M('待推送', 'To push')
       return M('未检测', 'Unchecked')
     }
@@ -467,7 +473,8 @@ window.__ModuleLoader__.load({
      */
     function RepoCard(props) {
       const repo = (props.data && props.data.repo) || {}
-      const missing = Boolean(props.data) && !repo.exists
+      // 空目录不算「没配好」：它是新机器还没拉取的状态，不该把人按在编辑态
+      const missing = Boolean(props.data) && !repo.exists && !repo.empty
       const [editing, setEditing] = react.useState(false)
       const [path, setPath] = react.useState(repo.path || '')
       const [busy, setBusy] = react.useState(false)
@@ -489,8 +496,8 @@ window.__ModuleLoader__.load({
         try {
           const r = await callSettings({ repoPath: path })
           setMsg(M(
-            `已保存仓库路径${r.repo && r.repo.hasGit ? '' : '（该目录没有 .git，推送/拉取会失败）'}`,
-            `Repo path saved${r.repo && r.repo.hasGit ? '' : ' (no .git in that directory — push/pull will fail)'}`,
+            `已保存仓库路径${(r.repo && r.repo.hasGit) ? '' : '（空目录：首次「拉取」会自动 git init + fetch + checkout，把它变成仓库；在那之前只允许拉取）'}`,
+            `Repo path saved${(r.repo && r.repo.hasGit) ? '' : ' (empty folder: the first Pull runs git init + fetch + checkout to turn it into the repo; until then only pull is allowed)'}`,
           ))
           setEditing(false)
           if (typeof props.onSaved === 'function') props.onSaved()
@@ -526,8 +533,14 @@ window.__ModuleLoader__.load({
           ),
         ),
         row,
-        h(Kv, { k: M('路径来源', 'Path source'), v: sourceLabel(repo.source) + (repo.exists ? '' : M('（这个路径不可用）', ' (path unavailable)')) }),
-        h(Kv, { k: M('分支 / HEAD', 'Branch / HEAD'), v: repo.exists ? `${repo.branch || '?'} @ ${repo.head || '?'}` : M('（不可用）', '(unavailable)') }),
+        h(Kv, {
+          k: M('路径来源', 'Path source'),
+          v: sourceLabel(repo.source) + (repo.exists ? '' : (repo.empty ? M('（空目录，待首次拉取）', ' (empty folder, waiting for the first pull)') : M('（这个路径不可用）', ' (path unavailable)'))),
+        }),
+        h(Kv, {
+          k: M('分支 / HEAD', 'Branch / HEAD'),
+          v: repo.exists ? `${repo.branch || '?'} @ ${repo.head || '?'}` : (repo.empty ? M('（待首次拉取）', '(after the first pull)') : M('（不可用）', '(unavailable)')),
+        }),
         h(Kv, {
           k: M('远端', 'Remote'),
           v: repo.exists
@@ -535,8 +548,15 @@ window.__ModuleLoader__.load({
               `落后 ${repo.behind ?? '?'} · 领先 ${repo.ahead ?? '?'} · 未提交 ${repo.dirty ?? '?'}`,
               `behind ${repo.behind ?? '?'} · ahead ${repo.ahead ?? '?'} · dirty ${repo.dirty ?? '?'}`,
             )
-            : M('（不可用）', '(unavailable)'),
+            : (repo.empty ? M('（拉取之后才有得比）', '(available after the first pull)') : M('（不可用）', '(unavailable)')),
         }),
+        repo.empty
+          ? h('div', { style: { ...S.hint, color: 'var(--dsw-alias-state-warn-primary)' } },
+            M(
+              '空目录：点「拉取」会从云端把仓库内容拉到这个路径（自动 git init + fetch + checkout）；拉下来之前不支持推送。',
+              'Empty folder: Pull fetches the whole repo into this path (git init + fetch + checkout). Push is disabled until then.',
+            ))
+          : null,
         h(Kv, { k: M('本机数据', 'Local data'), v: (() => {
           const local = props.data && props.data.local
           if (!local || !local.known) return M('还没同步过', 'Never synced yet')
@@ -1306,6 +1326,9 @@ window.__ModuleLoader__.load({
      */
     function AutoCard(props) {
       const auto = (props.data && props.data.auto) || {}
+      const repo = (props.data && props.data.repo) || {}
+      // 空目录（还没拉过）只允许「拉取」：推送按钮禁掉，并说明原因
+      const pushAllowed = Boolean(repo.exists) && repo.pushAllowed !== false
       const drift = auto.drift || null
       const [busy, setBusy] = react.useState('')
       const [err, setErr] = react.useState('')
@@ -1408,9 +1431,27 @@ window.__ModuleLoader__.load({
           : null,
         h('div', { style: S.actions },
           h('button', { type: 'button', style: S.btnPrimary, disabled: Boolean(busy), onClick: () => act('pull-now') }, M('立即拉取（会关闭 DSH）', 'Pull now (closes DSH)')),
-          h('button', { type: 'button', style: S.btnPrimary, disabled: Boolean(busy), onClick: () => act('push-now') }, M('立即推送（会关闭 DSH）', 'Push now (closes DSH)')),
+          h('button', {
+            type: 'button',
+            style: pushAllowed ? S.btnPrimary : { ...S.btnPrimary, opacity: 0.5, cursor: 'not-allowed' },
+            disabled: Boolean(busy) || !pushAllowed,
+            title: pushAllowed ? '' : M('本机仓库还是空目录：先拉取', 'Local repo is empty — pull first'),
+            onClick: () => act('push-now'),
+          }, M('立即推送（会关闭 DSH）', 'Push now (closes DSH)')),
           pending ? h('button', { type: 'button', style: S.btn, disabled: Boolean(busy), onClick: () => act('cancel') }, M('取消排队', 'Cancel queue')) : null,
         ),
+        !pushAllowed
+          ? h('div', { style: { ...S.hint, color: 'var(--dsw-alias-state-warn-primary)' } },
+            repo.empty
+              ? M(
+                '本机仓库还是空目录：先「立即拉取」把云端仓库拉下来，之后才能推送。',
+                'The local repo is still empty: run Pull first to fetch the cloud repo; push unlocks after that.',
+              )
+              : M(
+                '本机仓库不可用：先在「本机仓库」卡里设好路径，才能推送。',
+                'The local repo is unusable: set the path in the Local repo card before pushing.',
+              ))
+          : null,
         msg ? h('div', { style: S.hint }, msg) : null,
         err ? h('div', { style: { ...S.hint, color: 'var(--dsw-alias-state-error-primary)' } }, err) : null,
       )
@@ -1433,8 +1474,11 @@ window.__ModuleLoader__.load({
       // 会把还没到点的"5 秒后消失"定时器一起清掉，提示就一直挂在屏幕上。
       const toastTimer = react.useRef(null)
       const summary = summarize(data)
-      // 仓库没配好 = 生成按钮全禁用（宿主那边也会拒，界面这边先别让人白点）
-      const noRepo = !data || !data.repo || !data.repo.exists
+      // 门禁分三条：有路径就能生成还原脚本；拉取允许「真仓库 or 空目录」；推送只允许真仓库。
+      // 空目录 = 新机器还没拉过，面板只放行「拉取」，推送按钮直接禁掉（后端也会再拦一次）。
+      const hasRepoPath = Boolean(data && data.repo && data.repo.path)
+      const canPull = Boolean(data && data.repo && (data.repo.exists || data.repo.empty) && data.repo.pullAllowed !== false)
+      const canPush = Boolean(data && data.repo && data.repo.exists && data.repo.pushAllowed !== false)
       // 云端仓库没配 = 推送/拉取禁用（还原只动本机快照，不拦）
       const noRemote = !data || !data.remote || !data.remote.configured
 
@@ -1587,6 +1631,10 @@ window.__ModuleLoader__.load({
       // 后面跟一句具体状态；全自动检查（挂载即查 + 每 2 分钟复查），不给手动按钮。
       const cloudLine = (() => {
         const auto = (data && data.auto) || {}
+        const repo = (data && data.repo) || {}
+        // 空目录时后端会把 check 短路掉（不算错误），这里也先判一次，
+        // 免得落到下面「lastCheckAt 有值但 lastCheckError 为空」的分支，被误显示成检查失败
+        if (repo.empty) return { kind: 'pull', text: M('本机仓库还是空目录：拉取一次就能和云端比对', 'Local repo is still empty — pull once to compare with the cloud') }
         if (auto.checking || checking) return { kind: 'idle', text: M('云端检查中…', 'Checking the cloud…') }
         const drift = auto.drift
         if (drift) {
@@ -1603,7 +1651,9 @@ window.__ModuleLoader__.load({
         return { kind: 'idle', text: M('云端检查中…', 'Checking the cloud…') }
       })()
 
-      const cloudLabel = cloudLine.kind === 'ok' ? M('一致', 'In sync') : (cloudLine.kind === 'error' ? M('不一致', 'Out of sync') : M('检查中', 'Checking'))
+      const cloudLabel = cloudLine.kind === 'ok' ? M('一致', 'In sync')
+        : (cloudLine.kind === 'error' ? M('不一致', 'Out of sync')
+          : (cloudLine.kind === 'pull' ? M('待拉取', 'To pull') : M('检查中', 'Checking')))
 
       // 插件更新卡：老版本机器进来第一眼就能看到"有新版本 x.y.z"和更新按钮；
       // 更新相关的配置（清单地址、只读令牌）也收在这张卡里，别散到「云端仓库」去。
@@ -1819,10 +1869,15 @@ window.__ModuleLoader__.load({
               `Restore snapshot: ${data.backup.latest} (newest of ${data.backup.count}, ${data.backup.latestFiles} files)`,
             )
             : M('还原快照：还没有任何备份快照（还原将无从下手，需拉取或指定 -FromCommit）', 'Restore snapshot: no backups yet (restore has nothing to fall back to — pull first, or pass -FromCommit)')),
-        data && data.repo && !data.repo.exists
+        data && data.repo && !data.repo.exists && !data.repo.empty
           ? h('div', { style: { ...S.footnote, color: 'var(--dsw-alias-state-error-primary)' } },
             M('仓库路径还没配置：先在「本机仓库」卡里设好，否则脚本生成不出来。',
               'Repo path is not set: configure it in the Local repo card, otherwise scripts cannot be generated.'))
+          : null,
+        data && data.repo && data.repo.empty
+          ? h('div', { style: { ...S.footnote, color: 'var(--dsw-alias-state-warn-primary)' } },
+            M('本机仓库是空目录：现在只生成「拉取」（顺带可生成还原）。拉取会把云端仓库整个拉到这个路径，之后推送按钮才会放开。',
+              'The local repo is an empty folder: only Pull (plus Restore) can be generated now. Pull brings the whole cloud repo into this path; push unlocks after that.'))
           : null,
         data && data.remote && !data.remote.configured
           ? h('div', { style: { ...S.footnote, color: 'var(--dsw-alias-state-error-primary)' } },
@@ -1835,10 +1890,11 @@ window.__ModuleLoader__.load({
               `${data.repo.ahead} local commit(s) not pushed: pushing publishes them, pulling overwrites local config.`))
           : null,
         h('div', { style: S.actions },
-          h('button', { type: 'button', style: S.btnPrimary, disabled: busy || noRepo || noRemote, onClick: () => prepare('all', note) }, M('一键生成 推送 / 拉取 / 还原', 'Generate push / pull / restore')),
-          h('button', { type: 'button', style: S.btn, disabled: busy || noRepo || noRemote, onClick: () => prepare('push', note) }, M('只生成推送', 'Push only')),
-          h('button', { type: 'button', style: S.btn, disabled: busy || noRepo || noRemote, onClick: () => prepare('pull') }, M('只生成拉取', 'Pull only')),
-          h('button', { type: 'button', style: S.btn, disabled: busy || noRepo, onClick: () => prepare('restore') }, M('只生成还原', 'Restore only')),
+          h('button', { type: 'button', style: S.btnPrimary, disabled: busy || !canPull || noRemote, onClick: () => prepare('all', note) },
+            canPush ? M('一键生成 推送 / 拉取 / 还原', 'Generate push / pull / restore') : M('一键生成 拉取 / 还原', 'Generate pull / restore')),
+          h('button', { type: 'button', style: S.btn, disabled: busy || !canPush || noRemote, onClick: () => prepare('push', note) }, M('只生成推送', 'Push only')),
+          h('button', { type: 'button', style: S.btn, disabled: busy || !canPull || noRemote, onClick: () => prepare('pull') }, M('只生成拉取', 'Pull only')),
+          h('button', { type: 'button', style: S.btn, disabled: busy || !hasRepoPath, onClick: () => prepare('restore') }, M('只生成还原', 'Restore only')),
         ),
         h(MadeNote, { made }),
         h('div', { style: S.footnote },

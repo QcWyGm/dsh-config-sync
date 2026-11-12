@@ -490,6 +490,13 @@ function Initialize-RepoIfNeeded {
 
 # ---------- push ----------
 if ($Action -eq 'push') {
+  # 空白文件夹 = 等首次拉取：这里不允许推送。没有仓库内容可推，硬推只会把本机状态
+  # 写进一份并不存在的历史（后续 pull 会撞一堆 untracked）。新机器请先跑 pull。
+  if (-not (Test-Path -LiteralPath (Join-Path $RepoRoot 'apply.ps1'))) {
+    Warn "本机仓库还没有内容（$RepoRoot）：推送只用于把本机改动提交进一个已有的仓库。"
+    Warn "新机器/空目录请先跑「拉取」：它会自动 git init + fetch + checkout，把云端仓库拉下来。"
+    Die "已停止（未抓取、未提交、未推送）。"
+  }
   Initialize-RepoIfNeeded
   if ((Test-DshRunning) -and (-not $Force)) {
     Warn "检测到 DeepSeek Harness 在运行：capture 可能抓到写了一半的配置"

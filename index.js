@@ -329,7 +329,9 @@ function resolveRepo(explicit, dshHome) {
   const pick = (value, source) => {
     if (!value) return null
     tried.push(`${source}:${value}`)
-    return isRepoDir(value) ? { repo: value, source } : null
+    // 空目录也是有效答案：新机器先把路径填好、等首次拉取，这时不该被自动探测到的另一个仓库顶掉
+    const phase = repoPhase(value)
+    return (phase === 'ok' || phase === 'empty') ? { repo: value, source } : null
   }
   // 设置里的路径是用户在面板里亲手填的：填了但已失效（目录被移走/改名）就原样报回去，
   // 让面板停在"未配置"强制他重设，而不是静默换成自动探测到的另一个仓库。
@@ -633,6 +635,25 @@ function resolveSnapshotDir(dshHome, backupDirRaw) {
 }
 
 /**
+ * 本机仓库当前处在哪个阶段。面板上的「能不能推送 / 能不能拉取」全按它来判：
+ *   ok       真仓库（有 .git 且是 dsh-config 结构）→ 推送、拉取都可以
+ *   empty    目录在、但里面是空的（新机器刚建目录，或只有生成过的 同步-*.cmd）
+ *            → 这是「等着从云端拉」的正常状态，不算异常；拉取会自动 init + fetch + checkout
+ *   missing  目录不存在（路径写了但没建）
+ *   unusable 目录在、但既不是空目录也不是仓库（多半填错路径了）
+ */
+function repoPhase(dir) {
+  if (!dir) return 'missing'
+  if (isRepoDir(dir)) return 'ok'
+  if (!isDir(dir)) return 'missing'
+  let entries = []
+  try { entries = readdirSync(dir, { withFileTypes: true }) } catch { return 'unusable' }
+  // 只有本插件自己生成的脚本、或隐藏项（.git 等）才算「空」：其余文件说明这目录本来就有别的东西
+  const others = entries.filter((e) => !e.name.startsWith('.') && !/^同步-[\s\S]*\.cmd$/i.test(e.name))
+  return others.length === 0 ? 'empty' : 'unusable'
+}
+
+/**
  * 体检。全部只读，不写任何文件（除了 prepare 那次由用户显式触发的 cmd 生成）。
  */
 async function inspect(config) {
@@ -679,6 +700,8 @@ async function inspect(config) {
   const local = localPending(dshHome, syncState.lastSyncAt, config?.profileName, { repo, appRoot })
 
   const advice = []
+  // 本机仓库处在哪个阶段：空白目录 = 等首次拉取，是正常状态，不该报异常
+  const phase = repoPhase(repo)
   if (!appRoot) {
     advice.push(t(
       '定位不到客户端根目录：插件不在 <客户端根> 下（如 D:\\DeepSeekHarness\\dsh-config-sync-0.1.0），'
@@ -692,10 +715,15 @@ async function inspect(config) {
       '还没有配置仓库目录：请在下面的「本机仓库」卡里点「设置路径」，指向那台机器上的 dsh-config 仓库（含 apply.ps1 和 profile\\package.json）',
       'The repo directory is not set: use the Local repo card below to point at the dsh-config repo on this machine (it must contain apply.ps1 and profile\\package.json).',
     ))
+  } else if (phase === 'empty') {
+    advice.push(t(
+      `本机仓库还是空目录：${repo} —— 执行「拉取」会从云端把仓库内容拉到这里（首次拉取自动初始化，不需要推送）`,
+      `The local repo is still an empty folder: ${repo} — running Pull brings the repo down from the cloud (the first pull initializes it; no push needed).`,
+    ))
   } else if (!isRepoDir(repo)) {
     advice.push(t(
-      `仓库目录不在了或不像仓库（缺 apply.ps1 或 profile\\package.json）：${repo} —— 请在「本机仓库」卡里重新设路径`,
-      `The repo directory is missing or does not look like a repo (no apply.ps1 or profile\\package.json): ${repo} — set the path again in the Local repo card.`,
+      `这个目录既不是空目录、也不像 dsh-config 仓库（缺 apply.ps1 或 profile\\package.json）：${repo} —— 请在「本机仓库」卡里重新设路径`,
+      `That folder is neither empty nor a dsh-config repo (no apply.ps1 or profile\\package.json): ${repo} — set the path again in the Local repo card.`,
     ))
   } else if (!isFile(join(repo, 'sync.ps1'))) {
     advice.push(t(
@@ -757,6 +785,13 @@ async function inspect(config) {
       path: repo,
       // 有路径 ≠ 目录还在：路径被移走/改名时这里必须是 false，面板才会重新强制设置。
       exists: Boolean(repo) && isRepoDir(repo),
+      // 空目录 = 等首次拉取（正常状态，不报异常）；pushAllowed/pullAllowed 就是按它算出来的门禁
+      phase,
+      empty: phase === 'empty',
+      // 推送只允许在真仓库上：空目录没有内容可推，硬推只会把本机状态写进一份不存在的历史
+      pushAllowed: phase === 'ok',
+      // 拉取允许 ok / empty：sync.ps1 的 Initialize-RepoIfNeeded 会自动 init + fetch + checkout
+      pullAllowed: phase === 'ok' || phase === 'empty',
       // 路径是怎么来的：settings=本机设置（面板可改）、config=插件配置、env=环境变量、auto=自动探测、none=没配
       source: resolved.source,
       configured: Boolean(settings.repoPath || config?.repoPath),
@@ -1474,17 +1509,15 @@ async function handleSettings(req, res, config) {
     if (has('repoPath')) {
       repoPath = String(body.repoPath || '').trim().replace(/[\\/]+$/, '')
       if (!repoPath) throw new Error(t('仓库路径不能为空', 'Repo path cannot be empty'))
-      // 新机器上这个目录常常还不存在、或者是个空目录（等着首次拉取去克隆）：都允许存。
+      // 新机器上这个目录常常还不存在、或者是个空目录（等着首次拉取去初始化）：都允许存。
       // 只有「已经有别的东西、又明显不是 dsh-config 仓库」才拒，免得住错地方把人家目录写乱。
-      if (isDir(repoPath) && !isRepoDir(repoPath)) {
-        let entries = []
-        try { entries = readdirSync(repoPath) } catch { }
-        if (entries.length > 0 && !isFile(join(repoPath, '.git', 'HEAD'))) {
-          throw new Error(t(
-            `这个目录里已经有别的东西，又不像 dsh-config 仓库（缺 apply.ps1 或 profile\\package.json）：${repoPath}`,
-            `That directory already holds something else and does not look like a dsh-config repo (no apply.ps1 or profile\\package.json): ${repoPath}`,
-          ))
-        }
+      // 判据统一交给 repoPhase，跟面板、体检那边保持同一套口径；带 .git\HEAD 的目录
+      // （可能正克隆到一半）也放行，否则刚 init 完的目录会被拒。
+      if (repoPath && repoPhase(repoPath) === 'unusable' && !isFile(join(repoPath, '.git', 'HEAD'))) {
+        throw new Error(t(
+          `这个目录里已经有别的东西，又不像 dsh-config 仓库（缺 apply.ps1 或 profile\\package.json）：${repoPath}`,
+          `That directory already holds something else and does not look like a dsh-config repo (no apply.ps1 or profile\\package.json): ${repoPath}`,
+        ))
       }
     }
 
@@ -2508,6 +2541,22 @@ async function handleAuto(req, res, config) {
     const appRoot = resolveAppRoot(config?.appRoot) || ''
 
     if (action === 'check') {
+      // 空白目录/还没建：这是「等首次拉取」的正常状态，不是错误 —— 别拿 git 命令去撞空目录
+      const phase = repoPhase(repo)
+      if (phase !== 'ok') {
+        autoState.checking = false
+        autoState.lastCheckAt = Date.now()
+        autoState.lastCheckError = ''
+        autoState.drift = null
+        sendJson(res, 200, {
+          ok: true, action, drift: null, error: null, pendingPull: true,
+          note: t(
+            '本机仓库还是空的：先执行「拉取」把云端内容拉下来，之后再比对差异',
+            'The local repo is still empty: run Pull to bring the cloud content down first, then drift can be compared.',
+          ),
+        })
+        return
+      }
       autoState.checking = true
       autoState.lastCheckError = ''
       const drift = await checkDrift(repo)
@@ -2558,6 +2607,13 @@ async function handleAuto(req, res, config) {
 
     if (action === 'pull-now' || action === 'push-now') {
       const mode = action === 'pull-now' ? 'pull' : 'push'
+      // 推送的门禁：本机仓库必须是真仓库；空目录只允许拉取（面板按钮那边也已经禁掉，这里再兜一层）
+      if (mode === 'push' && repoPhase(repo) !== 'ok') {
+        throw new Error(t(
+          `本机仓库还是空的（${repo}）：先「拉取」云端内容，再生成推送`,
+          `The local repo is still empty (${repo}): run Pull to get the cloud content first, then push.`,
+        ))
+      }
       // 拉取/推送做完都把客户端拉回来（用户要求"完成后自动启动 dsh"），仍受 autoRestart 开关约束
       const restart = body.restart !== false && settings.autoRestart !== false
       const started = await spawnWatcher({ mode, repo, appRoot, dshHome, restart })
@@ -2591,7 +2647,10 @@ function scheduleAutoStart(config) {
       if (autoState.pending) return
       const repo = resolveRepo(config?.repoPath, dshHome).repo || ''
       if (!repo || !isDir(join(repo, '.git'))) {
-        autoState.lastCheckError = t('仓库还没就位，跳过本次自动检查', 'The repo is not in place yet — skipping this auto check')
+        // 空目录是「等首次拉取」的正常状态：不记错误，免得面板的云端徽标把它当成 fetch 失败
+        autoState.lastCheckError = (repo && repoPhase(repo) === 'empty')
+          ? ''
+          : t('仓库还没就位，跳过本次自动检查', 'The repo is not in place yet — skipping this auto check')
         autoState.lastCheckAt = Date.now()
         return
       }
@@ -2696,6 +2755,17 @@ async function handlePrepare(req, res, config) {
       ))
     }
     const repoReady = isRepoDir(repo)
+    const phase = repoPhase(repo)
+    // 空白文件夹（或还没建）代表「等首次拉取」：只允许拉取，不允许推送 ——
+    // 没有仓库内容可推，硬推等于把本机状态写进一份并不存在的历史。
+    if ((action === 'push' || action === 'all') && phase !== 'ok') {
+      if (action === 'push') {
+        throw new Error(t(
+          `本机仓库还是空的（${repo}）：先执行「拉取」把云端内容拉下来，之后才能推送`,
+          `The local repo is still empty (${repo}): run Pull first to bring the cloud content down, then push.`,
+        ))
+      }
+    }
     // 推送 / 拉取都以「云端仓库地址」为前置；还原（最新快照或指定快照）只动本机快照，不需要远端。
     if (action !== 'restore' && action !== 'restore-backup') {
       const origin = isDir(join(repo, '.git')) ? await git(repo, ['remote', 'get-url', 'origin']) : null
@@ -2729,13 +2799,19 @@ async function handlePrepare(req, res, config) {
     const bootstrap = repoReady ? null : {
       repo,
       note: t(
-        '本机还没有这个仓库（或还没克隆）：生成的三份脚本先用插件自带的 runtime，第一次执行拉取/推送会自动从云端克隆到该目录',
-        'This repo is not on this machine yet (or not cloned): the three scripts use the plugin\'s bundled runtime, and the first pull/push clones it from the cloud into that directory',
+        phase === 'empty'
+          ? '本机仓库是空目录：点「拉取」会用插件自带的 runtime 从云端把仓库内容拉到这个路径（拉完就能正常推送/拉取）'
+          : '本机还没有这个仓库（或还没克隆）：生成的三份脚本先用插件自带的 runtime，第一次执行拉取会自动从云端克隆到该目录',
+        phase === 'empty'
+          ? 'The local repo folder is empty: Pull uses the bundled runtime to fetch the repo from the cloud into that path (after that, push/pull work normally).'
+          : 'This repo is not on this machine yet (or not cloned): the scripts use the plugin\'s bundled runtime, and the first pull clones it from the cloud into that directory.',
       ),
     }
     if (action === 'all') {
-      const built = ['push', 'pull', 'restore'].map((a) => buildCmd(config, a, repo, appRoot, dshHome, state))
-      sendJson(res, 200, { ok: true, action, built, bootstrap })
+      // 空目录不生成推送：面板只允许「拉取」这条线，这里也保持一致，免得脚本白跑一趟
+      const wanted = phase === 'ok' ? ['push', 'pull', 'restore'] : ['pull', 'restore']
+      const built = wanted.map((a) => buildCmd(config, a, repo, appRoot, dshHome, state))
+      sendJson(res, 200, { ok: true, action, built, bootstrap, skipped: phase === 'ok' ? [] : ['push'] })
       return
     }
     const built = buildCmd(config, action, repo, appRoot, dshHome, stateWithBackup)
