@@ -605,6 +605,23 @@ if (prevScope === null) { try { unlinkSync(scopeFile) } catch { } } else writeFi
   const applySrc = pickRuntime('apply.ps1') ? readFileSync(pickRuntime('apply.ps1'), 'utf8') : ''
   const pickTool = (name) => [join(pluginRoot, 'runtime', 'tools', name), join(pluginRoot, 'tools', name)].find((p) => existsSync(p)) || ''
   const helperSrc = pickTool('fix-session-cwd.mjs') ? readFileSync(pickTool('fix-session-cwd.mjs'), 'utf8') : ''
+  // 执行体没跑起来时 PowerShell 只喷红字、$LASTEXITCODE 还是上一条命令残留的 0，
+  // 整次同步就被当成成功（写 ok:true + 刷分水岭），本机改动静默滞留。三道锁缺一不可。
+  check('调用执行体前压哨兵值，且终止错误被捕获后一律判失败',
+    postExitSrc.includes('$LASTEXITCODE = -1')
+      && postExitSrc.includes('$invokeOk = $false')
+      && /catch \{[\s\S]{0,400}执行体调用异常/.test(postExitSrc)
+      && /if \(-not \$invokeOk\)[\s\S]{0,260}\$code = 1/.test(postExitSrc),
+    'post-exit.ps1')
+  check('调用执行体前确认文件仍存在（安装覆盖到一半也能拦住）',
+    /\$sync = Find-PluginSync[\s\S]{0,1200}Test-Path -LiteralPath \$sync/.test(postExitSrc),
+    'post-exit.ps1')
+  check('同步失败时不刷新同步分水岭（免得失败变成静默漏推）',
+    postExitSrc.includes('RestartClient -SkipWatermark:$failed')
+      && postExitSrc.includes('function RestartClient([switch]$SkipWatermark)')
+      && /if \(-not \$SkipWatermark\)/.test(postExitSrc),
+    'post-exit.ps1')
+
   const SCOPE_GROUPS = ['profile', 'prompt', 'skills', 'presets', 'storages-record', 'settings', 'mnemon', 'local-plugins', 'workspace', 'conversations']
   check('公共脚本提供 scope 读取与判断函数',
     ['Get-SyncScope', 'Test-SyncGroupEnabled', 'Test-SyncItemEnabled', 'Test-SyncDeleteCloud', 'Skip-SyncGroup', 'Skip-SyncItem']

@@ -246,7 +246,7 @@ function Start-Detached([string]$exe) {
   }
 }
 
-function RestartClient {
+function RestartClient([switch]$SkipWatermark) {
   $exe = $null
   if ($AppRoot) { $candidate = Join-Path $AppRoot 'DeepSeek Harness.exe'; if (Test-Path -LiteralPath $candidate) { $exe = $candidate } }
   if (-not $exe) {
@@ -293,21 +293,28 @@ function RestartClient {
     # 重启成功后再刷一次"上次同步时间"。apply/capture 刚写过的文件 mtime 落在这之前，
     # 客户端起来 8 秒的首检会把它们当成"本机有未推送的新内容"，立刻排一个空推送
     #（实测：拉取重启后 19:46:04 又排了一次 push）。把分水岭推到重启之后，首检就安静了。
-    try {
-      $stateFile = Join-Path $DshHome 'config-sync-state.json'
-      $state = @{ lastSyncAt = (Get-Date).ToString('o'); mode = $Mode; repo = $RepoRoot }
-      if (Test-Path -LiteralPath $stateFile) {
-        $old = Get-Content -LiteralPath $stateFile -Raw | ConvertFrom-Json
-        $state = [ordered]@{
-          lastSyncAt = (Get-Date).ToString('o')
-          mode       = $Mode
-          repo       = $(if ($old.repo) { $old.repo } else { $RepoRoot })
-          head       = $old.head
+    #
+    # 但**同步失败时绝不能刷**：分水岭一推，面板就认为"已同步"，本机改动再也等不到提示，
+    # 等于把一次失败变成静默丢数据（2026-11-12 21:37 就是这么演的）。宁可按一次多余推送。
+    if (-not $SkipWatermark) {
+      try {
+        $stateFile = Join-Path $DshHome 'config-sync-state.json'
+        $state = @{ lastSyncAt = (Get-Date).ToString('o'); mode = $Mode; repo = $RepoRoot }
+        if (Test-Path -LiteralPath $stateFile) {
+          $old = Get-Content -LiteralPath $stateFile -Raw | ConvertFrom-Json
+          $state = [ordered]@{
+            lastSyncAt = (Get-Date).ToString('o')
+            mode       = $Mode
+            repo       = $(if ($old.repo) { $old.repo } else { $RepoRoot })
+            head       = $old.head
+          }
         }
-      }
-      [IO.File]::WriteAllText($stateFile, ($state | ConvertTo-Json -Depth 4), (New-Object Text.UTF8Encoding $false))
-      Log '已刷新同步分水岭（重启后的首检不会误报待推送）'
-    } catch { Log ("刷新同步分水岭失败：{0}" -f $_.Exception.Message) }
+        [IO.File]::WriteAllText($stateFile, ($state | ConvertTo-Json -Depth 4), (New-Object Text.UTF8Encoding $false))
+        Log '已刷新同步分水岭（重启后的首检不会误报待推送）'
+      } catch { Log ("刷新同步分水岭失败：{0}" -f $_.Exception.Message) }
+    } else {
+      Log '同步未成功：保留原分水岭，下次启动首检仍会提示本机有内容待推送'
+    }
   } else {
     Log '找不到 DeepSeek Harness.exe，跳过自动重启'
   }
@@ -469,6 +476,8 @@ function Find-PluginSync {
 $sync = Find-PluginSync
 if (-not $sync -and $RepoRoot) { $candidate = Join-Path $RepoRoot 'sync.ps1'; if (Test-Path -LiteralPath $candidate) { $sync = $candidate } }
 if (-not $sync) { Log '找不到 sync.ps1（插件 runtime 和仓库都没有），放弃'; Finish 3 '缺 sync.ps1' }
+# 找到了也可能已经不可用（安装覆盖到一半、目录被移走）：真正调用前再确认一次文件在
+if (-not (Test-Path -LiteralPath $sync)) { Log ('执行体文件不存在：{0}' -f $sync); Finish 3 '缺 sync.ps1' }
 if (-not $RepoRoot) { $RepoRoot = Split-Path -Parent $sync }
 Log ("执行体：{0}" -f $sync)
 
@@ -498,9 +507,29 @@ if ($Mode -eq 'pull') {
 }
 
 # ---------- 执行 ----------
-& $sync @syncArgs *>&1 | ForEach-Object { Log ([string]$_) }
+# 这一步的返回码必须自己保证可信。踩过的坑：& $sync 没真正跑起来时（执行体被覆盖/占用、
+# 脚本自身抛终止错误），PowerShell 只把红字喷到控制台，而 $LASTEXITCODE 仍是上一条命令
+# 残留的 0 —— 于是整次同步被当成成功：结果写 ok:true、分水岭被刷新，面板从此不再提示
+# 「待推送」，本机改动静默滞留（2026-11-12 21:37 实测，控制台报
+# 「管道元素中的 & 后面的表达式生成无效的对象」，日志里却一条证据都没有）。
+# 所以：先压哨兵值 → 用 try/catch 兜住终止错误并写进日志 → 没跑完一律判失败。
+$LASTEXITCODE = -1
+$invokeOk = $false
+try {
+  & $sync @syncArgs *>&1 | ForEach-Object { Log ([string]$_) }
+  $invokeOk = $true
+} catch {
+  Log ('执行体调用异常：{0}' -f $_.Exception.Message)
+  if ($_.InvocationInfo) { Log ('  位置：{0}' -f (($_.InvocationInfo.PositionMessage) -replace "`r?`n", ' ')) }
+  if ($_.ScriptStackTrace) { Log ('  堆栈：{0}' -f (($_.ScriptStackTrace) -replace "`r?`n", ' ')) }
+}
 $code = $LASTEXITCODE
-if ($null -eq $code) { $code = 0 }
+if (-not $invokeOk) {
+  if ($null -eq $code -or $code -le 0) { $code = 1 }
+  Log '执行体没有正常跑完，本次按失败处理（不写成功结果、不刷新分水岭）'
+} elseif ($null -eq $code) {
+  $code = 0
+}
 Log ("sync.ps1 {0} 退出码：{1}" -f $Mode, $code)
 
 $failed = ($code -ne 0)
@@ -562,7 +591,8 @@ if ($Mode -eq 'pull') {
 }
 
 # 动作做完、结果已落盘，再把客户端拉起来（更新模式在上面自己调过 RestartClient 了）
-if ($Restart) { RestartClient }
+# 失败时刻意不刷分水岭：否则面板会以为已经同步过，本机改动再也等不到「待推送」提示。
+if ($Restart) { RestartClient -SkipWatermark:$failed }
 
 if ($failed) {
   # 文案按动作分开写（旧版一律写「pull 已尝试回滚」，push 失败时也这么报，误导排查）
