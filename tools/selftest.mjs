@@ -94,7 +94,7 @@ function check(label, cond, detail = '') {
 }
 
 console.log('== dsh-config-sync 宿主半身自检 ==')
-check('apply() 注册了路由', routes.size === 5 && routes.has('/config-sync/update'), `实际 ${routes.size} 条：${[...routes.keys()].join(', ')}`)
+check('apply() 注册了路由', routes.size === 6 && routes.has('/config-sync/update') && routes.has('/config-sync/scope'), `实际 ${routes.size} 条：${[...routes.keys()].join(', ')}`)
 
 const status = await call('/config-sync/status', { headers: { host: 'localhost:3080' } })
 const body = JSON.parse(status.body || '{}')
@@ -299,6 +299,67 @@ check('保存后设置文件里出现 repoPath', existsSync(settingsFile) && rea
 if (prevSettings === null) { try { unlinkSync(settingsFile) } catch { } }
 else writeFileSync(settingsFile, prevSettings, 'utf8')
 
+// --- 同步内容勾选（scope）：默认全勾；勾选落盘到本机 config-sync-scope.json（不进仓库） ---
+// 这里会真的写用户的 scope 文件，所以先备份、断言完原样还原（和上面设置文件同一套做法）。
+const dshHomeDir = dirname(settingsFile)
+const scopeFile = join(dshHomeDir, 'config-sync-scope.json')
+const prevScope = existsSync(scopeFile) ? readFileSync(scopeFile, 'utf8') : null
+const scopeGet = await call('/config-sync/scope', { headers: { host: 'localhost:3080' } })
+const scopeBody = JSON.parse(scopeGet.body || '{}')
+check('scope 返回 200', scopeGet.statusCode === 200, String(scopeGet.statusCode))
+check('scope 列出十组同步内容', Array.isArray(scopeBody.groups) && scopeBody.groups.length === 10, `${(scopeBody.groups || []).length} 组`)
+check('scope 每组都带标题 / 说明 / 明细项',
+  (scopeBody.groups || []).every((g) => g && typeof g.title === 'string' && typeof g.desc === 'string' && Array.isArray(g.items)),
+  (scopeBody.groups || []).map((g) => g.id).join(', '))
+check('没配过时默认全勾（组与明细都参与同步）', (scopeBody.groups || []).every((g) => g.enabled === true))
+check('deleteCloud 默认关闭（取消勾选不删云端副本）', scopeBody.deleteCloud === false)
+check('scope 带回本机文件路径（面板要显示出来）', Boolean(scopeBody.path && scopeBody.path.endsWith('config-sync-scope.json')), scopeBody.path || '(空)')
+
+// 挑一个「本机真实存在、且允许单独排除」的明细项来测组内排除（不能用编出来的名字：
+// 服务端会把不存在的排除项清掉，否则以后勾不回来——那反而会被判失败）
+const exTarget = (scopeBody.groups || [])
+  .filter((g) => g.id !== 'skills')
+  .map((g) => ({ group: g.id, item: (g.items || []).find((i) => i.excludable !== false) }))
+  .find((x) => Boolean(x.item)) || null
+const groupsPayload = { skills: { enabled: false, excluded: [] } }
+if (exTarget) groupsPayload[exTarget.group] = { enabled: true, excluded: [exTarget.item.id] }
+const scopePost = await call('/config-sync/scope', {
+  method: 'POST',
+  headers: { host: 'localhost:3080', 'content-type': 'application/json' },
+  body: JSON.stringify({ deleteCloud: true, groups: groupsPayload }),
+})
+const scopePostBody = JSON.parse(scopePost.body || '{}')
+check('scope 保存返回 ok', scopePost.statusCode === 200 && scopePostBody.ok === true, scopePost.body.slice(0, 160))
+check('scope 落盘到本机 config-sync-scope.json', existsSync(scopeFile), scopeFile)
+check('落盘记住取消的组、组内排除项与 deleteCloud',
+  existsSync(scopeFile) && (() => {
+    try {
+      const o = JSON.parse(readFileSync(scopeFile, 'utf8'))
+      const okGroup = o.deleteCloud === true && o.groups?.skills?.enabled === false
+      const okItem = !exTarget || (Array.isArray(o.groups?.[exTarget.group]?.excluded) && o.groups[exTarget.group].excluded.includes(exTarget.item.id))
+      return okGroup && okItem
+    } catch { return false }
+  })(), scopeFile)
+check('全勾的组不写进文件（默认就是全勾，文件只留差异）',
+  existsSync(scopeFile) && !readFileSync(scopeFile, 'utf8').includes('"storages-record"'), scopeFile)
+check('不存在的排除项会被清掉（免得以后看不见却一直挡着同步）',
+  existsSync(scopeFile) && (() => {
+    try {
+      const o = JSON.parse(readFileSync(scopeFile, 'utf8'))
+      const ids = []
+      for (const [id, g] of Object.entries(o.groups || {})) for (const x of (g.excluded || [])) ids.push(`${id}:${x}`)
+      const real = new Set()
+      for (const g of (scopeBody.groups || [])) for (const i of (g.items || [])) real.add(`${g.id}:${i.id}`)
+      return ids.every((x) => real.has(x))
+    } catch { return false }
+  })(), scopeFile)
+const scopeAfter = JSON.parse((await call('/config-sync/scope', { headers: { host: 'localhost:3080' } })).body || '{}')
+check('读回来的状态与保存的一致',
+  (scopeAfter.groups || []).some((g) => g.id === 'skills' && g.enabled === false)
+  && (!exTarget || (scopeAfter.groups || []).some((g) => g.id === exTarget.group && g.items.some((i) => i.id === exTarget.item.id && i.enabled === false))),
+  (scopeAfter.groups || []).map((g) => `${g.id}:${g.enabled}`).join(', '))
+if (prevScope === null) { try { unlinkSync(scopeFile) } catch { } } else writeFileSync(scopeFile, prevScope, 'utf8')
+
 // 「没配仓库就生成不了」这条分支只能在没有仓库的机器上跑到：本机自动探测一定命中
 // D:\dsh-config，所以这里退一步做静态断言——宿主源码里确实有这道守卫，且提示指向面板。
 {
@@ -385,6 +446,45 @@ else writeFileSync(settingsFile, prevSettings, 'utf8')
     clientSrc.includes('重启并安装') && clientSrc.includes('Restart & install'), 'client.js')
   check('面板会展示「已下载，待安装」这一态',
     clientSrc.includes('preparedReady') && clientSrc.includes('已下载，待安装'), 'client.js')
+
+  // 0.3.8：同步内容勾选 —— 面板写 <DshHome>\config-sync-scope.json，capture/apply 读同一个文件。
+  // 关键契约：默认全勾、未勾选一律跳过、deleteCloud 默认关（关着时绝不删云端副本）。
+  const pickRuntime = (name) => [join(pluginRoot, 'runtime', name), join(pluginRoot, name)].find((p) => existsSync(p)) || ''
+  const commonSrc = pickRuntime('dsh-sync-common.ps1') ? readFileSync(pickRuntime('dsh-sync-common.ps1'), 'utf8') : ''
+  const captureSrc = pickRuntime('capture.ps1') ? readFileSync(pickRuntime('capture.ps1'), 'utf8') : ''
+  const applySrc = pickRuntime('apply.ps1') ? readFileSync(pickRuntime('apply.ps1'), 'utf8') : ''
+  const SCOPE_GROUPS = ['profile', 'prompt', 'skills', 'presets', 'storages-record', 'settings', 'mnemon', 'local-plugins', 'workspace', 'conversations']
+  check('公共脚本提供 scope 读取与判断函数',
+    ['Get-SyncScope', 'Test-SyncGroupEnabled', 'Test-SyncItemEnabled', 'Test-SyncDeleteCloud', 'Skip-SyncGroup', 'Skip-SyncItem']
+      .every((n) => commonSrc.includes(`function ${n}`)), 'dsh-sync-common.ps1')
+  check('scope 文件不存在时按全勾处理（老机器行为不变）',
+    commonSrc.includes('config-sync-scope.json') && /function Get-SyncScope[\s\S]{0,700}Test-Path/.test(commonSrc),
+    'dsh-sync-common.ps1')
+  check('capture 十组都按勾选判断',
+    SCOPE_GROUPS.every((g) => captureSrc.includes(`Test-SyncGroupEnabled $Scope '${g}'`)),
+    SCOPE_GROUPS.filter((g) => !captureSrc.includes(`Test-SyncGroupEnabled $Scope '${g}'`)).join(', ') || 'capture.ps1')
+  const EXCLUDABLE = ['skills', 'presets', 'settings', 'local-plugins', 'prompt', 'storages-record', 'workspace', 'conversations']
+  check('capture 组内还能单独排除（skills / presets / settings / local-plugins / prompt / 台账 / 工作区 / 会话）',
+    EXCLUDABLE.every((g) => captureSrc.includes(`Test-SyncItemEnabled $Scope '${g}'`)),
+    EXCLUDABLE.filter((g) => !captureSrc.includes(`Test-SyncItemEnabled $Scope '${g}'`)).join(', ') || 'capture.ps1')
+  check('apply 十组都按勾选跳过（未勾选的不还原）',
+    SCOPE_GROUPS.every((g) => applySrc.includes(`Test-SyncGroupEnabled $Scope '${g}'`)),
+    SCOPE_GROUPS.filter((g) => !applySrc.includes(`Test-SyncGroupEnabled $Scope '${g}'`)).join(', ') || 'apply.ps1')
+  check('deleteCloud 默认关：关着时跳过就只是跳过，不删云端副本',
+    /function Skip-SyncGroup[\s\S]{0,400}Test-SyncDeleteCloud/.test(commonSrc)
+    && commonSrc.includes('if (-not (Test-SyncDeleteCloud $Scope)) { return }'), 'dsh-sync-common.ps1')
+  check('apply 的 -PruneSkills 不会删掉被排除的本机 Skill',
+    applySrc.includes("(Test-SyncItemEnabled $Scope 'skills' $_.Name)"), 'apply.ps1')
+  check('会话按工作区过滤，且未勾选的会话不会被铺回本机',
+    captureSrc.includes('$skipSessDirs') && applySrc.includes('$skipConvDirs'), 'capture/apply')
+  check('工作区登记表也跟着过滤（不会「数据跳过了、登记表还写着」）',
+    captureSrc.includes("$entries = @($entries | Where-Object { Test-SyncItemEnabled $Scope 'workspace' $_.Id })")
+    && applySrc.includes("$plan = @($plan | Where-Object { Test-SyncItemEnabled $Scope 'workspace' $_.Id })"),
+    'capture/apply')
+  check('面板有「同步内容」卡：逐组勾选 + 展开明细 + deleteCloud 开关',
+    clientSrc.includes('function ScopeCard') && clientSrc.includes('callScope(')
+    && clientSrc.includes('同步内容') && clientSrc.includes('Sync content')
+    && clientSrc.includes('取消勾选时顺手删掉云端副本'), 'client.js')
 }
 
 // 提交说明：面板里填的那句要进 push 脚本，时间由 sync.ps1 执行时追加

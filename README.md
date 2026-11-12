@@ -97,6 +97,28 @@ https://raw.githubusercontent.com/QcWyGm/dsh-config-sync/main/market-index.json
 
 **上次自动同步的结果**：`~\.dsh\auto-sync-result.json` 若是 15 分钟内的，**客户端一启动就弹**一条 5 秒浮层（`apply()` 里挂载后 1.5 秒查一次 `status`，自己 append 到 body、面板没打开也能显示；成功/失败 + 原因 + 失败带日志路径）。面板里那条提示与它共用一个判据和一个 localStorage 键，同一份结果只弹一次。
 
+## 同步内容勾选（0.3.8 起）
+
+面板新增「同步内容」卡：把云端同步的十组内容逐组列出来，**默认全勾**；展开能看到组内明细项，组和单项都能取消勾选 —— 取消后**推送不再抓、拉取不再还原**，重新勾上就继续同步（推送和拉取共用同一份勾选）。
+
+| 组 | 云端目录 | 明细项（可单独排除） |
+|---|---|---|
+| 本机 profile | `profile/` | package.json / lock / cordis 等（整组开关，文件互相咬合，不支持单项） |
+| 提示词 | `prompt/` | `AGENTS.md`、`prompt-inject.md` |
+| 技能 | `skills/` | 每个技能目录 |
+| 预设 | `presets/` | 每个预设 |
+| 技能市场台账 | `storages-record/` | `skill-market-installed.json`、`skill-market-panel.json` |
+| 插件配置 | `settings/` | 每个配置文件 |
+| 记忆 | `mnemon/` | 整目录（只有一项） |
+| 本地插件 | `local-plugins/` | 每个 link 插件 |
+| 工作区 | `workspace/` | 每个登记的工作区（登记表 `workspace-registry.json` 也只写勾选项） |
+| 会话 | `conversations/` | 每个工作区对应的会话 |
+
+- 勾选记在 `~\.dsh\config-sync-scope.json`，**跟本机走、不进仓库**（另一台机器各自勾）；文件里只留与默认不同的项，删掉这个文件就等于恢复全勾。
+- 跳过**两侧都生效**：`capture.ps1` 不抓（不再写进仓库）、`apply.ps1` 不还原（不动本机）。`-PruneSkills` 也不会把"你勾掉的本机技能"当成多出来的项删掉。
+- 卡里另有一个开关「取消勾选时顺手删掉云端副本」，**默认关闭**：关着时取消勾选只是"这边不再管它"，云端那份留着，重新勾上立刻继续同步；打开后取消勾选会真的删掉仓库里的对应目录/子路径（推送时删、提交后另一台机器也拉不到），**删除不可恢复**。
+- 点不动的明细项（profile 五个文件、mnemon）是刻意做成"整组开关"：lock 与 package.json 的 specifier 必须一致，单独排除会装不起来。
+
 ## 自动同步 / 自动推送（两个开关，默认关）
 
 | 开关 | 行为 |
@@ -145,6 +167,7 @@ https://raw.githubusercontent.com/QcWyGm/dsh-config-sync/main/market-index.json
 | `POST /config-sync/settings` | `{repoPath?, remoteUrl?, sshKey?, autoPull?, autoPush?, autoRestart?}`：校验 → 写设置 →（地址变了才动 git），失败回滚并 400 |
 | `POST /config-sync/auto` | `{action:'check'\|'pull-now'\|'push-now'\|'cancel', closeNow?, restart?}`；`check` 只读 fetch 比对，`pull-now`/`push-now` 不带 `/F` 关闭客户端（走正常退出，配置能存下来）；`status` 里 `auto.pending` 带 `reason`（为什么排队） |
 | `GET/POST /config-sync/update` | `{action:'check'\|'install-live'\|'restart'\|'apply'}`：`check` 重新读清单（多源依次试）；`install-live` 运行中下载+校验+覆盖安装（不退出 DSH，回 `installed` 与 `restartRequired`）；`restart` 排队 relaunch 后关闭 DSH；`apply` 是「退出 DSH 后再安装」的兜底 |
+| `GET/POST /config-sync/scope` | GET 回十组同步范围（每组 `{id,title,desc,enabled,items:[{id,label,enabled,excludable}]}` + `deleteCloud` + 本机文件 `path`）；POST `{deleteCloud?, groups:{id:{enabled?,excluded?}}}` 只落与默认不同的项（全勾的组不写文件），不存在的排除项会被清掉 |
 
 跨站请求 403。客户端只 `fetch` 这几条，不 import 任何 `@deepseek-ai/dsh-client-*`，样式只用 `--dsw-alias-*` token。
 

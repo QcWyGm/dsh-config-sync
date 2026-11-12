@@ -367,3 +367,84 @@ function Resolve-DshAppRoot([string]$explicit) {
   }
   return $null
 }
+
+# ---------- 同步内容勾选（config-sync-scope.json）----------
+# 面板「同步内容」卡片的落点：每组一行、组内还能排除单项。文件不存在 = 全勾（老行为不变）。
+# 纪律：勾选只决定「要不要处理」——跳过就是既不抓也不还原；
+#       只有 deleteCloud 打开时才顺手删掉仓库里那份副本（默认关闭，删了就不可逆）。
+$SyncScopeGroups = @('profile', 'prompt', 'skills', 'presets', 'storages-record', 'settings', 'mnemon', 'local-plugins', 'workspace', 'conversations')
+
+function Get-SyncScopePath([string]$DshHome) { return (Join-Path $DshHome 'config-sync-scope.json') }
+
+function Get-SyncScope([string]$DshHome) {
+  $path = Get-SyncScopePath $DshHome
+  $fallback = [pscustomobject]@{ version = 1; deleteCloud = $false; groups = [pscustomobject]@{} }
+  if (-not $path -or -not (Test-Path -LiteralPath $path)) { return $fallback }
+  try {
+    $raw = Get-Content -LiteralPath $path -Raw -Encoding utf8
+    if (-not $raw -or -not $raw.Trim()) { return $fallback }
+    $obj = $raw | ConvertFrom-Json
+    if ($null -eq $obj) { return $fallback }
+    if ($null -eq $obj.PSObject.Properties['deleteCloud']) {
+      $obj | Add-Member -NotePropertyName deleteCloud -NotePropertyValue $false -Force
+    }
+    if ($null -eq $obj.PSObject.Properties['groups']) {
+      $obj | Add-Member -NotePropertyName groups -NotePropertyValue ([pscustomobject]@{}) -Force
+    }
+    return $obj
+  } catch {
+    Warn ("config-sync-scope.json 解析失败，按「全勾」处理：" + $_.Exception.Message)
+    return $fallback
+  }
+}
+
+function Get-SyncScopeGroup($Scope, [string]$Group) {
+  if (-not $Scope -or -not $Scope.groups) { return $null }
+  $p = $Scope.groups.PSObject.Properties[$Group]
+  if ($null -eq $p) { return $null }
+  return $p.Value
+}
+
+function Test-SyncGroupEnabled($Scope, [string]$Group) {
+  $g = Get-SyncScopeGroup $Scope $Group
+  if ($null -eq $g) { return $true }
+  $p = $g.PSObject.Properties['enabled']
+  if ($null -ne $p -and $p.Value -eq $false) { return $false }
+  return $true
+}
+
+function Test-SyncItemEnabled($Scope, [string]$Group, [string]$Item) {
+  if (-not (Test-SyncGroupEnabled $Scope $Group)) { return $false }
+  $g = Get-SyncScopeGroup $Scope $Group
+  if ($null -eq $g) { return $true }
+  $p = $g.PSObject.Properties['excluded']
+  if ($null -eq $p) { return $true }
+  return (-not (@($p.Value) -contains $Item))
+}
+
+function Test-SyncDeleteCloud($Scope) {
+  if (-not $Scope) { return $false }
+  return ($Scope.deleteCloud -eq $true)
+}
+
+# 整组被跳过时调用：deleteCloud 打开就把仓库里那份删掉；默认什么都不做（留着，以后勾回来接着用）
+function Skip-SyncGroup($Scope, [string]$RepoRoot, [string]$Group) {
+  Warn ("跳过（未勾选同步）：" + $Group)
+  if (-not (Test-SyncDeleteCloud $Scope)) { return }
+  $target = Join-Path $RepoRoot $Group
+  if (Test-Path -LiteralPath $target) {
+    Remove-Item -LiteralPath $target -Recurse -Force
+    Warn ("已按「删除云端副本」移除仓库里的 " + $Group)
+  }
+}
+
+# 组内单项被跳过时调用（item 是仓库里的相对路径，如 skills\foo、settings\x.json）
+function Skip-SyncItem($Scope, [string]$RepoRoot, [string]$Group, [string]$Item, [string]$RepoRel) {
+  if (-not (Test-SyncDeleteCloud $Scope) -or -not $RepoRel) { return }
+  $target = Join-Path $RepoRoot $RepoRel
+  if (Test-Path -LiteralPath $target) {
+    Remove-Item -LiteralPath $target -Recurse -Force
+    Warn ("已按「删除云端副本」移除仓库里的 " + $RepoRel)
+  }
+}
+

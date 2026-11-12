@@ -97,6 +97,28 @@ Body: repo path and source, branch and HEAD, behind/ahead/uncommitted, **local d
 
 **Last auto-sync result**: if `~\.dsh\auto-sync-result.json` is within 15 minutes, a 5-second toast pops **as soon as the client starts** (`apply()` checks `status` 1.5 s after mount, appends its own overlay to the body, so it shows without opening the panel; success/failure + reason + log path on failure). The line inside the panel shares the same predicate and the same localStorage key, so one result pops only once.
 
+## Sync scope (per-group and per-item checkboxes, since 0.3.8)
+
+The panel has a new "Sync content" card: the ten groups that sync to the cloud are listed individually and **checked by default**. Expanding a group shows its items, and both the group and each item can be unchecked — unchecked content is **no longer captured on push and no longer restored on pull**; tick it again and syncing resumes (push and pull share the same file).
+
+| Group | Cloud folder | Items (excludable individually) |
+|---|---|---|
+| Local profile | `profile/` | package.json / lockfile / cordis (group switch only — these files interlock) |
+| Prompts | `prompt/` | `AGENTS.md`, `prompt-inject.md` |
+| Skills | `skills/` | one entry per skill folder |
+| Presets | `presets/` | one entry per preset |
+| Skill-market ledger | `storages-record/` | `skill-market-installed.json`, `skill-market-panel.json` |
+| Plugin configs | `settings/` | one entry per config file |
+| Mnemon | `mnemon/` | the whole folder (single entry) |
+| Local plugins | `local-plugins/` | one entry per linked plugin |
+| Workspaces | `workspace/` | one entry per registered workspace (`workspace-registry.json` only lists checked ones) |
+| Conversations | `conversations/` | one entry per workspace |
+
+- Choices live in `~\.dsh\config-sync-scope.json`, **on this machine only and never committed** (each machine ticks its own); the file stores only what differs from the default, so deleting it means "everything checked".
+- Skipping applies to **both directions**: `capture.ps1` stops capturing (nothing new lands in the repo) and `apply.ps1` stops restoring (your machine is untouched). `-PruneSkills` also stops treating "a skill you unchecked" as an extra to delete.
+- The card carries one more switch, "Also delete the cloud copy when unchecked", **off by default**: while off, unchecking just means "this machine stops caring" and the cloud copy stays, so re-ticking resumes immediately; when on, unchecking really deletes the matching folder/sub-path from the repo on the next push (the other machine can no longer pull it) and **that deletion cannot be undone**.
+- Items you cannot tick (the five profile files, mnemon) are deliberately group-level switches: the lockfile specifiers must match package.json, and excluding one alone breaks installation.
+
 ## Auto sync / auto push (two switches, both off by default)
 
 | Switch | Behaviour |
@@ -144,8 +166,10 @@ The **Plugin update** card sits after the version contract card and shows the lo
 | `POST /config-sync/prepare` | `{action:'push'\|'pull'\|'restore'\|'all', message?}`, generates the matching `.cmd`; `all` returns `built: [...]` |
 | `POST /config-sync/settings` | `{repoPath?, remoteUrl?, sshKey?, autoPull?, autoPush?, autoRestart?}`: validate → write settings → (touch git only when the URL changed); failure rolls back and returns 400 |
 | `POST /config-sync/auto` | `{action:'check'\|'pull-now'\|'push-now'\|'cancel', closeNow?, restart?}`; `check` is a read-only fetch comparison, `pull-now`/`push-now` close the client without `/F` (a normal exit, so config is saved); `auto.pending` in `status` carries `reason` (why it queued) |
+| `GET/POST /config-sync/update` | `{action:'check'\|'prepare'\|'install-restart'\|'install-live'\|'restart'\|'apply'}`: `check` re-reads the manifest (mirrors tried in order); `prepare` only downloads into `~\.dsh\update-staging\`; `install-restart` hands that local package to the post-exit installer and closes DSH; `install-live` / `apply` / `restart` remain for CLI and compatibility |
+| `GET/POST /config-sync/scope` | GET returns the ten-group scope (`{id,title,desc,enabled,items:[{id,label,enabled,excludable}]}` per group, plus `deleteCloud` and the local file `path`); POST `{deleteCloud?, groups:{id:{enabled?,excluded?}}}` stores only what differs from the default (fully-checked groups are not written) and drops exclusions that no longer exist |
 
-Cross-origin requests get 403. The client only `fetch`es these four routes, imports no `@deepseek-ai/dsh-client-*`, and styles with `--dsw-alias-*` tokens only. Every request carries `accept-language`, which the host turns into Chinese or English text (`node:async_hooks` `AsyncLocalStorage`, one language per request).
+Cross-origin requests get 403. The client only `fetch`es these routes, imports no `@deepseek-ai/dsh-client-*`, and styles with `--dsw-alias-*` tokens only. Every request carries `accept-language`, which the host turns into Chinese or English text (`node:async_hooks` `AsyncLocalStorage`, one language per request).
 
 Paths: the repo follows the priority above; the client root prefers `config.appRoot` and otherwise derives from the plugin's own location (`<AppRoot>\dsh-config-sync-0.1.0`), so moving machines needs no edit; `.dsh` is `config.dshHome` → `%DSH_HOME%` → `~\.dsh`. The sync state file `~\.dsh\config-sync-state.json` is written by `sync.ps1`; the plugin only reads it.
 

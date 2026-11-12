@@ -287,6 +287,27 @@ window.__ModuleLoader__.load({
       return body
     }
 
+    /**
+     * 同步内容勾选：GET 取十组内容与当前勾选，POST 落盘 `<DshHome>\config-sync-scope.json`。
+     * 落盘后 capture.ps1 / apply.ps1 立刻按它跳过未勾选的内容（推送与拉取两侧同时生效）。
+     */
+    async function callScope(payload) {
+      const res = await fetch('/config-sync/scope', payload
+        ? {
+          method: 'POST',
+          cache: 'no-store',
+          credentials: 'same-origin',
+          headers: jsonHeaders,
+          body: JSON.stringify(payload),
+        }
+        : { cache: 'no-store', credentials: 'same-origin', headers: langHeaders() })
+      const text = await res.text()
+      let body
+      try { body = text ? JSON.parse(text) : null } catch { throw badJson(res) }
+      if (!res.ok || !body || body.ok !== true) throw new Error((body && body.error) || `${res.status}`)
+      return body
+    }
+
     /** 插件更新：读版本清单（服务端缓存 30 分钟），check 时强制重查。 */
     async function callUpdate(payload) {
       const res = await fetch('/config-sync/update', payload
@@ -603,6 +624,165 @@ window.__ModuleLoader__.load({
     }
 
     /** 面板整页：左侧栏「配置同步」点开后看到的就是这个。 */
+    /**
+     * 「同步内容」卡：把云端同步的十组内容逐组列出，组可展开看明细，明细项也能单独取消。
+     * 默认全勾；取消勾选后推送不再抓、拉取不再还原（两侧共用 <DshHome>\config-sync-scope.json）。
+     * deleteCloud（默认关）是唯一的破坏性选项：打开后取消勾选会顺手删掉仓库里的副本。
+     */
+    function ScopeCard() {
+      const [state, setState] = react.useState(null)
+      const [open, setOpen] = react.useState({})
+      const [busy, setBusy] = react.useState(false)
+      const [msg, setMsg] = react.useState('')
+      const [err, setErr] = react.useState('')
+
+      const load = async () => {
+        try {
+          const r = await callScope()
+          setState({ deleteCloud: r.deleteCloud === true, path: r.path || '', groups: r.groups || [] })
+          setErr('')
+        } catch (e) {
+          setErr(String((e && e.message) || e))
+        }
+      }
+      react.useEffect(() => { load() }, [])
+
+      const save = async (next) => {
+        setBusy(true); setErr(''); setMsg('')
+        try {
+          const groups = {}
+          for (const g of next.groups || []) {
+            const excluded = (g.items || []).filter((i) => i.enabled === false).map((i) => i.id)
+            groups[g.id] = { enabled: g.enabled !== false, excluded }
+          }
+          await callScope({ deleteCloud: next.deleteCloud === true, groups })
+          setState(next)
+          const offGroups = (next.groups || []).filter((g) => g.enabled === false).length
+          const offItems = (next.groups || []).reduce((n, g) => n + (g.items || []).filter((i) => i.enabled === false).length, 0)
+          setMsg(offGroups || offItems
+            ? M(`已保存：整组不同步 ${offGroups} 组、组内排除 ${offItems} 项`, `Saved: ${offGroups} group(s) off, ${offItems} item(s) excluded`)
+            : M('已保存：云端同步全部内容', 'Saved: everything is synced'))
+        } catch (e) {
+          setErr(String((e && e.message) || e))
+        } finally { setBusy(false) }
+      }
+
+      const toggleGroup = (id) => {
+        if (!state) return
+        save({ ...state, groups: state.groups.map((g) => (g.id === id ? { ...g, enabled: g.enabled === false } : g)) })
+      }
+      const toggleItem = (gid, iid) => {
+        if (!state) return
+        save({
+          ...state,
+          groups: state.groups.map((g) => (g.id === gid
+            ? { ...g, items: g.items.map((i) => (i.id === iid ? { ...i, enabled: i.enabled === false } : i)) }
+            : g)),
+        })
+      }
+      const toggleDeleteCloud = () => {
+        if (!state) return
+        save({ ...state, deleteCloud: state.deleteCloud !== true })
+      }
+
+      if (!state) {
+        return h('div', { style: S.card },
+          h('div', { style: S.cardTitle }, M('同步内容', 'Sync content')),
+          h('div', { style: S.hint }, err ? M(`读取失败：${err}`, `Read failed: ${err}`) : M('正在读取同步范围…', 'Loading sync scope…')),
+        )
+      }
+
+      const total = state.groups.reduce((n, g) => n + (g.items || []).length, 0)
+      const checked = state.groups.reduce((n, g) => (g.enabled === false ? n : n + (g.items || []).filter((i) => i.enabled !== false).length), 0)
+
+      return h('div', { style: S.card },
+        h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' } },
+          h('div', { style: S.cardTitle }, M('同步内容', 'Sync content')),
+          h('div', { style: { ...S.hint, flex: 1, minWidth: '160px' } },
+            M(
+              `默认全勾；取消勾选后推送不再抓、拉取不再还原（当前 ${checked}/${total} 项参与同步）`,
+              `Checked by default; unchecked content is neither captured on push nor restored on pull (${checked}/${total} items active)`,
+            )),
+          h('button', { type: 'button', style: S.btn, disabled: busy, onClick: load }, M('刷新', 'Refresh')),
+        ),
+        h('label', { style: { display: 'flex', gap: '8px', alignItems: 'flex-start', cursor: 'pointer' } },
+          h('input', {
+            type: 'checkbox', checked: state.deleteCloud === true, disabled: busy,
+            onChange: toggleDeleteCloud, style: { marginTop: '2px', flexShrink: 0 },
+          }),
+          h('div', { style: { minWidth: 0 } },
+            h('div', { style: { fontSize: '12px', lineHeight: '18px', color: 'var(--dsw-alias-label-primary)' } },
+              M('取消勾选时顺手删掉云端副本', 'Also delete the cloud copy when unchecked')),
+            h('div', { style: S.hint },
+              M(
+                '默认关闭：云端那份保留着，重新勾上就能继续同步。打开后删除不可恢复，另一台机器也拿不到这份内容。',
+                'Off by default: the cloud copy is kept, so ticking it again just resumes syncing. When on, deletion is permanent and the other machine can no longer get it.',
+              )),
+          ),
+        ),
+        h('div', { style: { display: 'flex', flexDirection: 'column', gap: '2px', maxHeight: '340px', overflowY: 'auto' } },
+          state.groups.map((g) => {
+            const items = g.items || []
+            const excluded = items.filter((i) => i.enabled === false).length
+            const expanded = open[g.id] === true
+            const groupOn = g.enabled !== false
+            return h('div', {
+              style: { borderTop: '1px solid var(--dsw-alias-border-l1)', paddingTop: '6px', paddingBottom: '2px' },
+            },
+              h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px' } },
+                h('input', {
+                  type: 'checkbox', checked: groupOn, disabled: busy,
+                  onChange: () => toggleGroup(g.id), style: { flexShrink: 0 },
+                }),
+                h('div', { style: { flex: 1, minWidth: 0 } },
+                  h('div', {
+                    style: {
+                      fontSize: '13px', lineHeight: '18px',
+                      color: groupOn ? 'var(--dsw-alias-label-primary)' : 'var(--dsw-alias-label-tertiary)',
+                      textDecoration: groupOn ? 'none' : 'line-through',
+                    },
+                  }, g.title),
+                  h('div', { style: S.hint }, g.desc),
+                ),
+                h('span', { style: S.hint }, items.length ? `${items.length - excluded}/${items.length}` : M('无明细', 'no items')),
+                items.length
+                  ? h('button', {
+                    type: 'button', style: S.btn, disabled: busy,
+                    onClick: () => setOpen({ ...open, [g.id]: !expanded }),
+                  }, expanded ? M('收起', 'Hide') : M('明细', 'Details'))
+                  : null,
+              ),
+              expanded
+                ? h('div', {
+                  style: {
+                    display: 'flex', flexDirection: 'column', gap: '2px',
+                    marginLeft: '26px', marginTop: '4px', maxHeight: '180px', overflowY: 'auto',
+                  },
+                },
+                  items.map((i) => h('label', {
+                    style: { display: 'flex', gap: '8px', alignItems: 'center', fontSize: '12px', cursor: 'pointer', opacity: groupOn ? 1 : 0.6 },
+                  },
+                    h('input', {
+                      type: 'checkbox', checked: i.enabled !== false, disabled: busy,
+                      onChange: () => toggleItem(g.id, i.id), style: { flexShrink: 0 },
+                    }),
+                    h('span', { style: { wordBreak: 'break-all' } }, i.label),
+                  )),
+                )
+                : null,
+            )
+          }),
+        ),
+        msg ? h('div', { style: S.hint }, msg) : null,
+        err ? h('div', { style: { ...S.hint, color: 'var(--dsw-alias-state-error-primary)' } }, M(`保存失败：${err}`, `Save failed: ${err}`)) : null,
+        h('div', { style: S.hint },
+          M(
+            `勾选记在本机 ${state.path || 'config-sync-scope.json'}（不进仓库），推送和拉取都按它走。`,
+            `Choices live on this machine in ${state.path || 'config-sync-scope.json'} (never committed); both push and pull follow it.`,
+          )),
+      )
+    }
+
     /**
      * 自动同步卡：两个开关（默认关）+ 云端一致性状态。
      * 打开后：启动延迟检查一次；云端更新 → 系统确认框 → 退出后拉取（按设置自动重启）；
@@ -1133,6 +1313,8 @@ window.__ModuleLoader__.load({
 
       const remoteCard = data ? h(RemoteCard, { data, onSaved: refresh }) : null
       const autoCard = data ? h(AutoCard, { data, onSaved: refresh }) : null
+      // 「同步内容」卡自己拉 /config-sync/scope，不依赖 status（status 读的是仓库与本机，跟勾选无关）
+      const scopeCard = h(ScopeCard, {})
 
       return h('div', { style: S.page },
         h('div', { style: S.pageInner },
@@ -1167,6 +1349,7 @@ window.__ModuleLoader__.load({
           // 按内容分区：信息类在上、配置类居中、动作类在下；每区内部网格并排（宽屏两列）
           Section(M('概览', 'Overview'), M('版本是否对齐、bundle 与依赖有没有缺', 'Versions, bundles and dependencies'), [versionCard, healthCard]),
           Section(M('同步目标', 'Sync targets'), M('仓库放哪、远端连哪，都是本机配置，改完立即生效', 'Where the repo lives and which remote it points at — both local settings, applied immediately'), [repoCard, remoteCard].filter(Boolean)),
+          Section(M('同步内容', 'Sync content'), M('云端同步哪十组内容：逐组勾选，组内还能单独排除；默认全勾', 'What syncs to the cloud: ten groups, per-item exclusions included; everything is checked by default'), [scopeCard]),
           Section(M('自动化与插件更新', 'Automation & plugin update'), M('退出 DSH 后做什么、插件自己怎么升级', 'What runs after DSH exits, and how the plugin upgrades itself'), [autoCard, updCard].filter(Boolean)),
           Section(M('退出后执行', 'After exit'), null, [actionCard]),
         ),

@@ -137,6 +137,11 @@ function Sync-WorkspaceApply {
     }
   }
 
+  # 同步内容勾选：未勾选的工作区不还原资料、也不并进本机 workspace.json（本机原有登记原样保留）
+  $skippedPlan = @($plan | Where-Object { -not (Test-SyncItemEnabled $Scope 'workspace' $_.Id) })
+  foreach ($s in $skippedPlan) { Warn ('跳过（未勾选同步）工作区：{0}' -f $s.Title) }
+  $plan = @($plan | Where-Object { Test-SyncItemEnabled $Scope 'workspace' $_.Id })
+
   # 1) 资料还原（字节保真，覆盖前先备份本机现有文件）
   $nAdd = 0; $nDel = 0; $nBk = 0
   foreach ($e in $plan) {
@@ -378,11 +383,17 @@ function Sync-ConversationApply {
   #    （会话文件 header 里的 cwd 必须与目录名编码一致，否则 DSH 判 corrupt）
   $dirMap = @{}
   $cwdMap = @{}
+  $skipConvDirs = @{}   # 被“同步内容”取消勾选的工作区会话目录（不铺回本机）
   $imLocal = Join-Path $DshHome 'im'
   if (Test-Path -LiteralPath $indexPath) {
     $idx = Get-Content -LiteralPath $indexPath -Raw -Encoding UTF8 | ConvertFrom-Json
     foreach ($e in @($idx.entries)) {
       $oldDir = [string]$e.dir
+      if ($e.workspaceId -and -not (Test-SyncItemEnabled $Scope 'conversations' ([string]$e.workspaceId))) {
+        $skipConvDirs[$oldDir] = $true
+        Warn ('跳过（未勾选同步）该工作区的会话：{0}' -f $oldDir)
+        continue
+      }
       if ($e.workspaceId -and $idToLocal.ContainsKey([string]$e.workspaceId)) {
         $localPath = $idToLocal[[string]$e.workspaceId]
         $newDir = Get-SessionDirName $localPath
@@ -411,6 +422,11 @@ function Sync-ConversationApply {
           if ($safeId -eq $id) { $hit = $k; break }
         }
         if ($hit) {
+          if (-not (Test-SyncItemEnabled $Scope 'conversations' $hit)) {
+            $skipConvDirs[$d.Name] = $true
+            Warn ('跳过（未勾选同步）该工作区的会话：{0}' -f $d.Name)
+            continue
+          }
           $localPath = $idToLocal[$hit]
           $newDir = Get-SessionDirName $localPath
           $dirMap[$d.Name] = $newDir
@@ -440,6 +456,8 @@ function Sync-ConversationApply {
         $parts = @($rel -split '\\')
         # 默认工作区不同步（见 dsh-sync-common.ps1）：老仓库里可能还留着这条，直接跳过不铺。
         if (Test-DefaultWorkspaceDir $parts[0]) { continue }
+        # 该工作区的会话被取消勾选：不铺回本机（否则等于把未勾选的内容写回来了）
+        if (-not $dirMap.ContainsKey($parts[0]) -and $skipConvDirs.ContainsKey($parts[0])) { continue }
         if ($dirMap.ContainsKey($parts[0])) { $parts[0] = $dirMap[$parts[0]] }
         $dstRel = ($parts -join '\')
       } else {
@@ -507,6 +525,9 @@ Say "DSH home：$DshHome"
 Say "客户端：$AppRoot"
 Say ""
 
+# 同步内容勾选（面板「同步内容」卡写在本机 ~\.dsh\config-sync-scope.json）：未勾选的组不还原，本机数据原地不动
+$Scope = Get-SyncScope $DshHome
+
 # 备份目录统一在脚本开头建立（工作区覆盖前的快照也放这里）
 $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 $BackupDir = Join-Path $DshHome "backups\config-$stamp"
@@ -515,8 +536,8 @@ New-Item -ItemType Directory -Path $BackupDir -Force | Out-Null
 # -WorkspaceOnly：只还原工作区 + 会话（B 机没装 DSH 也能先落地资料），做完直接结束
 if ($WorkspaceOnly) {
   if ($SkipWorkspace) { Die "-WorkspaceOnly 与 -SkipWorkspace 不能同时使用" }
-  Sync-WorkspaceApply
-  Sync-ConversationApply
+  if (Test-SyncGroupEnabled $Scope 'workspace') { Sync-WorkspaceApply } else { Warn '跳过（未勾选同步）：工作区资料' }
+  if (Test-SyncGroupEnabled $Scope 'conversations') { Sync-ConversationApply } else { Warn '跳过（未勾选同步）：会话记录' }
   Say ""
   Say "== 完成（仅工作区 + 会话）=="
   Say "如需回滚：把 $BackupDir 里的 workspace\ / conversations\ 拷回原位置。"
@@ -529,7 +550,10 @@ if ($proc -and -not $Force) {
   Die "检测到 DeepSeek Harness 仍在运行（PID: $(($proc.Id) -join ',')）。请完全退出（含托盘）后重新执行，或加 -Force 强制继续。"
 }
 foreach ($p in @("$RepoRoot\profile\package.json", "$RepoRoot\profile\cordis.patch.yml")) {
-  if (-not (Test-Path -LiteralPath $p)) { Die "仓库内容不完整，缺少：$p" }
+  if (-not (Test-Path -LiteralPath $p)) {
+    if (Test-SyncGroupEnabled $Scope 'profile') { Die "仓库内容不完整，缺少：$p" }
+    Warn ("仓库里没有 " + $p + "（本机未勾选同步 profile，按跳过处理）")
+  }
 }
 $ProfileDir = Join-Path $DshHome ("profiles\" + $ProfileName)
 if (-not (Test-Path -LiteralPath $ProfileDir)) {
@@ -616,14 +640,15 @@ foreach ($pair in @(@{ Local = (Join-Path $DshHome 'skills');         Repo = (Jo
 
 # ---------- 1.5 工作区 + 会话还原（默认开、全量；在铺配置文件之前单独跑） ----------
 if (-not $SkipWorkspace) {
-  Sync-WorkspaceApply
-  Sync-ConversationApply
+  if (Test-SyncGroupEnabled $Scope 'workspace') { Sync-WorkspaceApply } else { Warn '跳过（未勾选同步）：工作区资料' }
+  if (Test-SyncGroupEnabled $Scope 'conversations') { Sync-ConversationApply } else { Warn '跳过（未勾选同步）：会话记录' }
 } else {
   Warn "已指定 -SkipWorkspace，跳过全部工作区与会话还原"
 }
 
 # ---------- 2. 铺 profile 配置（把 {{APP_ROOT}} 展开成本机客户端路径） ----------
 $appRootFwd = ($AppRoot -replace '\\', '/').TrimEnd('/')
+if (Test-SyncGroupEnabled $Scope 'profile') {
 foreach ($f in @('cordis.yml', 'cordis.patch.yml', 'pnpm-workspace.yaml', 'pnpm-lock.yaml')) {
   $src = Join-Path $RepoRoot "profile\$f"
   if (-not (Test-Path -LiteralPath $src)) { Warn "仓库里没有 profile\$f，跳过"; continue }
@@ -694,20 +719,26 @@ foreach ($dirName in $localPluginMap.Keys) {
 }
 Write-TextPreserveBom (Join-Path $ProfileDir 'package.json') $pkgRaw
 Ok "已写入 package.json（link 路径指向 $appRootFwd）"
+} else { Warn '跳过（未勾选同步）：profile 配置（package.json / lock / cordis 保持本机现状）' }
 
 # ---------- 4. 铺全局提示 ----------
+if (Test-SyncGroupEnabled $Scope 'prompt') {
 foreach ($f in @('AGENTS.md', 'prompt-inject.md')) {
+  if (-not (Test-SyncItemEnabled $Scope 'prompt' $f)) { continue }
   $src = Join-Path $RepoRoot "prompt\$f"
   if (Test-Path -LiteralPath $src) { Copy-Item -LiteralPath $src -Destination (Join-Path $DshHome $f) -Force; Ok "已写入 $f" }
 }
+} else { Warn '跳过（未勾选同步）：全局提示（AGENTS.md / prompt-inject.md）' }
 
 # ---------- 5. 铺 Skills ----------
+if (Test-SyncGroupEnabled $Scope 'skills') {
 $skillsSrc = Join-Path $RepoRoot 'skills'
 $skillsDst = Join-Path $DshHome 'skills'
 if (Test-Path -LiteralPath $skillsSrc) {
   New-Item -ItemType Directory -Path $skillsDst -Force | Out-Null
   $n = 0
   Get-ChildItem -LiteralPath $skillsSrc -Directory -Force | ForEach-Object {
+    if (-not (Test-SyncItemEnabled $Scope 'skills' $_.Name)) { return }
     $dstDir = Join-Path $skillsDst $_.Name
     if (Test-Path -LiteralPath $dstDir) { Remove-Item -LiteralPath $dstDir -Recurse -Force }
     Copy-Item -LiteralPath $_.FullName -Destination $dstDir -Recurse -Force
@@ -716,7 +747,7 @@ if (Test-Path -LiteralPath $skillsSrc) {
   Ok "已铺 $n 个 Skill 到 $skillsDst"
   if ($PruneSkills) {
     Get-ChildItem -LiteralPath $skillsDst -Directory -Force | Where-Object {
-      -not (Test-Path -LiteralPath (Join-Path $skillsSrc $_.Name))
+      (-not (Test-Path -LiteralPath (Join-Path $skillsSrc $_.Name))) -and (Test-SyncItemEnabled $Scope 'skills' $_.Name)
     } | ForEach-Object {
       Remove-Item -LiteralPath $_.FullName -Recurse -Force
       Warn "已按 -PruneSkills 移除本机多余的 Skill：$($_.Name)"
@@ -730,36 +761,46 @@ if (Test-Path -LiteralPath $skillsSrc) {
     }
   }
 }
+} else { Warn '跳过（未勾选同步）：Skills（本机 skills 目录保持现状）' }
 
 # ---------- 6. 铺 Agent 预设 ----------
+if (Test-SyncGroupEnabled $Scope 'presets') {
 $presetSrc = Join-Path $RepoRoot 'presets'
 $presetDst = Join-Path $DshHome '.agent-presets'
 if (Test-Path -LiteralPath $presetSrc) {
   New-Item -ItemType Directory -Path $presetDst -Force | Out-Null
   Get-ChildItem -LiteralPath $presetSrc -Directory -Force | ForEach-Object {
+    if (-not (Test-SyncItemEnabled $Scope 'presets' $_.Name)) { return }
     $dstDir = Join-Path $presetDst $_.Name
     if (Test-Path -LiteralPath $dstDir) { Remove-Item -LiteralPath $dstDir -Recurse -Force }
     Copy-Item -LiteralPath $_.FullName -Destination $dstDir -Recurse -Force
   }
   Ok "已铺 Agent 预设：$((Get-ChildItem -LiteralPath $presetSrc -Directory -Force | Select-Object -ExpandProperty Name) -join ', ')"
 }
+} else { Warn '跳过（未勾选同步）：Agent 预设' }
 
 # ---------- 7. 还原技能市场台账 ----------
+if (Test-SyncGroupEnabled $Scope 'storages-record') {
 $ledgerSrc = Join-Path $RepoRoot 'storages-record\skill-market-installed.json'
 $ledgerDir = Join-Path $DshHome 'storages\@montersy123\dsh-skill-market\data'
-if (Test-Path -LiteralPath $ledgerSrc) {
+if ((Test-Path -LiteralPath $ledgerSrc) -and (Test-SyncItemEnabled $Scope 'storages-record' 'skill-market-installed.json')) {
   # 新机器上这个目录由插件首次运行时创建，apply 先跑就得自己建，否则台账会被静默丢掉
   if (-not (Test-Path -LiteralPath $ledgerDir)) { New-Item -ItemType Directory -Path $ledgerDir -Force | Out-Null }
   Copy-Item -LiteralPath $ledgerSrc -Destination (Join-Path $ledgerDir 'installed.json') -Force
   $panelSrc = Join-Path $RepoRoot 'storages-record\skill-market-panel.json'
-  if (Test-Path -LiteralPath $panelSrc) { Copy-Item -LiteralPath $panelSrc -Destination (Join-Path $ledgerDir 'panel.json') -Force }
+  if ((Test-Path -LiteralPath $panelSrc) -and (Test-SyncItemEnabled $Scope 'storages-record' 'skill-market-panel.json')) {
+    Copy-Item -LiteralPath $panelSrc -Destination (Join-Path $ledgerDir 'panel.json') -Force
+  }
   Ok "已还原技能市场安装台账"
 } else {
   Warn "仓库里没有技能市场台账，跳过"
 }
+} else { Warn '跳过（未勾选同步）：技能市场台账' }
 
 # ---------- 7.6. 还原插件设置与工作流 ----------
+if (Test-SyncGroupEnabled $Scope 'settings') {
 foreach ($m in $settingsMap) {
+  if (-not (Test-SyncItemEnabled $Scope 'settings' ($m.Repo -replace '^settings\\', ''))) { continue }
   $srcRepo = Join-Path $RepoRoot $m.Repo
   if (-not (Test-Path -LiteralPath $srcRepo)) { Warn ("仓库里没有 " + $m.Repo + "，跳过"); continue }
   $dir = Split-Path -Parent $m.Src
@@ -769,11 +810,14 @@ foreach ($m in $settingsMap) {
   Expand-AppRootFile $m.Src $appRootFwd | Out-Null
 }
 Ok "已还原插件设置 / ComfyUI 工作流 / 桌宠配置 / 市场状态"
+} else { Warn '跳过（未勾选同步）：插件设置 / ComfyUI 工作流 / 桌宠配置 / 市场状态' }
 
 # ---------- 7.5. 还原记忆插件数据目录 mnemon ----------
 $mnemonSrc = Join-Path $RepoRoot 'mnemon'
 $mnemonDst = Join-Path $AppRoot 'mnemon'
-if ($SkipMnemon) {
+if (-not (Test-SyncGroupEnabled $Scope 'mnemon')) {
+  Warn '跳过（未勾选同步）：记忆数据（mnemon）'
+} elseif ($SkipMnemon) {
   Warn "已指定 -SkipMnemon，跳过记忆数据（mnemon）还原"
 } elseif ((Test-Path -LiteralPath $mnemonSrc) -and ((Get-ChildItem -LiteralPath $mnemonSrc -Recurse -File -Force | Measure-Object).Count -gt 0)) {
   if (Test-Path -LiteralPath $mnemonDst) {
@@ -809,8 +853,10 @@ if ($SkipMnemon) {
 }
 
 # ---------- 8. 就位本地插件（link: 依赖） ----------
+if (Test-SyncGroupEnabled $Scope 'local-plugins') {
 $needExtract = @()
 foreach ($dirName in $localPluginMap.Keys) {
+  if (-not (Test-SyncItemEnabled $Scope 'local-plugins' $dirName)) { continue }
   $target = Join-Path $AppRoot $dirName
   if (Test-Path -LiteralPath $target) {
     # 已部署的目录不会被覆盖，否则插件升级永远到不了本机（仓库里的 tgz 更新了也没用）。
@@ -877,6 +923,7 @@ if ($needExtract.Count -gt 0) {
   }
   Remove-Item -LiteralPath $staging -Recurse -Force -ErrorAction SilentlyContinue
 }
+} else { Warn '跳过（未勾选同步）：本地源码插件包（local-plugins）' }
 
 # ---------- 9. pnpm install ----------
 if ($SkipInstall) {

@@ -129,6 +129,21 @@ function Sync-WorkspaceCapture {
     $e.Slot = $slot
   }
 
+  # 同步内容勾选：未勾选的工作区不抓资料、也不写进登记表（以后勾回来就继续同步）。
+  # deleteCloud 打开时顺手把仓库里那一槽删掉；默认什么都不做，留着随时能勾回来。
+  $skipWs = @($entries | Where-Object { -not (Test-SyncItemEnabled $Scope 'workspace' $_.Id) })
+  foreach ($s in $skipWs) {
+    Warn ('跳过（未勾选同步）工作区：{0}' -f $s.Title)
+    if (Test-SyncDeleteCloud $Scope) {
+      $t = Join-Path $wsDir $s.Slot
+      if (Test-Path -LiteralPath $t) {
+        Remove-Item -LiteralPath $t -Recurse -Force
+        $changed.Add(('workspace/{0}（不同步，已删除云端副本）' -f $s.Slot)) | Out-Null
+      }
+    }
+  }
+  $entries = @($entries | Where-Object { Test-SyncItemEnabled $Scope 'workspace' $_.Id })
+
   # 归一化登记表：路径用占位符；会话信息与时间戳一并保留（B 机工作台要能看到历史对话）
   $wsList = @()
   foreach ($e in $entries) {
@@ -169,6 +184,8 @@ function Sync-WorkspaceCapture {
 
   # 逐个同步资料（字节保真）
   $slotSet = @{}
+  # 被跳过的工作区，其仓库槽也要占位，避免下面「镜像删除」把它当成“本机已不存在”删掉
+  foreach ($s in $skipWs) { $slotSet[$s.Slot] = $true }
   $nAdd = 0; $nDel = 0
   foreach ($e in $entries) {
     $slotSet[$e.Slot] = $true
@@ -298,11 +315,25 @@ function Sync-ConversationCapture {
   $idxEntries = @()
   $dirRemap = @{}      # 本机编码目录名 → 仓库稳定目录名
   $cwdToken = @{}      # 仓库稳定目录名 → 归一后的 cwd 占位符（让仓库内容与机器无关）
+  $skipSessDirs = @{}  # 被“同步内容”取消勾选的工作区目录名（其会话不抓、也不入库）
   if (Test-Path -LiteralPath $sessSrc) {
     foreach ($d in @(Get-ChildItem -LiteralPath $sessSrc -Directory -Force | Sort-Object Name)) {
       if (Test-DefaultWorkspaceDir $d.Name) {
         # 默认工作区不同步（见 dsh-sync-common.ps1 的说明）：不记映射，也不入仓库。
         Ok ('默认工作区不参与同步，跳过：{0}' -f $d.Name)
+        continue
+      }
+      if ($wsEncToId.ContainsKey($d.Name) -and -not (Test-SyncItemEnabled $Scope 'conversations' ([string]$wsEncToId[$d.Name]))) {
+        $skipSessDirs[$d.Name] = $true
+        Warn ('跳过（未勾选同步）该工作区的会话：{0}' -f $d.Name)
+        if (Test-SyncDeleteCloud $Scope) {
+          $repoDir = Get-RepoSessionDirName 'ws' $wsEncToId[$d.Name] $d.Name
+          $t = Join-Path $convDir ('sessions' + [string][char]92 + $repoDir)
+          if (Test-Path -LiteralPath $t) {
+            Remove-Item -LiteralPath $t -Recurse -Force
+            $changed.Add('conversations/sessions/' + $repoDir + '（不同步，已删除云端副本）') | Out-Null
+          }
+        }
         continue
       }
       if ($wsEncToId.ContainsKey($d.Name)) {
@@ -364,6 +395,8 @@ function Sync-ConversationCapture {
       $parts = @($rel -split '\\')
       # 默认工作区的文件不入库（第一段就是那个 -default-workspace-- 目录名）。
       if (Test-DefaultWorkspaceDir $parts[0]) { continue }
+      # 该工作区的会话被取消勾选：整块不抓（目录名保持本机编码，绝不能原样入库）
+      if ($b.Remap -and $skipSessDirs.ContainsKey($parts[0])) { continue }
       if ($b.Remap -and $dirRemap.ContainsKey($parts[0])) { $parts[0] = $dirRemap[$parts[0]] }
       $rel = ($parts -join '\')
       $srcRels[$rel] = $f.FullName
@@ -431,6 +464,9 @@ function Set-AppRootToken([string]$text) {
 
 Say "== DSH 配置同步 / capture =="
 
+# 同步内容勾选（面板「同步内容」卡写在本机 ~\.dsh\config-sync-scope.json）
+$Scope = Get-SyncScope $DshHome
+
 $ProfileDir = Join-Path $DshHome ("profiles\" + $ProfileName)
 if (-not $WorkspaceOnly -and -not (Test-Path -LiteralPath $ProfileDir)) { Die "找不到 profile：$ProfileDir" }
 foreach ($d in @('profile', 'prompt', 'skills', 'presets', 'local-plugins', 'storages-record', 'settings', 'mnemon', 'workspace', 'conversations')) {
@@ -443,8 +479,8 @@ $changed = New-Object System.Collections.Generic.List[string]
 # -WorkspaceOnly：只抓工作区 + 会话（B 机没装 DSH 也能先还原资料），抓完直接给提交指引并结束
 if ($WorkspaceOnly) {
   if ($SkipWorkspace) { Die "-WorkspaceOnly 与 -SkipWorkspace 不能同时使用" }
-  Sync-WorkspaceCapture
-  Sync-ConversationCapture
+  if (Test-SyncGroupEnabled $Scope 'workspace') { Sync-WorkspaceCapture } else { Skip-SyncGroup $Scope $RepoRoot 'workspace' }
+  if (Test-SyncGroupEnabled $Scope 'conversations') { Sync-ConversationCapture } else { Skip-SyncGroup $Scope $RepoRoot 'conversations' }
   Say ""
   if ($changed.Count -eq 0) {
     Ok "工作区 / 会话与仓库一致，无需提交"
@@ -540,6 +576,7 @@ function CopyTracked($src, $dst, $label) {
   Ok ("更新 " + $label)
 }
 
+if (Test-SyncGroupEnabled $Scope 'profile') {
 # 1) profile 配置
 # package.json 里的 link: 指向的是「本机客户端的绝对路径」，入库存成 {{APP_ROOT}}/ 前缀。
 # 这样 A 机 apply 后路径变成本机的、B 机再 capture 也不会把仓库改成自己的盘符，
@@ -600,8 +637,12 @@ if (-not $hostAppVersion) {
   }
 }
 
+} else { Skip-SyncGroup $Scope $RepoRoot 'profile' }
+
 # 2) 全局提示
+if (Test-SyncGroupEnabled $Scope 'prompt') {
 foreach ($f in @('AGENTS.md', 'prompt-inject.md')) {
+  if (-not (Test-SyncItemEnabled $Scope 'prompt' $f)) { Skip-SyncItem $Scope $RepoRoot 'prompt' $f ("prompt\" + $f); continue }
   $src = Join-Path $DshHome $f
   if (Test-Path -LiteralPath $src) { CopyTracked $src (Join-Path $RepoRoot "prompt\$f") "prompt\$f" }
   elseif (Test-Path -LiteralPath (Join-Path $RepoRoot "prompt\$f")) {
@@ -609,11 +650,15 @@ foreach ($f in @('AGENTS.md', 'prompt-inject.md')) {
   }
 }
 
+} else { Skip-SyncGroup $Scope $RepoRoot 'prompt' }
+
 # 3) Skills（镜像）
+if (Test-SyncGroupEnabled $Scope 'skills') {
 $skillsSrc = Join-Path $DshHome 'skills'
 $skillsDst = Join-Path $RepoRoot 'skills'
 if (Test-Path -LiteralPath $skillsSrc) {
   Get-ChildItem -LiteralPath $skillsSrc -Directory -Force | ForEach-Object {
+    if (-not (Test-SyncItemEnabled $Scope 'skills' $_.Name)) { Skip-SyncItem $Scope $RepoRoot 'skills' $_.Name ("skills\" + $_.Name); return }
     $dstDir = Join-Path $skillsDst $_.Name
     if (-not (Test-Path -LiteralPath $dstDir)) { $changed.Add("skills\$($_.Name)") | Out-Null }
     if (Test-Path -LiteralPath $dstDir) { Remove-Item -LiteralPath $dstDir -Recurse -Force }
@@ -633,11 +678,15 @@ if (Test-Path -LiteralPath $skillsSrc) {
   }
 }
 
+} else { Skip-SyncGroup $Scope $RepoRoot 'skills' }
+
 # 4) Agent 预设
+if (Test-SyncGroupEnabled $Scope 'presets') {
 $presetSrc = Join-Path $DshHome '.agent-presets'
 $presetDst = Join-Path $RepoRoot 'presets'
 if (Test-Path -LiteralPath $presetSrc) {
   Get-ChildItem -LiteralPath $presetSrc -Directory -Force | ForEach-Object {
+    if (-not (Test-SyncItemEnabled $Scope 'presets' $_.Name)) { Skip-SyncItem $Scope $RepoRoot 'presets' $_.Name ("presets\" + $_.Name); return }
     $dstDir = Join-Path $presetDst $_.Name
     if (Test-Path -LiteralPath $dstDir) { Remove-Item -LiteralPath $dstDir -Recurse -Force }
     Copy-Item -LiteralPath $_.FullName -Destination $dstDir -Recurse -Force
@@ -646,14 +695,23 @@ if (Test-Path -LiteralPath $presetSrc) {
   Ok "已抓取 Agent 预设：$((Get-ChildItem -LiteralPath $presetSrc -Directory -Force | Select-Object -ExpandProperty Name) -join ', ')"
 }
 
+} else { Skip-SyncGroup $Scope $RepoRoot 'presets' }
+
 # 5) 技能市场台账
+if (Test-SyncGroupEnabled $Scope 'storages-record') {
 $dataDir = Join-Path $DshHome 'storages\@montersy123\dsh-skill-market\data'
 foreach ($pair in @(@('installed.json', 'skill-market-installed.json'), @('panel.json', 'skill-market-panel.json'))) {
+  if (-not (Test-SyncItemEnabled $Scope 'storages-record' $pair[1])) {
+    Skip-SyncItem $Scope $RepoRoot 'storages-record' $pair[1] ("storages-record\" + $pair[1])
+    continue
+  }
   $src = Join-Path $dataDir $pair[0]
   if (Test-Path -LiteralPath $src) { CopyTracked $src (Join-Path $RepoRoot ("storages-record\" + $pair[1])) ("storages-record\" + $pair[1]) }
 }
+} else { Skip-SyncGroup $Scope $RepoRoot 'storages-record' }
 
 # 5.5) 插件设置与工作流（跨机需要一致的那几个小文件）
+if (Test-SyncGroupEnabled $Scope 'settings') {
 $settingsMap = @(
   @{ Repo = 'settings\our-free-model.json';        Src = (Join-Path $DshHome 'our-free-model\settings.json');                          Label = 'our-free-model 插件设置' },
   @{ Repo = 'settings\comfyui-workflows.json';     Src = (Join-Path $DshHome 'data\dsh-comfyui\workflows.json');                    Label = 'ComfyUI 工作流库' },
@@ -661,6 +719,10 @@ $settingsMap = @(
   @{ Repo = 'settings\dsh-market-state.json';      Src = (Join-Path $DshHome ("profiles\" + $ProfileName + '\.dsh-market\state.json')); Label = '插件市场状态' }
 )
 foreach ($m in $settingsMap) {
+  if (-not (Test-SyncItemEnabled $Scope 'settings' ($m.Repo -replace '^settings\\', ''))) {
+    Skip-SyncItem $Scope $RepoRoot 'settings' $m.Repo $m.Repo
+    continue
+  }
   if (-not (Test-Path -LiteralPath $m.Src)) {
     Warn ("本机没有 " + $m.Label + " 的源文件，跳过：" + $m.Src)
     continue
@@ -687,7 +749,10 @@ foreach ($m in $settingsMap) {
   }
 }
 
+} else { Skip-SyncGroup $Scope $RepoRoot 'settings' }
+
 # 6) 记忆插件数据目录 mnemon（与记忆插件配套，需要跨机一致）
+if (Test-SyncGroupEnabled $Scope 'mnemon') {
 $mnemonSrc = Join-Path $AppRoot 'mnemon'
 $mnemonDst = Join-Path $RepoRoot 'mnemon'
 if (Test-Path -LiteralPath $mnemonSrc) {
@@ -715,8 +780,10 @@ if (Test-Path -LiteralPath $mnemonSrc) {
 } else {
   Warn "本机没有 $mnemonSrc（记忆插件的 -AppRoot 可能不同），跳过记忆数据"
 }
+} else { Skip-SyncGroup $Scope $RepoRoot 'mnemon' }
 
 # 6) 本地源码插件打包
+if (Test-SyncGroupEnabled $Scope 'local-plugins') {
 if ($PackLocalPlugins) {
   $pkg = Get-Content -LiteralPath (Join-Path $ProfileDir 'package.json') -Raw -Encoding utf8 | ConvertFrom-Json
   foreach ($prop in $pkg.dependencies.PSObject.Properties) {
@@ -724,6 +791,10 @@ if ($PackLocalPlugins) {
     $linkPath = $prop.Value.Substring(5) -replace '/', '\'
     if (-not (Test-Path -LiteralPath $linkPath)) { Warn "link 目标不存在，跳过：$linkPath"; continue }
     $dirName = Split-Path -Leaf $linkPath
+    if (-not (Test-SyncItemEnabled $Scope 'local-plugins' $dirName)) {
+      Skip-SyncItem $Scope $RepoRoot 'local-plugins' $dirName ("local-plugins\" + $dirName + ".zip")
+      continue
+    }
     $zipPath = Join-Path $RepoRoot "local-plugins\$dirName.zip"
     $tgzPath = Join-Path $RepoRoot "local-plugins\$dirName.tgz"
     if (Test-Path -LiteralPath $tgzPath) { Remove-Item -LiteralPath $tgzPath -Force }
@@ -741,10 +812,14 @@ if ($PackLocalPlugins) {
   }
 }
 
+} else { Skip-SyncGroup $Scope $RepoRoot 'local-plugins' }
+
 # 7) 工作区 + 会话同步（默认全量；放在最后，前面的配置都抓完再抓资料）
 if (-not $SkipWorkspace) {
-  Sync-WorkspaceCapture
-  Sync-ConversationCapture
+  if (Test-SyncGroupEnabled $Scope 'workspace') { Sync-WorkspaceCapture }
+  else { Skip-SyncGroup $Scope $RepoRoot 'workspace' }
+  if (Test-SyncGroupEnabled $Scope 'conversations') { Sync-ConversationCapture }
+  else { Skip-SyncGroup $Scope $RepoRoot 'conversations' }
 } else {
   Warn "已指定 -SkipWorkspace，跳过全部工作区与会话同步"
 }

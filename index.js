@@ -32,6 +32,7 @@ const ROUTE_STATUS = '/config-sync/status'
 const ROUTE_PREPARE = '/config-sync/prepare'
 const ROUTE_SETTINGS = '/config-sync/settings'
 const ROUTE_UPDATE = '/config-sync/update'
+const ROUTE_SCOPE = '/config-sync/scope'
 const SETTINGS_NAME = 'dsh-config-sync.json'
 
 /**
@@ -1902,6 +1903,252 @@ async function handleUpdate(req, res, config) {
   }
 }
 
+/* ------------------------------------------------------------------------- *
+ * 同步内容勾选（scope）
+ *
+ * 面板「同步内容」卡片的数据落点：<DshHome>\config-sync-scope.json。
+ * capture.ps1 / apply.ps1 读的是**同一个文件**，所以面板上的勾选立刻对
+ * 「推送」和「拉取」两侧生效。文件不存在 = 全勾（保持老行为）。
+ *
+ * 语义：未勾选 = 推送不抓、拉取不还原；deleteCloud（默认关闭）打开时才顺带删掉仓库副本。
+ * ------------------------------------------------------------------------- */
+
+function scopePath(dshHome) {
+  return join(dshHome, 'config-sync-scope.json')
+}
+
+function readScope(dshHome) {
+  const fallback = { version: 1, deleteCloud: false, groups: {} }
+  try {
+    const obj = readJson(scopePath(dshHome))
+    if (!obj || typeof obj !== 'object') return fallback
+    return {
+      version: 1,
+      deleteCloud: obj.deleteCloud === true,
+      groups: (obj.groups && typeof obj.groups === 'object') ? obj.groups : {},
+    }
+  } catch {
+    return fallback
+  }
+}
+
+function writeScope(dshHome, scope) {
+  const file = scopePath(dshHome)
+  try { mkdirSync(dirname(file), { recursive: true }) } catch { }
+  const payload = JSON.stringify({
+    version: 1,
+    deleteCloud: scope.deleteCloud === true,
+    groups: scope.groups && typeof scope.groups === 'object' ? scope.groups : {},
+  }, null, 2) + '\n'
+  writeFileSync(file, payload, 'utf8')
+  return file
+}
+
+function scopeGroupEnabled(scope, id) {
+  const g = scope && scope.groups ? scope.groups[id] : null
+  if (!g || typeof g !== 'object') return true
+  return g.enabled !== false
+}
+
+function scopeItemEnabled(scope, id, item) {
+  if (!scopeGroupEnabled(scope, id)) return false
+  const g = scope.groups ? scope.groups[id] : null
+  const ex = g && Array.isArray(g.excluded) ? g.excluded : []
+  return !ex.includes(item)
+}
+
+/** 目录下的子目录名（排序稳定，避免面板每次顺序都在变） */
+function listSubDirs(dir) {
+  try {
+    if (!existsSync(dir)) return []
+    return readdirSync(dir, { withFileTypes: true })
+      .filter((e) => e.isDirectory())
+      .map((e) => e.name)
+      .sort((a, b) => a.localeCompare(b))
+  } catch {
+    return []
+  }
+}
+
+function countEntries(dir) {
+  try {
+    if (!existsSync(dir)) return 0
+    return readdirSync(dir).length
+  } catch {
+    return 0
+  }
+}
+
+/** profile 目录：优先 desktop，其次 profiles 下唯一的那一个 */
+function resolveProfileDir(dshHome) {
+  const desktop = join(dshHome, 'profiles', 'desktop')
+  if (existsSync(desktop)) return desktop
+  const all = listSubDirs(join(dshHome, 'profiles'))
+  return all.length === 1 ? join(dshHome, 'profiles', all[0]) : desktop
+}
+
+/** 本机登记的工作区（title 用用户自己起的名，路径只用来判断在不在） */
+function listWorkspaceEntries(dshHome) {
+  try {
+    const reg = readJson(join(dshHome, 'storages', 'workspace.json'))
+    const table = reg && reg.tables && reg.tables.workspaces
+    if (!table || typeof table !== 'object') return []
+    return Object.keys(table).sort().map((id) => {
+      const w = table[id] || {}
+      const title = typeof w.title === 'string' && w.title.trim() ? w.title.trim() : id
+      return { id, title, path: typeof w.path === 'string' ? w.path : '' }
+    })
+  } catch {
+    return []
+  }
+}
+
+/** link: 进 profile 的本地插件目录名（capture 会把它们打包成 local-plugins\*.zip） */
+function listLocalPlugins(dshHome) {
+  try {
+    const pkg = readJson(join(resolveProfileDir(dshHome), 'package.json'))
+    const deps = pkg && pkg.dependencies
+    if (!deps || typeof deps !== 'object') return []
+    const names = []
+    for (const [name, spec] of Object.entries(deps)) {
+      if (typeof spec !== 'string' || !spec.startsWith('link:')) continue
+      const target = spec.slice(5).replace(/\//g, '\\').replace(/\\+$/, '')
+      const leaf = target.split('\\').filter(Boolean).pop()
+      names.push(leaf || name)
+    }
+    return names.sort((a, b) => a.localeCompare(b))
+  } catch {
+    return []
+  }
+}
+
+/**
+ * 面板要显示的十组内容 + 组内明细项。
+ * 明细项一律用「本机实际存在的名字」，因为用户勾的就是自己看得见的那份。
+ */
+function collectScopeGroups(dshHome, appRoot) {
+  const profileDir = resolveProfileDir(dshHome)
+  const groups = []
+
+  const profileFiles = ['package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml', 'cordis.yml', 'cordis.patch.yml']
+    .filter((f) => existsSync(join(profileDir, f)))
+  groups.push({ id: 'profile', titleZh: '本机 profile', titleEn: 'Local profile',
+    descZh: 'package.json / lock / cordis 等宿主启动要读的配置', descEn: 'package.json, lockfiles and cordis config the host loads at startup',
+    // 这几个文件互相咬合（lock 与 package.json 的 specifier 必须一致），只做整体开关
+    items: profileFiles.map((f) => ({ id: f, label: f, excludable: false })) })
+
+  const promptFiles = ['AGENTS.md', 'prompt-inject.md'].filter((f) => existsSync(join(dshHome, f)))
+  groups.push({ id: 'prompt', titleZh: '全局提示', titleEn: 'Global prompts',
+    descZh: 'AGENTS.md 与 prompt-inject.md，所有会话共用的提示词', descEn: 'AGENTS.md and prompt-inject.md — prompts shared by every session',
+    items: promptFiles.map((f) => ({ id: f, label: f })) })
+
+  const skills = listSubDirs(join(dshHome, 'skills'))
+  groups.push({ id: 'skills', titleZh: 'Skills', titleEn: 'Skills',
+    descZh: '整个 skills 目录镜像到云端，另一台机器直接铺回来', descEn: 'The whole skills folder mirrored to the cloud and restored on the other machine',
+    items: skills.map((n) => ({ id: n, label: n })) })
+
+  const presets = listSubDirs(join(dshHome, '.agent-presets'))
+  groups.push({ id: 'presets', titleZh: 'Agent 预设', titleEn: 'Agent presets',
+    descZh: 'Agent 预设目录（新建/编辑过的预设）', descEn: 'Agent preset folders',
+    items: presets.map((n) => ({ id: n, label: n })) })
+
+  const ledgerDir = join(dshHome, 'storages', '@montersy123', 'dsh-skill-market', 'data')
+  const ledger = [
+    { id: 'skill-market-installed.json', src: join(ledgerDir, 'installed.json') },
+    { id: 'skill-market-panel.json', src: join(ledgerDir, 'panel.json') },
+  ].filter((x) => existsSync(x.src))
+  groups.push({ id: 'storages-record', titleZh: '技能市场台账', titleEn: 'Skill market ledger',
+    descZh: '技能市场的安装台账与面板状态', descEn: 'Skill-market install ledger and panel state',
+    items: ledger.map((f) => ({ id: f, label: f })) })
+
+  const settingsFiles = [
+    { id: 'our-free-model.json', src: join(dshHome, 'our-free-model', 'settings.json') },
+    { id: 'comfyui-workflows.json', src: join(dshHome, 'data', 'dsh-comfyui', 'workflows.json') },
+    { id: 'dsh-pet-main-config.jsonc', src: join(dshHome, 'dsh-pet', 'main-config.jsonc') },
+    { id: 'dsh-market-state.json', src: join(profileDir, '.dsh-market', 'state.json') },
+  ].filter((x) => existsSync(x.src))
+  groups.push({ id: 'settings', titleZh: '插件设置与工作流', titleEn: 'Plugin settings & workflows',
+    descZh: '免付费模型设置、ComfyUI 工作流库、桌宠配置、插件市场状态', descEn: 'Free-model settings, ComfyUI workflows, desktop-pet config, market state',
+    items: settingsFiles.map((x) => ({ id: x.id, label: x.id })) })
+
+  const mnemonDir = appRoot ? join(appRoot, 'mnemon') : ''
+  const mnemonCount = mnemonDir && existsSync(mnemonDir) ? countEntries(mnemonDir) : 0
+  groups.push({ id: 'mnemon', titleZh: '记忆数据', titleEn: 'Memory data',
+    descZh: '记忆插件的数据目录（mnemon）', descEn: 'Memory-plugin data folder (mnemon)',
+    items: mnemonDir && existsSync(mnemonDir) ? [{ id: 'mnemon', label: `mnemon（${mnemonCount} 项）`, excludable: false }] : [] })
+
+  const localPlugins = listLocalPlugins(dshHome)
+  groups.push({ id: 'local-plugins', titleZh: '本地源码插件包', titleEn: 'Local plugin packages',
+    descZh: 'link 进 profile 的本地插件，打包成 zip 随配置走', descEn: 'link:-mounted local plugins, packaged as zip and carried with the config',
+    items: localPlugins.map((n) => ({ id: n, label: n })) })
+
+  const workspaces = listWorkspaceEntries(dshHome)
+  groups.push({ id: 'workspace', titleZh: '工作区资料', titleEn: 'Workspace files',
+    descZh: '登记过的工作区里的资料（>100MB 与模型权重本来就不同步）', descEn: 'Files inside registered workspaces (big files and model weights are never synced)',
+    items: workspaces.map((w) => ({ id: w.id, label: w.title })) })
+
+  groups.push({ id: 'conversations', titleZh: '会话记录', titleEn: 'Conversations',
+    descZh: '每个工作区的对话、附件与缓存（按工作区勾选）', descEn: 'Chats, attachments and caches per workspace',
+    items: workspaces.map((w) => ({ id: w.id, label: w.title })) })
+
+  const scope = readScope(dshHome)
+  for (const g of groups) {
+    g.enabled = scopeGroupEnabled(scope, g.id)
+    for (const it of g.items) it.enabled = scopeItemEnabled(scope, g.id, it.id)
+  }
+  return { scope, groups }
+}
+
+async function handleScope(req, res, config) {
+  const dshHome = config?.dshHome || process.env.DSH_HOME || join(homedir(), '.dsh')
+  try {
+    if (req.method === 'GET') {
+      const appRoot = resolveAppRoot(config?.appRoot) || ''
+      const { scope, groups } = collectScopeGroups(dshHome, appRoot)
+      sendJson(res, 200, {
+        ok: true,
+        deleteCloud: scope.deleteCloud === true,
+        path: scopePath(dshHome),
+        groups: groups.map((g) => ({
+          id: g.id,
+          title: t(g.titleZh, g.titleEn),
+          desc: t(g.descZh, g.descEn),
+          enabled: g.enabled,
+          items: g.items.map((it) => ({ id: it.id, label: it.label, enabled: it.enabled, excludable: it.excludable !== false })),
+        })),
+      })
+      return
+    }
+    if (req.method !== 'POST') { sendJson(res, 405, { ok: false, error: 'GET/POST only' }); return }
+    if (!originAllowed(req)) { sendJson(res, 403, { ok: false, error: 'cross-origin request rejected' }); return }
+    const raw = await readBody(req)
+    const body = raw.trim() ? JSON.parse(raw) : {}
+    const groupsIn = body && typeof body.groups === 'object' && body.groups ? body.groups : {}
+    // 排除项只认「本机当前真实存在、且允许单独排除」的条目：
+    // 拖着一堆早就不存在的 id 会让用户以后勾不回来（看不见却一直挡着同步）。
+    const allowed = {}
+    try {
+      const cur = collectScopeGroups(dshHome, resolveAppRoot(config?.appRoot) || '')
+      for (const g of cur.groups) allowed[g.id] = new Set(g.items.filter((i) => i.excludable !== false).map((i) => i.id))
+    } catch { }
+    const clean = {}
+    for (const [id, g] of Object.entries(groupsIn)) {
+      if (!g || typeof g !== 'object') continue
+      const entry = {}
+      if (g.enabled === false) entry.enabled = false
+      let ex = Array.isArray(g.excluded) ? g.excluded.filter((x) => typeof x === 'string' && x) : []
+      if (allowed[id]) ex = ex.filter((x) => allowed[id].has(x))
+      if (ex.length) entry.excluded = ex
+      // 全勾的组不落盘：文件里只留"跟默认不一样"的部分，手改起来也清爽
+      if (Object.keys(entry).length) clean[id] = entry
+    }
+    const file = writeScope(dshHome, { deleteCloud: body.deleteCloud === true, groups: clean })
+    sendJson(res, 200, { ok: true, path: file, deleteCloud: body.deleteCloud === true })
+  } catch (error) {
+    sendJson(res, 400, { ok: false, error: String((error && error.message) || error) })
+  }
+}
+
 async function handleStatus(req, res, config) {
   try {
     sendJson(res, 200, await inspect(config))
@@ -2165,6 +2412,11 @@ export function apply(ctx, config) {
         kind: 'exact',
         path: ROUTE_UPDATE,
         handler: withLang(handleUpdate),
+      }))
+      scoped.effect(() => scoped.webServer.register({
+        kind: 'exact',
+        path: ROUTE_SCOPE,
+        handler: withLang(handleScope),
       }))
     })
     // 开关打开才排一次启动检查（默认关 = 什么都不做）
