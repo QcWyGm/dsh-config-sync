@@ -18,6 +18,7 @@
 import { execFile, execFileSync } from 'node:child_process'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { spawn } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { createRequire } from 'node:module'
 import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
@@ -1436,6 +1437,10 @@ const updateState = {
   // DSH 运行中把包装好之后记在这里：{ version, at, backup, log }
   // 只是本进程内存态：重启后 PLUGIN_VERSION 就是新版本，自然不需要它了
   liveInstall: null,
+  // 只下载、不安装时记在这里：{ version, sha256, file, size, at, url }
+  // 覆盖插件目录的动作留到 DSH 退出后（post-exit -Mode update），
+  // 因为运行中覆盖会让宿主重建插件树、把用户正在看的面板卸载掉。
+  prepared: null,
 }
 
 function versionParts(v) {
@@ -1608,15 +1613,75 @@ function updatePayload(state, settings = {}) {
     sourceUsed: state.url || '',
     sources: Array.isArray(state.sources) ? state.sources : [],
     installed,
+    // 已经下到暂存目录、等着退出后安装的那个包；ready = 版本比当前进程里的新
+    prepared: state.prepared
+      ? {
+        version: String(state.prepared.version || ''),
+        file: String(state.prepared.file || ''),
+        size: Number(state.prepared.size) || 0,
+        sha256: String(state.prepared.sha256 || ''),
+        at: Number(state.prepared.at) || 0,
+        ready: compareVersion(state.prepared.version, PLUGIN_VERSION) > 0,
+      }
+      : null,
     restartRequired,
     pending: autoState.pending,
   }
 }
 
 /**
+ * 把新版本的包**只下载到暂存目录**，一个字节都不碰插件目录。
+ *
+ * 为什么不能边运行边装：覆盖插件目录会让宿主重新同步插件树，把「配置同步」这个 main 面板
+ * 卸载掉 —— 用户正在看的页面在装到一半时自己跳走，还得点回来才能按「重启」。
+ * 所以把流程拆成两段：这里只负责落盘 + 校验 sha256，真正的覆盖交给退出后的 post-exit。
+ *
+ * 候选地址逐个试（raw 常常不通，反代在前面兜着），全失败时把每个源的原因汇总抛出。
+ * 返回 { ok, file, size, sha256, url } 或 { ok:false, error }
+ */
+async function downloadPackage({ urls, sha256, version, dshHome }) {
+  if (typeof fetch !== 'function') return { ok: false, error: t('当前运行环境没有 fetch，无法下载更新包', 'fetch is unavailable in this runtime — cannot download the update package') }
+  const dir = join(dshHome, 'update-staging')
+  try { mkdirSync(dir, { recursive: true }) } catch { }
+  const file = join(dir, `dsh-config-sync-${version}.tgz`)
+  const want = String(sha256 || '').toLowerCase()
+  const errors = []
+  for (const rawUrl of urls) {
+    const url = String(rawUrl || '').trim()
+    if (!url) continue
+    try {
+      const ctrl = typeof AbortController === 'function' ? new AbortController() : null
+      const timer = ctrl ? setTimeout(() => { try { ctrl.abort() } catch { } }, 120 * 1000) : null
+      let res
+      try {
+        res = await fetch(url, { cache: 'no-store', signal: ctrl ? ctrl.signal : undefined })
+      } finally {
+        if (timer) clearTimeout(timer)
+      }
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const buf = Buffer.from(await res.arrayBuffer())
+      if (!buf.length) throw new Error(t('下载到的文件是空的', 'the downloaded file is empty'))
+      const hash = createHash('sha256').update(buf).digest('hex')
+      if (want && hash !== want) throw new Error(t(`sha256 不一致（拿到 ${hash}）`, `sha256 mismatch (got ${hash})`))
+      writeFileSync(file, buf)
+      return { ok: true, file, size: buf.length, sha256: hash, url }
+    } catch (error) {
+      let host = url
+      try { host = new URL(url).host } catch { }
+      errors.push(`${host}：${(error && error.message) || String(error)}`)
+    }
+  }
+  return { ok: false, error: t('下载更新包失败（每个地址都试过了）：', 'cannot download the update package (every URL was tried): ') + errors.join(t('；', '; ')) }
+}
+
+/**
  * 运行中直接把新版本装进插件目录（不退出 DSH）。
  *
- * 为什么能这么干：插件的 ps1 只是磁盘上的脚本，index.js 已经读进内存 —— 覆盖文件不会让当前进程崩，
+ * 注意：界面**不再走这条**。运行中覆盖插件目录会让宿主把当前面板卸载掉，
+ * 用户看到的就是"更新到一半页面自己跳走"。面板改为「prepare 下载 → 退出后安装」，
+ * 见 downloadPackage 的注释。这个函数留给 CLI / 兼容场景。
+ *
+ * 为什么当年能这么干：插件的 ps1 只是磁盘上的脚本，index.js 已经读进内存 —— 覆盖文件不会让当前进程崩，
  * 只是"文件是新的、进程还是旧的"，所以装完必须提示重启才生效。
  * 真正干活的是 runtime/install-plugin.ps1：它自己依次尝试候选下载地址、校验 sha256、解包、
  * 备份旧目录（<DshHome>\backups\plugin-<旧版本>-<时间戳>）、覆盖，失败就把备份拷回去。
@@ -1681,7 +1746,72 @@ async function handleUpdate(req, res, config) {
       return
     }
 
-    // 运行中直接装（不退出 DSH）：下载 → 校验 sha256 → 备份旧版 → 覆盖插件目录
+    // 只下载：把包落到 <DshHome>\update-staging\，校验 sha256，**不动插件目录**。
+    // 面板点「下载更新」走这条 —— 页面不会因为插件被改写而重置。
+    if (action === 'prepare') {
+      const state = await checkUpdate({ force: true, url: manifestUrl, token: updateToken })
+      const remote = state.manifest
+      if (!remote) throw new Error(t(`读不到更新清单：${state.error || '未知原因'}`, `Cannot read the update manifest: ${state.error || 'unknown reason'}`))
+      if (compareVersion(remote.version, PLUGIN_VERSION) <= 0) {
+        throw new Error(t(`已经是最新版本（${PLUGIN_VERSION}），无需更新`, `Already on the latest version (${PLUGIN_VERSION}) — no update needed`))
+      }
+      // 同一个版本已经下好就不重复下（DSH 一直开着时用户可能点第二次）
+      const prev = updateState.prepared
+      if (prev && prev.version === String(remote.version) && isFile(prev.file)) {
+        sendJson(res, 200, { ok: true, action, prepared: prev, ...updatePayload(state, settings) })
+        return
+      }
+      const urls = resolveTgzCandidates(remote, state.url)
+      if (!urls.length) throw new Error(t('version.json 里没有给 tgz 下载地址', 'version.json gives no tgz download URL'))
+      const got = await downloadPackage({ urls, sha256: String(remote.sha256 || ''), version: String(remote.version), dshHome })
+      if (!got.ok) throw new Error(String(got.error || t('下载失败', 'download failed')))
+      updateState.prepared = {
+        version: String(remote.version),
+        sha256: got.sha256,
+        file: got.file,
+        size: got.size,
+        at: Date.now(),
+        url: got.url,
+      }
+      sendJson(res, 200, { ok: true, action, prepared: updateState.prepared, ...updatePayload(state, settings) })
+      return
+    }
+
+    // 装并重启：退出 DSH → 退出后的脚本用**已经下好的本地包**覆盖安装 → 自动拉起
+    // 覆盖发生在 DSH 已退出之后，所以运行中的面板不会被打断，用户也不会被弹走。
+    if (action === 'install-restart') {
+      const prepared = updateState.prepared
+      if (!prepared || !isFile(prepared.file)) {
+        throw new Error(t('还没有下好的更新包，请先点「下载更新」', 'No downloaded package yet — click "Download update" first'))
+      }
+      if (compareVersion(prepared.version, PLUGIN_VERSION) <= 0) {
+        updateState.prepared = null
+        throw new Error(t(`已经是最新版本（${PLUGIN_VERSION}），无需安装`, `Already on the latest version (${PLUGIN_VERSION}) — nothing to install`))
+      }
+      const repo = resolveRepo(config?.repoPath, dshHome).repo || ''
+      const appRoot = resolveAppRoot(config?.appRoot) || ''
+      const started = await spawnWatcher({
+        mode: 'update',
+        repo,
+        appRoot,
+        dshHome,
+        restart: true,
+        extraArgs: [
+          '-PluginDir', PLUGIN_DIR,
+          '-UpdateTgz', prepared.file,
+          '-UpdateVersion', String(prepared.version),
+          '-UpdateSha256', String(prepared.sha256 || ''),
+        ],
+      })
+      if (!started.ok) throw new Error(started.error)
+      autoState.pending = { mode: 'update', at: Date.now(), version: String(prepared.version), restart: true, watcherPid: started.pid, installFrom: prepared.file }
+      const closed = closeDsh()
+      autoState.pending.closeRequested = closed
+      sendJson(res, 200, { ok: true, action, started: true, pending: autoState.pending, closeRequested: closed, ...updatePayload(await checkUpdate({ force: false, url: manifestUrl, token: updateToken }), settings) })
+      return
+    }
+
+    // 运行中直接装（不退出 DSH，**界面已不再使用**，留给 CLI/兼容）：下载 → 校验 sha256 → 备份旧版 → 覆盖插件目录
     if (action === 'install-live') {
       const state = await checkUpdate({ force: true, url: manifestUrl, token: updateToken })
       const remote = state.manifest

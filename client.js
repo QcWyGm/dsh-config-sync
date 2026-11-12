@@ -750,27 +750,45 @@ window.__ModuleLoader__.load({
         toastTimer.current = setTimeout(() => setToast(''), 5000)
       }
 
-      // 更新 = 运行中静默安装（DSH 不退出）：下载 → 校验 sha256 → 备份旧版 → 覆盖插件目录，
-      // 装完只提示「重启生效」。真正干活的是宿主 install-live + runtime/install-plugin.ps1。
-      const applyUpdate = async () => {
+      // 「下载更新」= 只下载，不动插件目录（宿主 action: prepare）：
+      // 下到 <DshHome>\update-staging\ 并校验 sha256。插件文件一个字节都没改，
+      // 所以宿主不会重建插件树，当前这个页面不会跳走。
+      const downloadUpdate = async () => {
         setUpdBusy(true)
-        setUpdMsg(M('正在下载并安装（DSH 不会退出）…', 'Downloading and installing (DSH stays open)…'))
+        setUpdMsg(M('正在下载更新包（不改动插件目录，页面不会跳走）…', 'Downloading the package (the plugin directory stays untouched)…'))
         try {
-          const r = await callUpdate({ action: 'install-live' })
+          const r = await callUpdate({ action: 'prepare' })
           setUpd(r)
-          const v = (r && r.installed && r.installed.version) || (r && r.remote && r.remote.version) || ''
-          setUpdMsg(M(`已安装 ${v}，重启 DSH 后生效`, `Installed ${v}; restart DSH to take effect`))
-          showToast(M(`插件已更新到 ${v}，点「重启 DSH」生效`, `Plugin updated to ${v} — click "Restart DSH" to apply`))
+          const v = (r && r.prepared && r.prepared.version) || (r && r.remote && r.remote.version) || ''
+          const kb = Math.round(((r && r.prepared && r.prepared.size) || 0) / 1024)
+          setUpdMsg(M(`已下载 ${v}${kb ? `（${kb} KB）` : ''}，点「重启并安装」生效`, `Downloaded ${v}${kb ? ` (${kb} KB)` : ''} — click "Restart & install" to apply`))
+          showToast(M(`更新包已下载（${v}），点「重启并安装」生效`, `Update package downloaded (${v}) — click "Restart & install" to apply`))
         } catch (e) {
           const msg = String((e && e.message) || e)
-          setUpdMsg(M('更新失败：', 'Update failed: ') + msg)
-          showToast(M('更新失败：', 'Update failed: ') + msg)
+          setUpdMsg(M('下载失败：', 'Download failed: ') + msg)
+          showToast(M('下载失败：', 'Download failed: ') + msg)
         } finally {
           setUpdBusy(false)
         }
       }
 
-      // 装完只需要一次重启：退出 DSH，由退出后的脚本用 explorer 代启拉回来（不继承本窗口的作业）
+      // 「重启并安装」= 退出 DSH，退出后的脚本用已下好的本地包覆盖安装，然后自动拉起新版本。
+      // 覆盖发生在 DSH 退出之后，所以不会打断你正在看的页面；全程只需这一次重启。
+      const restartAndInstall = async () => {
+        setUpdBusy(true)
+        setUpdMsg(M('DSH 即将退出，退出后安装并自动重启…', 'DSH will exit; the package is installed afterwards and DSH relaunches…'))
+        try {
+          await callUpdate({ action: 'install-restart' })
+          showToast(M('DSH 即将退出并自动安装、重启…', 'DSH will exit, install, and relaunch…'))
+        } catch (e) {
+          const msg = String((e && e.message) || e)
+          setUpdMsg(M('安装失败：', 'Install failed: ') + msg)
+          showToast(M('安装失败：', 'Install failed: ') + msg)
+          setUpdBusy(false)
+        }
+      }
+
+      // 老路径遗留（install-live 装好了但没重启）：只重启，不装东西
       const restartDsh = async () => {
         setUpdBusy(true)
         try {
@@ -886,8 +904,12 @@ window.__ModuleLoader__.load({
         const has = u.hasUpdate === true
         const installed = u.installed || null
         const restartRequired = u.restartRequired === true
+        // 0.3.7 主路径：包已经下到暂存目录（插件目录没动），等一次「重启并安装」
+        const prepared = u.prepared || null
+        const preparedReady = !!(prepared && prepared.ready)
+        const preparedKb = Math.round((prepared && prepared.size ? prepared.size : 0) / 1024)
         const failed = !has && u.ok === false && !restartRequired
-        const kind = (restartRequired || has) ? 'warn' : (failed ? 'error' : 'ok')
+        const kind = (restartRequired || preparedReady || has) ? 'warn' : (failed ? 'error' : 'ok')
         const notesText = (u.remote && (langIsZh() ? (u.remote.notes || u.remote.notesEn) : (u.remote.notesEn || u.remote.notes))) || ''
         // 检查失败时把每个源的失败原因摆出来，别只给一句 aborted
         const badSources = (Array.isArray(u.sources) ? u.sources : []).filter((x) => x && x.ok === false)
@@ -899,22 +921,29 @@ window.__ModuleLoader__.load({
           : ''
         const label = restartRequired
           ? M('已安装，待重启', 'Installed, restart pending')
-          : (has
-            ? M(`有新版本 ${remote}`, `New version ${remote}`)
-            : (failed ? M('检查失败', 'Check failed') : (u.checkedAt ? M('已是最新', 'Up to date') : M('检查中', 'Checking'))))
+          : (preparedReady
+            ? M('已下载，待安装', 'Downloaded, install pending')
+            : (has
+              ? M(`有新版本 ${remote}`, `New version ${remote}`)
+              : (failed ? M('检查失败', 'Check failed') : (u.checkedAt ? M('已是最新', 'Up to date') : M('检查中', 'Checking')))))
         const text = restartRequired
           ? M(
             `已装好 ${(installed && installed.version) || remote}，当前进程还是 ${local}；点「重启 DSH」后生效`,
             `Installed ${(installed && installed.version) || remote}; this process still runs ${local} — click "Restart DSH" to apply`,
           )
-          : (has
+          : (preparedReady
             ? M(
-              `当前 ${local} → 可更新到 ${remote}${notesText ? ` · ${notesText}` : ''}`,
-              `Current ${local} → can update to ${remote}${notesText ? ` · ${notesText}` : ''}`,
+              `已下载 ${prepared.version}${preparedKb ? `（${preparedKb} KB）` : ''}；点「重启并安装」后 DSH 退出 → 装好 → 自动重开，全程只有这一次重启`,
+              `Downloaded ${prepared.version}${preparedKb ? ` (${preparedKb} KB)` : ''} — "Restart & install" exits DSH, installs, and relaunches; that is the only restart`,
             )
-            : (failed
-              ? M(`读不到更新清单：${u.error || '未知原因'}${sourceNote}`, `Cannot read the manifest: ${u.error || 'unknown reason'}${sourceNote}`)
-              : (u.checkedAt ? M(`当前 ${local}，云端没有更新的版本`, `Current ${local}; no newer version upstream`) : M('正在读云端版本清单…', 'Reading the cloud manifest…'))))
+            : (has
+              ? M(
+                `当前 ${local} → 可更新到 ${remote}${notesText ? ` · ${notesText}` : ''}`,
+                `Current ${local} → can update to ${remote}${notesText ? ` · ${notesText}` : ''}`,
+              )
+              : (failed
+                ? M(`读不到更新清单：${u.error || '未知原因'}${sourceNote}`, `Cannot read the manifest: ${u.error || 'unknown reason'}${sourceNote}`)
+                : (u.checkedAt ? M(`当前 ${local}，云端没有更新的版本`, `Current ${local}; no newer version upstream`) : M('正在读云端版本清单…', 'Reading the cloud manifest…')))))
         return h('div', { style: S.card },
           h('div', { style: S.cardTitle }, M('插件更新', 'Plugin update')),
           h('div', { style: { display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' } },
@@ -925,10 +954,15 @@ window.__ModuleLoader__.load({
                 type: 'button', style: S.btnPrimary, disabled: updBusy,
                 onClick: restartDsh,
               }, updBusy ? M('重启中…', 'Restarting…') : M('重启 DSH', 'Restart DSH'))
-              : (has ? h('button', {
-                type: 'button', style: S.btnPrimary, disabled: updBusy || !u.remote,
-                onClick: applyUpdate,
-              }, updBusy ? M('下载安装中…', 'Downloading…') : M(`更新到 ${remote}`, `Update to ${remote}`)) : null),
+              : (preparedReady
+                ? h('button', {
+                  type: 'button', style: S.btnPrimary, disabled: updBusy,
+                  onClick: restartAndInstall,
+                }, updBusy ? M('安装中…', 'Installing…') : M('重启并安装', 'Restart & install'))
+                : (has ? h('button', {
+                  type: 'button', style: S.btnPrimary, disabled: updBusy || !u.remote,
+                  onClick: downloadUpdate,
+                }, updBusy ? M('下载中…', 'Downloading…') : M(`下载更新 ${remote}`, `Download ${remote}`)) : null)),
             h('button', { type: 'button', style: S.btn, disabled: updBusy, onClick: checkUpdateNow }, M('检查更新', 'Check for updates')),
             updEdit
               ? null
@@ -986,8 +1020,8 @@ window.__ModuleLoader__.load({
             ),
           h('div', { style: S.hint },
             M(
-              '清单只读几百字节、30 分钟查一次。点「更新到 x.y.z」是**运行中静默安装**：DSH 不退出，直接下载、校验 sha256、备份旧版、覆盖插件目录，装好后点「重启 DSH」生效（失败会用备份自动回滚）。令牌只存本机设置文件，不进仓库。',
-              'The manifest is a few hundred bytes and is re-read every 30 minutes. "Update to x.y.z" installs silently while DSH keeps running: download, verify sha256, back up the old version, overwrite the plugin directory, then click "Restart DSH" to apply (a failed write rolls back from the backup). Tokens live only in the local settings file, never in the repo.',
+              '清单只读几百字节、30 分钟查一次。点「下载更新」只把包下到 <DshHome>\\update-staging\\ 并校验 sha256 —— 插件目录一个字节都不改，所以这个页面不会跳走；再点「重启并安装」，DSH 退出后由退出脚本覆盖安装并自动重开。安装发生在退出之后，全程只需这一次重启（写坏了会用备份回滚）。令牌只存本机设置文件，不进仓库。',
+              'The manifest is a few hundred bytes and is re-read every 30 minutes. "Download" only drops the package into <DshHome>\\update-staging\\ and verifies its sha256 — the plugin directory is left untouched, so this page never jumps away. "Restart & install" then exits DSH, and the post-exit script installs the package and relaunches. Installation happens after exit, so the whole flow needs exactly one restart (a failed write rolls back from the backup). Tokens live only in the local settings file, never in the repo.',
             )),
           updErr ? h('div', { style: { ...S.hint, color: 'var(--dsw-alias-state-error-primary)' } }, M(`保存失败：${updErr}`, `Save failed: ${updErr}`)) : null,
           updMsg ? h('div', { style: { ...S.hint, color: 'var(--dsw-alias-state-success-primary)' } }, updMsg) : null,

@@ -34,7 +34,7 @@ dsh plugin add https://raw.githubusercontent.com/QcWyGm/dsh-config-sync/main/rel
 
 ## 自更新
 
-面板「插件更新」卡读取 `version.json`（内置默认按顺序尝试实时反代 `gh-proxy.com`、`ghfast.top` 与 `https://raw.githubusercontent.com/QcWyGm/dsh-config-sync/main/version.json`，单次 30 秒超时、30 分钟缓存）。发现更高版本后点「更新到 x.y.z」：**DSH 不退出** —— 宿主直接下载 tgz → 校验 sha256 → 备份旧目录到 `~\.dsh\backups\plugin-<旧版本>-<时间>` → 覆盖插件目录，装好后卡片变成「已安装，待重启」，点「重启 DSH」退出并由 explorer 代启拉回来（不继承任何窗口的作业）。写入失败会用刚备的备份自动回滚。
+面板「插件更新」卡读取 `version.json`（内置默认按顺序尝试实时反代 `gh-proxy.com`、`ghfast.top` 与 `https://raw.githubusercontent.com/QcWyGm/dsh-config-sync/main/version.json`，单次 30 秒超时、30 分钟缓存）。发现更高版本后点「下载更新」：**只下载，不动插件目录** —— 宿主把 tgz 下到 `~\.dsh\update-staging\dsh-config-sync-<版本>.tgz` 并校验 sha256（候选地址逐个试）。下载完成卡片变成「已下载，待安装」，按钮换成「重启并安装」：点一下，DSH 退出 → 退出后的脚本用这个本地包备份旧目录（`~\.dsh\backups\plugin-<旧版本>-<时间>`）并覆盖安装 → 自动拉起新版本。安装发生在退出之后，所以全程只需这一次重启，而且下载阶段页面不会跳走。
 
 ## 作为插件市场的索引源
 
@@ -123,15 +123,17 @@ https://raw.githubusercontent.com/QcWyGm/dsh-config-sync/main/market-index.json
 | 状态 | 含义 |
 |---|---|
 | 绿色「已是最新」 | 本地版本 ≥ 清单版本 |
-| 橙色「有新版本 x.y.z」 | 清单版本更大，附一句新版本说明和「更新到 x.y.z」按钮 |
-| 橙色「已安装，待重启」 | 新版本已经覆盖进插件目录，但当前进程还跑着旧代码，点「重启 DSH」生效 |
+| 橙色「有新版本 x.y.z」 | 清单版本更大，附一句新版本说明和「下载更新 x.y.z」按钮 |
+| 橙色「已下载，待安装」 | 包已经下到 `~\.dsh\update-staging\`（插件目录一个字节都没改），点「重启并安装」生效 |
+| 橙色「已安装，待重启」 | 只出现在老路径上（运行中安装过但还没重启），点「重启 DSH」生效 |
 | 红色「检查失败」 | 清单读不到（网络 / 仓库没建 / 404），附「检查更新」可强制重查，并逐个列出每个源的失败原因 |
 
 - 清单与安装包都在这个公开仓库里：清单 `version.json`、安装包 `releases/dsh-config-sync-<版本>.tgz`，只读几百字节，不拉整包；服务端缓存 30 分钟，挂载时查一次、之后每 30 分钟复查。
 - **清单有多个源，按顺序试**：内置候选是 `gh-proxy.com` → `ghfast.top` → GitHub raw，前两个是实时反代（实测 1 秒内拿到最新清单，tgz 也能从同一前缀拉下来）。国内直连 `raw.githubusercontent.com` 经常不通，而宿主的 `fetch` 是 Node 内置实现、**不读系统代理**，超时一到就被掐断（面板上一句 `This operation was aborted` 就是这么来的）。下载安装包同样按「读到清单的那个源 → 其余源」依次试，清单通不等于包也能从同一个域名下来。
 - **别拿 jsDelivr 当清单源**：它把 `@main` 这类分支别名缓存很久，实测发版后仍返回上一版 `version.json`（`purge.jsdelivr.net` 也没立刻刷新生效），会让「有新版本」晚几个小时才出现，比读不到更误导。包体是按版本号命名的、不受这个缓存影响，但清单会被拖住。
 - **私有库要填令牌**：如果把 `dsh-config` 私有库当清单源，匿名 raw 一律 403。更新相关的配置都集中在「插件更新」卡里（点「修改配置」进入编辑态）：「更新清单」留空即用内置候选，也可指向自建清单（**填了就只用你填的那个，不掺镜像**）；「更新令牌」填 Gitee 私人令牌后，清单和安装包都改走 API raw 端点（`/api/v5/repos/qcwygm/dsh-config/raw/<path>?ref=main&access_token=…`），分支用 `ref` 传、不能写进路径。令牌只存本机设置文件，不进仓库；留空保存表示"不改动已存令牌"，另给「清除已存令牌」按钮。
-- 点「更新到 x.y.z」是**运行中静默安装**（0.3.4 起）：DSH 不退出，宿主下载 tgz、比 sha256、备份旧目录到 `~\.dsh\backups\plugin-<旧版本>-<时间>`、覆盖插件目录（`runtime\install-plugin.ps1` 干的，失败自动回滚），然后面板提示「已安装，待重启」，点「重启 DSH」退出并自动拉起。插件是 Node 模块，覆盖文件不会热重载，所以那一次重启省不掉；老做法（退出 DSH 后再下载安装）仍保留为 `POST {action:'apply'}`。
+- 更新分两段（0.3.7 起）：**下载与安装分开**。点「下载更新 x.y.z」只把 tgz 下到 `~\.dsh\update-staging\dsh-config-sync-<版本>.tgz` 并校验 sha256，宿主不碰插件目录 —— 所以 DSH 不会重新同步插件树，你正在看的「配置同步」页面不会跳走。下载完按钮换成「重启并安装」，点它才退出：`spawnWatcher(-Mode update -UpdateTgz <本地包> -UpdateSha256 …)` → 关 DSH → 退出后的脚本备份旧目录、覆盖安装、自动拉起新版本（`runtime\post-exit.ps1` 的 update 段，失败会用备份回滚）。安装发生在退出之后，全程只重启一次。
+- 为什么不再运行中安装：0.3.4–0.3.6 是「DSH 不退出，直接覆盖插件目录」。实测这一步会让宿主把当前面板卸载掉 —— 用户看到的就是"更新到一半页面自己跳走了，得点回来才能按重启"。三步日志能对上：`11:41:55 覆盖安装` → `11:42:10 已启动 relaunch`，中间可见 15 秒空档。`POST {action:'install-live'}` 仍保留给 CLI/脚本，界面不再用；`POST {action:'apply'}`（退出后再下载安装）也保留。
 - 设置项 `updateManifestUrl` 可以把清单指到自建地址（留空即用内置候选），相对路径的 `tgz` 会相对**实际读到的那份清单**解析，换地址不会拼错域名。
 
 ## 接口与路径

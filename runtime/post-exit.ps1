@@ -313,9 +313,10 @@ function RestartClient {
   }
 }
 
-# ---------- 仅重启：不碰仓库、不装插件，纯粹为了让运行中装好的新版本生效 ----------
-# 新版本是宿主在 DSH 运行期就覆盖进插件目录的（install-plugin.ps1），进程里仍是旧代码，
-# 用户点「重启」后走这条，只做一件事：等退出 → 用 explorer 代启拉回来。
+# ---------- 仅重启：不碰仓库、不装插件，纯粹为了让已经装好的新版本生效 ----------
+# 0.3.7 起面板不再走这条（改为 update 模式：退出后安装）。保留它是为了兼容两种情况：
+# 老的 install-live 已经把新版本覆盖进插件目录、但用户还没重启；以及只换界面语言/清缓存这类
+# 不需要装东西的纯重启。做的事只有一件：等退出 → 用 explorer 代启拉回来。
 if ($Mode -eq 'relaunch') {
   Log '只重启客户端（新版本插件在重启后生效）'
   Write-Result $true 0 '已重启客户端' $false
@@ -326,6 +327,7 @@ if ($Mode -eq 'relaunch') {
 # ---------- 仅更新模式：下载插件包 → 校验 sha256 → 备份旧版 → 覆盖安装 → 重启 ----------
 # 更新的是**插件自己**（<AppRoot>\dsh-config-sync-<ver>\），不是配置仓库：
 # 所以不能走 sync.ps1，也不能先 apply（那会把旧插件部署回去）。
+# 覆盖发生在 DSH 已经退出之后 —— 这样运行中的面板不会被卸载，用户也就不会被弹回默认页。
 if ($Mode -eq 'update') {
   if (-not $PluginDir -or -not (Test-Path -LiteralPath $PluginDir)) { Finish 6 ('找不到插件目录：' + $PluginDir) }
   if (-not $UpdateTgz) { Finish 6 '更新清单里没有 tgz 下载地址' }
@@ -339,31 +341,38 @@ if ($Mode -eq 'update') {
   if (-not (Test-Path -LiteralPath $tar)) { $tar = 'tar.exe' }
 
   $tmp = Join-Path $env:TEMP ("dsh-plugin-{0}-{1}.tgz" -f $UpdateVersion, $stamp)
-  # 私有仓库：把 raw 链接换成 Gitee API 的 raw 端点并带 access_token（匿名 raw 会 403）
-  $fetchUrl = $UpdateTgz
-  if ($UpdateToken) {
-    # raw 链接 → API raw 端点；分支不能留在路径里，要改成 ref 参数
-    $m = [regex]::Match($UpdateTgz, '^https://gitee\.com/([^/]+)/([^/]+)/raw/([^/]+)/(.+)$')
-    if ($m.Success) {
-      $fetchUrl = ("https://gitee.com/api/v5/repos/{0}/{1}/raw/{2}?ref={3}" -f $m.Groups[1].Value, $m.Groups[2].Value, $m.Groups[4].Value, $m.Groups[3].Value)
+  if (Test-Path -LiteralPath $UpdateTgz -PathType Leaf) {
+    # 宿主在 DSH 运行期只做了「下载 + 校验」，包已经在暂存目录里（面板的
+    # 「下载更新 → 重启并安装」就是这个流程）。这里直接用，不再重复下载。
+    Log ("使用已下载的安装包：{0}（{1:N0} 字节）" -f $UpdateTgz, (Get-Item -LiteralPath $UpdateTgz).Length)
+    try { Copy-Item -LiteralPath $UpdateTgz -Destination $tmp -Force } catch { $tmp = $UpdateTgz }
+  } else {
+    # 私有仓库：把 raw 链接换成 Gitee API 的 raw 端点并带 access_token（匿名 raw 会 403）
+    $fetchUrl = $UpdateTgz
+    if ($UpdateToken) {
+      # raw 链接 → API raw 端点；分支不能留在路径里，要改成 ref 参数
+      $m = [regex]::Match($UpdateTgz, '^https://gitee\.com/([^/]+)/([^/]+)/raw/([^/]+)/(.+)$')
+      if ($m.Success) {
+        $fetchUrl = ("https://gitee.com/api/v5/repos/{0}/{1}/raw/{2}?ref={3}" -f $m.Groups[1].Value, $m.Groups[2].Value, $m.Groups[4].Value, $m.Groups[3].Value)
+      }
+      $sep = if ($fetchUrl.Contains('?')) { '&' } else { '?' }
+      $fetchUrl = "$fetchUrl${sep}access_token=$([uri]::EscapeDataString($UpdateToken))"
     }
-    $sep = if ($fetchUrl.Contains('?')) { '&' } else { '?' }
-    $fetchUrl = "$fetchUrl${sep}access_token=$([uri]::EscapeDataString($UpdateToken))"
+    Log ("下载安装包：{0}{1}" -f $UpdateTgz, $(if ($UpdateToken) { '（私有仓库，带令牌）' } else { '' }))
+    $downloadError = $null
+    try {
+      Invoke-WebRequest -Uri $fetchUrl -OutFile $tmp -UseBasicParsing -TimeoutSec 180
+    } catch {
+      $downloadError = $_.Exception.Message
+    }
+    if ($downloadError -or -not (Test-Path -LiteralPath $tmp)) {
+      $msg = "插件更新失败：下载安装包失败（{0}）" -f $(if ($downloadError) { $downloadError } else { '文件没有落盘' })
+      Log $msg
+      Write-Result $false 7 $msg $false
+      Finish 7 '更新失败：下载失败'
+    }
+    Log ("已下载 {0:N0} 字节：{1}" -f (Get-Item -LiteralPath $tmp).Length, $tmp)
   }
-  Log ("下载安装包：{0}{1}" -f $UpdateTgz, $(if ($UpdateToken) { '（私有仓库，带令牌）' } else { '' }))
-  $downloadError = $null
-  try {
-    Invoke-WebRequest -Uri $fetchUrl -OutFile $tmp -UseBasicParsing -TimeoutSec 180
-  } catch {
-    $downloadError = $_.Exception.Message
-  }
-  if ($downloadError -or -not (Test-Path -LiteralPath $tmp)) {
-    $msg = "插件更新失败：下载安装包失败（{0}）" -f $(if ($downloadError) { $downloadError } else { '文件没有落盘' })
-    Log $msg
-    Write-Result $false 7 $msg $false
-    Finish 7 '更新失败：下载失败'
-  }
-  Log ("已下载 {0:N0} 字节：{1}" -f (Get-Item -LiteralPath $tmp).Length, $tmp)
 
   if ($UpdateSha256) {
     $hash = (Get-FileHash -LiteralPath $tmp -Algorithm SHA256).Hash.ToLower()

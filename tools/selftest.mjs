@@ -353,8 +353,21 @@ else writeFileSync(settingsFile, prevSettings, 'utf8')
   check('清单按候选依次尝试并汇总失败原因', indexSrc.includes('async function fetchManifestAuto'), 'index.js')
   check('清单超时放宽到 30 秒（raw 慢链路 10 秒会假失败）',
     indexSrc.includes('UPDATE_FETCH_TIMEOUT = 30 * 1000'), 'index.js')
-  // 运行中静默安装：宿主调 install-plugin.ps1，装完提示重启，不退出 DSH
-  check('宿主支持运行中静默安装（install-live）',
+  // 0.3.7：更新拆成「只下载」和「退出后安装」两段。
+  // 为什么：DSH 开着的时候覆盖插件目录，宿主会重新同步插件树、把「配置同步」面板卸载掉 ——
+  // 用户看到的就是"更新到一半页面自己跳走，还得点回来才能按重启"。所以覆盖必须留到退出之后。
+  check('宿主有「只下载」动作（prepare → update-staging，不碰插件目录）',
+    indexSrc.includes("action === 'prepare'") && indexSrc.includes('async function downloadPackage') &&
+    indexSrc.includes('update-staging'), 'index.js')
+  check('只下载会按候选地址逐个试并校验 sha256',
+    /function downloadPackage[\s\S]{0,1200}createHash\('sha256'\)/.test(indexSrc), 'index.js')
+  check('宿主有「装并重启」动作（install-restart，把本地包交给退出后的脚本）',
+    indexSrc.includes("action === 'install-restart'") &&
+    /action === 'install-restart'[\s\S]{0,900}-UpdateTgz/.test(indexSrc), 'index.js')
+  check('退出后的安装直接吃已下好的本地包（不重复下载）',
+    postExitSrc.includes('Test-Path -LiteralPath $UpdateTgz -PathType Leaf'),
+    postExit || 'post-exit.ps1')
+  check('运行中静默安装仍保留给 CLI/兼容（界面不用它）',
     indexSrc.includes("action === 'install-live'") && indexSrc.includes('function runInstallPlugin'), 'index.js')
   check('只重启走 relaunch（不碰仓库也不装插件）',
     indexSrc.includes("mode: 'relaunch'") && postExitSrc.includes("'relaunch'"), postExit || 'post-exit.ps1')
@@ -366,8 +379,12 @@ else writeFileSync(settingsFile, prevSettings, 'utf8')
     installer || 'runtime/install-plugin.ps1')
   check('安装器按候选地址逐个下载', installerSrc.includes("-split '\\|'"), installer || 'runtime/install-plugin.ps1')
   const clientSrc = readFileSync(join(pluginRoot, 'client.js'), 'utf8')
-  check('面板按钮走静默安装 + 单独重启',
-    clientSrc.includes("action: 'install-live'") && clientSrc.includes("action: 'restart'"), 'client.js')
+  check('面板按钮走「下载更新 → 重启并安装」，不再运行中安装',
+    clientSrc.includes("action: 'prepare'") && clientSrc.includes("action: 'install-restart'") &&
+    !clientSrc.includes("action: 'install-live'") &&
+    clientSrc.includes('重启并安装') && clientSrc.includes('Restart & install'), 'client.js')
+  check('面板会展示「已下载，待安装」这一态',
+    clientSrc.includes('preparedReady') && clientSrc.includes('已下载，待安装'), 'client.js')
 }
 
 // 提交说明：面板里填的那句要进 push 脚本，时间由 sync.ps1 执行时追加
