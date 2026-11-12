@@ -759,6 +759,41 @@ check('拉取脚本不吃提交说明',
   pullNotePayload.path || '(无)')
 if (existsSync(pullNotePayload.path || '')) restoreCmd(pullNotePayload.path)
 
+// 配置仓库根目录那 6 个执行体，是「插件还没装 / 正在升级」时的兜底副本。
+// 它们一直靠人工同步，结果漂成半新半旧：sync/apply/common/post-exit 已升到 0.3.23，
+// capture/restore 还停在两天前的旧版 —— 平时不显形，只有 pull 真正走进「仓库副本」
+// 那条兜底路才会跑到旧逻辑。所以按字节比对，漂了就报，不再指望人记得。
+console.log('')
+console.log('== 配置仓库执行体副本一致性 ==')
+const execNames = ['apply.ps1', 'capture.ps1', 'dsh-sync-common.ps1', 'post-exit.ps1', 'restore.ps1', 'sync.ps1']
+// 两种布局都认：发布仓库（<root>\runtime）与配置仓库里的 plugin\ 镜像（<root>\runtime）
+const hereSelf = dirname(fileURLToPath(import.meta.url))
+const pluginRootSelf = existsSync(join(hereSelf, '..', 'package.json')) ? join(hereSelf, '..') : join(hereSelf, '..', '..')
+const pluginRuntime = join(pluginRootSelf, 'runtime')
+if (!existsSync(repoArg) || !existsSync(pluginRuntime)) {
+  console.log(`  [SKIP] 没有配置仓库（${repoArg}）或没有插件 runtime，跳过逐字节比对`)
+} else {
+  for (const name of execNames) {
+    const mirror = join(repoArg, name)
+    const source = join(pluginRuntime, name)
+    let same = false
+    let detail = ''
+    if (!existsSync(mirror)) detail = `配置仓库没有 ${name}`
+    else if (!existsSync(source)) detail = `插件 runtime 没有 ${name}`
+    else {
+      same = readFileSync(mirror).equals(readFileSync(source))
+      if (!same) detail = `副本 ${readFileSync(mirror).length}B / 正本 ${readFileSync(source).length}B，跑 tools/sync-plugin-mirror.ps1 重新同步`
+    }
+    check(`执行体副本与插件 runtime 逐字节一致：${name}`, same, detail)
+  }
+  // tools\fix-session-cwd.mjs 同样是随仓库同步的副本，改了插件忘了同步会静默跑旧逻辑
+  const mirrorTool = join(repoArg, 'tools', 'fix-session-cwd.mjs')
+  const sourceTool = join(pluginRuntime, 'tools', 'fix-session-cwd.mjs')
+  const toolSame = existsSync(mirrorTool) && existsSync(sourceTool) && readFileSync(mirrorTool).equals(readFileSync(sourceTool))
+  check('执行体副本与插件 runtime 逐字节一致：tools/fix-session-cwd.mjs', toolSame,
+    existsSync(mirrorTool) ? '内容已漂移，跑 tools/sync-plugin-mirror.ps1 重新同步' : '配置仓库没有 tools/fix-session-cwd.mjs')
+}
+
 console.log('')
 console.log(failures === 0 ? '结论：全部通过' : `结论：${failures} 项失败`)
 process.exit(failures === 0 ? 0 : 1)
