@@ -541,6 +541,18 @@ if (prevScope === null) { try { unlinkSync(scopeFile) } catch { } } else writeFi
       && postExitSrc.indexOf('if ($Restart) { RestartClient }') < postExitSrc.lastIndexOf('Finish 0'),
     postExit || 'post-exit.ps1')
 
+  // 执行体优先级：仓库里那份 sync.ps1 是随配置仓库同步来的副本，插件升级后可能还是旧版；
+  // 旧版没有冲突清单/exit 6，会把 pull 退回「直接 git pull + 失败回滚」——
+  // 真实故障：面板 18 项全选「用云端」，清单读都没读就被旧执行体覆盖回滚。
+  check('执行体选择：插件 runtime 优先、仓库副本兜底',
+    postExitSrc.includes('function Find-PluginSync')
+      && postExitSrc.indexOf('function Find-PluginSync') < postExitSrc.indexOf('$sync = Find-PluginSync'),
+    postExit || 'post-exit.ps1')
+  check('仓库 sync.ps1 只作兜底（不得排在插件前面）',
+    postExitSrc.indexOf('$sync = Find-PluginSync') > 0
+      && postExitSrc.indexOf('$sync = Find-PluginSync') < postExitSrc.indexOf('if (-not $sync -and $RepoRoot)'),
+    postExit || 'post-exit.ps1')
+
   // 更新源自检：raw.githubusercontent.com 在部分网络下直连不通，而 Node 的 fetch 不读系统代理，
   // 超时一到就 abort（面板上那句 "This operation was aborted"）。所以内置候选必须带实时反代排在前面。
   // 不要用 jsDelivr 兜清单：它对 @main 这类分支别名缓存很久，发版后仍返回上一版清单（实测 + purge 也没立刻刷新）。
@@ -619,6 +631,14 @@ if (prevScope === null) { try { unlinkSync(scopeFile) } catch { } } else writeFi
     captureSrc.includes("$entries = @($entries | Where-Object { Test-SyncItemEnabled $Scope 'workspace' $_.Id })")
     && applySrc.includes("$plan = @($plan | Where-Object { Test-SyncItemEnabled $Scope 'workspace' $_.Id })"),
     'capture/apply')
+
+  // apply 的非零退出码等同于「拉取失败」，post-exit 会据此回滚；
+  // 所以「没有 pnpm」这种环境差异不能让整次拉取失败 —— 只要 node_modules 在，依赖就是好的。
+  check('依赖已就绪时 apply 不因缺少 pnpm 而失败退出',
+    applySrc.includes("Join-Path $ProfileDir 'node_modules'")
+      && applySrc.includes('$skipBecauseReady'), 'apply.ps1')
+  check('node_modules 不存在时仍然明确报错（不静默放过）',
+    /if \(Test-Path -LiteralPath \$nodeModules\)[\s\S]{0,300}exit 1/.test(applySrc), 'apply.ps1')
   check('面板有「同步内容」卡：逐组勾选 + 展开明细 + deleteCloud 开关',
     clientSrc.includes('function ScopeCard') && clientSrc.includes('callScope(')
     && clientSrc.includes('同步内容') && clientSrc.includes('Sync content')

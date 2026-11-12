@@ -431,14 +431,44 @@ if ($Mode -eq 'update') {
   Finish 0 ('完成（插件已更新到 ' + $UpdateVersion + '）')
 }
 
-# ---------- 找 sync.ps1（仓库优先，退回插件自带 runtime） ----------
-$sync = $null
-if ($RepoRoot) { $candidate = Join-Path $RepoRoot 'sync.ps1'; if (Test-Path -LiteralPath $candidate) { $sync = $candidate } }
-if (-not $sync) {
-  $candidate = Join-Path $PSScriptRoot 'sync.ps1'
-  if (Test-Path -LiteralPath $candidate) { $sync = $candidate }
+# ---------- 找 sync.ps1（插件自带优先，仓库副本兜底） ----------
+<#
+  仓库里的 sync.ps1 是随配置仓库一起同步的一份副本，插件升级后它可能还停在旧版；
+  旧版里没有冲突清单、没有 exit 6，pull 会被退回「直接 git pull → 失败就 reset 回滚」，
+  面板上选好的「用本机 / 用云端」就永远不会被消费（真实踩过：18 项全选云端却拉不下来）。
+  所以顺序反过来：先插件 runtime，再 AppRoot 下最新安装的插件，最后才是仓库那份。
+#>
+function Find-PluginSync {
+  if ($PluginDir) {
+    $p = Join-Path $PluginDir 'runtime\sync.ps1'
+    if (Test-Path -LiteralPath $p) { return $p }
+  }
+  if ($PSScriptRoot) {
+    $p = Join-Path $PSScriptRoot 'sync.ps1'
+    $isRepoCopy = $false
+    if ($RepoRoot) {
+      try {
+        $a = (Resolve-Path -LiteralPath $PSScriptRoot).Path
+        $b = (Resolve-Path -LiteralPath $RepoRoot).Path
+        if ($a -eq $b) { $isRepoCopy = $true }
+      } catch { }
+    }
+    if ((Test-Path -LiteralPath $p) -and -not $isRepoCopy) { return $p }
+  }
+  if ($AppRoot) {
+    $cands = @(Get-ChildItem -LiteralPath $AppRoot -Directory -Filter 'dsh-config-sync*' -ErrorAction SilentlyContinue |
+      Where-Object { -not $_.Name.EndsWith('.old') } | Sort-Object LastWriteTime -Descending)
+    foreach ($cand in $cands) {
+      $p = Join-Path $cand.FullName 'runtime\sync.ps1'
+      if (Test-Path -LiteralPath $p) { return $p }
+    }
+  }
+  return $null
 }
-if (-not $sync) { Log '找不到 sync.ps1（仓库和插件 runtime 都没有），放弃'; Finish 3 '缺 sync.ps1' }
+
+$sync = Find-PluginSync
+if (-not $sync -and $RepoRoot) { $candidate = Join-Path $RepoRoot 'sync.ps1'; if (Test-Path -LiteralPath $candidate) { $sync = $candidate } }
+if (-not $sync) { Log '找不到 sync.ps1（插件 runtime 和仓库都没有），放弃'; Finish 3 '缺 sync.ps1' }
 if (-not $RepoRoot) { $RepoRoot = Split-Path -Parent $sync }
 Log ("执行体：{0}" -f $sync)
 

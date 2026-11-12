@@ -934,6 +934,7 @@ if ($SkipInstall) {
   Push-Location $ProfileDir
   try {
     $installed = $false
+    $skipBecauseReady = $false
     if ((Test-Path -LiteralPath $nodeExe) -and (Test-Path -LiteralPath $pnpmCjs)) {
       Say "  使用客户端内置 pnpm 安装依赖（严格按 lockfile）..."
       & $nodeExe $pnpmCjs install --frozen-lockfile
@@ -953,11 +954,24 @@ if ($SkipInstall) {
       if ($LASTEXITCODE -ne 0) { & pnpm install --no-frozen-lockfile }
       $installed = ($LASTEXITCODE -eq 0)
     } else {
-      Warn "找不到 pnpm，跳过安装。请手动在 $ProfileDir 执行 pnpm install --frozen-lockfile"
-      Pop-Location
-      exit 1
+      # 找不到 pnpm（客户端内置路径随版本变、系统也可能没装）时不能一律 exit 1：
+      # post-exit 会把 apply 的非零退出码当成「拉取失败」，接着自动回滚仓库和配置，
+      # 于是拉取明明成功了却被打回原状（真实故障：18 项全选云端、快进完成后又被回滚）。
+      # 只要 profile 里 node_modules 已经存在，依赖就是可用的，按成功处理。
+      $nodeModules = Join-Path $ProfileDir 'node_modules'
+      if (Test-Path -LiteralPath $nodeModules) {
+        $installed = $true
+        $skipBecauseReady = $true
+      } else {
+        Warn "找不到 pnpm，且 $nodeModules 不存在，跳过安装。请手动在 $ProfileDir 执行 pnpm install --frozen-lockfile"
+        Pop-Location
+        exit 1
+      }
     }
-    if ($installed) { Ok "依赖安装完成" }
+    if ($installed) {
+      if ($skipBecauseReady) { Ok '依赖已就绪（profile 里已有 node_modules），无需 pnpm 安装' }
+      else { Ok '依赖安装完成' }
+    }
     else { Warn "pnpm install 仍未成功，依赖没装上（下面的自检会把缺的插件列出来）" }
   } finally {
     Pop-Location
