@@ -14,7 +14,7 @@ DSH 插件：左侧栏加一行「配置同步」，点开是整页体检面板�
 
 ```sh
 # 从本仓库的 release 包安装（无需构建，包内已含宿主/前端/runtime 脚本）
-dsh plugin add https://raw.githubusercontent.com/QcWyGm/dsh-config-sync/main/releases/dsh-config-sync-0.3.4.tgz
+dsh plugin add https://raw.githubusercontent.com/QcWyGm/dsh-config-sync/main/releases/dsh-config-sync-0.3.25.tgz
 ```
 
 或在 DSH 面板「插件 → 插件市场」里搜索 `dsh-config-sync`（本仓库已将 `dsh-plugin`、`deepseek-harness` 写进包关键词，并声明了 `dsh.bundle.patch`）。
@@ -128,15 +128,17 @@ https://raw.githubusercontent.com/QcWyGm/dsh-config-sync/main/market-index.json
 
 接口：`GET/POST /config-sync/conflict`（GET 读清单，每项带 `localSaved`/`cloudSaved`；POST `{items:[{path,choice}]}` 存选择、`{action:'restore',path,side:'local'|'cloud'}` 单项还原（默认 local）、`{action:'reset'}` 放弃清单）。还原写到清单里记录的 `repo` 路径，所以事后改过 `repoPath` 也不会写错仓库。`status` 多返回 `conflicts: {exists,total,pending,at,backupDir}`。
 
-## 还原备份（0.3.13 起）
+## 还原备份（0.3.13 起；0.3.25 起改为「立即还原」+ 时点还原）
 
-面板新增「还原备份」卡（排在「退出后执行」之后、「同步内容」之前）：上面一行是**备份目录**（默认 `~\.dsh\backups`，`apply.ps1` 每次拉取/落地之前都会往这里打一份快照），下面列出该目录下的**所有快照**——名称、时间、文件数、占用大小，点某一行的「还原」就按那一份生成还原脚本。
+面板「还原备份」卡（排在「退出后执行」之后、「同步内容」之前）：上面一行是**备份目录**（默认 `~\.dsh\backups`，`apply.ps1` 每次拉取/落地之前都会往这里打一份快照），下面列出该目录下的**所有快照**——名称、时间（并带「3 分钟前 / 2 小时前」这样的相对时间）、文件数、占用大小、装了多少插件。
 
+- **0.3.25 起和「立即拉取」是同一条流水线**：点某行的「立即还原」→ 面板先向宿主取一份**差异预览**，逐项列出「将撤走几个快照之后装上的插件」「将移走几个快照之后新增的文件」「将覆盖 / 写回哪些文件」「还原后要重装哪些插件」→ 点「确认还原」才排队 → 客户端正常退出 → `post-exit.ps1` 弹出可见进度窗口跑 `restore.ps1 -RollbackToPoint` → 结果写回 `auto-sync-result.json` → 自动重启客户端。不用再自己退客户端、双击 `.cmd`、输 `y`。
+- **时点还原 = 回到那个时间点**，不只是把快照里的文件盖回去：快照之后新增的文件移进 `backups\manual-<时间戳>\rollback\files`；快照之后装上的插件，junction 只删链接（绝不穿进链接删实体目录）、实体目录移进 `rollback\plugins`；每一项都写进 `rollback\rollback-manifest.json`——全部可再还原，不做物理删除。动手前还会把当前配置整份另存 `manual-<时间戳>`。
+- **谁算「快照之后装上的插件」**：以还原后 `package.json` 的 `dependencies` 为准，`node_modules` 里不在其中的直接子目录（含 `@scope/包`）会被撤走；退回去之后由 `pnpm install` 补齐快照里有、现在没有的插件。
 - **地址可自己改**：点「修改」填一个绝对路径（例如 `D:\DSH备份`）保存后，卡片就改扫那个目录；点「恢复默认」清回 `~\.dsh\backups`。配置存在 `~\.dsh\dsh-config-sync.json` 的 `backupRoot`，留空=默认，跟本机走、不进仓库。
-- **点「还原」生成的是脚本，不是当场覆盖**：`<仓库>\同步-还原-<快照名>.cmd`。原因和整个插件一致——profile 文件在 DSH 运行时被客户端持有，边跑边覆盖会被退出时的回写再盖回去。脚本内容：先打印快照信息 → `restore.ps1 -BackupDir "<该快照>" -DryRun` 只读预览 → 输入 `y` 确认 → 真跑（真跑之前还会把当前状态另存一份 `manual-<时间戳>`，回退错了还能退回来）→ `pause` 收尾。完全退出 DSH 后双击即可。
-- **只认能用的快照**：快照里没有 `profile\package.json` 的（新机器首次拉取时本机无配置可备份，`apply` 会留下空快照）在列表里标「没有 profile 文件，不能还原」、「不可还原」置灰；宿主的 `restore-backup` 动作也会拒掉这类路径。
+- **只认能用的快照**：快照里没有 `profile\package.json` 的（新机器首次拉取时本机无配置可备份，`apply` 会留下空快照）在列表里标「没有 profile 文件，不能还原」、「不可还原」置灰；宿主的 `restore-backup` / `restore-preview` / `restore-now` 都走同一套校验，会直接拒掉这类路径。
 - **只在这个目录里选**：面板传来的必须是备份根之下真实存在的一份快照（越界、相对路径、含引号换行都直接报错），不会因为改了地址就把范围放宽到任意文件夹。
-- `runtime\restore.ps1` 不用改：它原本就支持 `-BackupDir` 指定快照、`-DryRun` 只看不动、`-SkipInstall`、`-WithMnemon`，这次只是把"挑哪一份"从命令行搬到面板上。
+- **老路径仍在**：「退出后执行」卡里的「只生成还原脚本」照旧写 `<仓库>\同步-还原-<快照名>.cmd`（含 `-DryRun` 预览、输 `y` 确认、`manual-<时间戳>` 自保），给离线 / 远控 / 手动执行用；`restore.ps1` 的 `-BackupDir` 参数没变，新增的 `-RollbackToPoint` 由面板那条链路自动加上。
 
 ## 同步内容勾选（0.3.8 起）
 
@@ -206,10 +208,10 @@ https://raw.githubusercontent.com/QcWyGm/dsh-config-sync/main/market-index.json
 
 | 接口 | 说明 |
 |---|---|
-| `GET /config-sync/status` | 体检 JSON（含 `repo.source` / `repo.configured` / `remote.configured`、`remote.backupRoot` / `remote.backupRootCustom`、`backup.{root,defaultRoot,custom,count,latest,latestFiles,snapshots:[{name,dir,at,files,bytes,usable}]}`、`local.{lastSyncAt,pending,sample}`、`auto.lastResult`） |
+| `GET /config-sync/status` | 体检 JSON（含 `repo.source` / `repo.configured` / `remote.configured`、`remote.backupRoot` / `remote.backupRootCustom`、`backup.{root,defaultRoot,custom,count,latest,latestFiles,snapshots:[{name,dir,at,files,bytes,usable,plugins,bundles}]}`、`local.{lastSyncAt,pending,sample}`、`auto.lastResult`） |
 | `POST /config-sync/prepare` | `{action:'push'\|'pull'\|'restore'\|'restore-backup'\|'all', message?, backupDir?}`，生成对应 `.cmd`；`all` 返回 `built: [...]`；`restore-backup` 必须给 `backupDir`（须是备份根之下、含 `profile\package.json` 的一份快照） |
 | `POST /config-sync/settings` | `{repoPath?, remoteUrl?, sshKey?, autoPull?, autoPush?, autoRestart?, backupRoot?, clearBackupRoot?}`：校验 → 写设置 →（地址变了才动 git），失败回滚并 400；`backupRoot` 留空/`clearBackupRoot` = 回默认 `~\.dsh\backups` |
-| `POST /config-sync/auto` | `{action:'check'\|'pull-now'\|'push-now'\|'cancel', closeNow?, restart?}`；`check` 只读 fetch 比对，`pull-now`/`push-now` 不带 `/F` 关闭客户端（走正常退出，配置能存下来）；`status` 里 `auto.pending` 带 `reason`（为什么排队） |
+| `POST /config-sync/auto` | `{action:'check'\|'pull-now'\|'push-now'\|'restore-preview'\|'restore-now'\|'cancel', backupDir?, closeNow?, restart?}`；`check` 只读 fetch 比对，`pull-now`/`push-now`/`restore-now` 都不带 `/F` 关闭客户端（走正常退出，配置能存下来）；`restore-preview` 只读算差异（`pluginsRemove` / `pluginsInstall` / `willRemove` / `willOverwrite` / `willWrite`），`restore-now` 才是排队「退出后时点还原」；`status` 里 `auto.pending` 带 `reason`（为什么排队） |
 | `GET/POST /config-sync/update` | `{action:'check'\|'install-live'\|'restart'\|'apply'}`：`check` 重新读清单（多源依次试）；`install-live` 运行中下载+校验+覆盖安装（不退出 DSH，回 `installed` 与 `restartRequired`）；`restart` 排队 relaunch 后关闭 DSH；`apply` 是「退出 DSH 后再安装」的兜底 |
 | `GET/POST /config-sync/scope` | GET 回十组同步范围（每组 `{id,title,desc,enabled,items:[{id,label,enabled,excludable}]}` + `deleteCloud` + 本机文件 `path`）；POST `{deleteCloud?, groups:{id:{enabled?,excluded?}}}` 只落与默认不同的项（全勾的组不写文件），不存在的排除项会被清掉 |
 
