@@ -241,13 +241,13 @@ window.__ModuleLoader__.load({
     /** 每个 POST 都带 accept-language：宿主的建议句/错误信息按它出中文或英文。 */
     const jsonHeaders = { 'content-type': 'application/json', ...langHeaders() }
 
-    async function callPrepare(action, message) {
+    async function callPrepare(action, message, backupDir) {
       const res = await fetch('/config-sync/prepare', {
         method: 'POST',
         cache: 'no-store',
         credentials: 'same-origin',
         headers: jsonHeaders,
-        body: JSON.stringify({ action, message: message || '' }),
+        body: JSON.stringify({ action, message: message || '', backupDir: backupDir || '' }),
       })
       const text = await res.text()
       let body
@@ -347,10 +347,10 @@ window.__ModuleLoader__.load({
         return () => { alive = false }
       }, [])
 
-      const prepare = react.useCallback(async (action, message) => {
+      const prepare = react.useCallback(async (action, message, backupDir) => {
         setBusy(true)
         setErr('')
-        try { setMade(await callPrepare(action, message)) } catch (e) { setErr(String((e && e.message) || e)) } finally { setBusy(false) }
+        try { setMade(await callPrepare(action, message, backupDir)) } catch (e) { setErr(String((e && e.message) || e)) } finally { setBusy(false) }
       }, [])
 
       return { data, err, busy, made, refresh, prepare }
@@ -377,6 +377,7 @@ window.__ModuleLoader__.load({
         push: M('推送', 'Push'),
         pull: M('拉取', 'Pull'),
         restore: M('还原', 'Restore'),
+        'restore-backup': M('还原指定备份', 'Restore chosen backup'),
         all: M('全部', 'All'),
       }
       const backup = items.map((it) => it.backup).find((b) => b && b.dir)
@@ -620,6 +621,143 @@ window.__ModuleLoader__.load({
           : null,
         err ? h('div', { style: { ...S.hint, color: 'var(--dsw-alias-state-error-primary)' } }, M(`保存失败：${err}`, `Save failed: ${err}`)) : null,
         msg ? h('div', { style: { ...S.hint, color: 'var(--dsw-alias-state-success-primary)' } }, msg) : null,
+      )
+    }
+
+    /**
+     * 「还原备份」卡：先看备份目录在哪（默认 <DshHome>\backups，可改成别的绝对路径），
+     * 再把该目录下的快照逐份列出来（时间 / 文件数 / 大小 / 能不能拿来还原）。
+     * 点某一行的「还原」= 按那一份快照生成 `同步-还原-<快照名>.cmd`，退出 DSH 后双击执行。
+     *
+     * 为什么不是"点了就直接覆盖"：profile 文件在 DSH 运行时被客户端持有，边跑边覆盖会被退出时的
+     * 回写再盖回去，甚至把 profile 弄坏。整个插件从第一天起就是"生成脚本 → 退出后双击"，
+     * 这里沿用同一套：restore.ps1 自己也会先拦一次"DSH 还在跑"。
+     */
+    function RestoreCard(props) {
+      const backup = (props.data && props.data.backup) || {}
+      const remote = (props.data && props.data.remote) || {}
+      const snapshots = Array.isArray(backup.snapshots) ? backup.snapshots
+        : (Array.isArray(backup.candidates) ? backup.candidates : [])
+      const defaultRoot = backup.defaultRoot || remote.backupRoot || ''
+      const [editing, setEditing] = react.useState(false)
+      const [root, setRoot] = react.useState(remote.backupRoot || defaultRoot)
+      const [busy, setBusy] = react.useState(false)
+      const [err, setErr] = react.useState('')
+      const [msg, setMsg] = react.useState('')
+      const [made, setMade] = react.useState(null)
+
+      const startEdit = () => { setRoot(remote.backupRootCustom ? (remote.backupRoot || '') : ''); setErr(''); setMsg(''); setEditing(true) }
+      const cancelEdit = () => { setEditing(false); setErr(''); setMsg('') }
+
+      const save = async (payload) => {
+        setBusy(true); setErr(''); setMsg('')
+        try {
+          const r = await callSettings(payload)
+          setMsg(payload.clearBackupRoot
+            ? M('已恢复默认备份目录', 'Backup folder reset to the default')
+            : M(`已保存备份目录：${(r.remote && r.remote.backupRoot) || ''}`, `Backup folder saved: ${(r.remote && r.remote.backupRoot) || ''}`))
+          setEditing(false)
+          if (typeof props.onSaved === 'function') props.onSaved()
+        } catch (e) {
+          setErr(String((e && e.message) || e))
+        } finally { setBusy(false) }
+      }
+
+      const restore = async (dir) => {
+        setBusy(true); setErr(''); setMsg('')
+        try { setMade(await callPrepare('restore-backup', '', dir)) } catch (e) { setErr(String((e && e.message) || e)) } finally { setBusy(false) }
+      }
+
+      const when = (at) => (at ? new Date(at).toLocaleString(localeNow(), { hour12: false }) : '?')
+      const size = (n) => {
+        const v = Number(n) || 0
+        if (v >= 1048576) return `${(v / 1048576).toFixed(1)} MB`
+        if (v >= 1024) return `${(v / 1024).toFixed(1)} KB`
+        return `${v} B`
+      }
+
+      const rows = snapshots.length
+        ? h('div', { style: { maxHeight: '260px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '6px' } },
+          snapshots.map((s) => h('div', {
+            key: s.dir || s.name,
+            style: {
+              display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap',
+              padding: '6px 8px', borderRadius: '8px',
+              border: '1px solid var(--dsw-alias-border-l1)',
+              background: 'var(--dsw-alias-bg-base)',
+            },
+          },
+          h('div', { style: { display: 'flex', flexDirection: 'column', gap: '2px', minWidth: 0, flex: 1 } },
+            h('div', {
+              style: { fontSize: '12px', lineHeight: '18px', color: 'var(--dsw-alias-label-primary)', fontFamily: 'Consolas, ui-monospace, monospace', wordBreak: 'break-all' },
+            }, s.name),
+            h('div', { style: S.hint },
+              M(
+                `${when(s.at)} · ${s.files || 0} 个文件 · ${size(s.bytes)}${s.usable === false ? ' · 没有 profile 文件，不能还原' : ''}`,
+                `${when(s.at)} · ${s.files || 0} files · ${size(s.bytes)}${s.usable === false ? ' · no profile files, cannot restore' : ''}`,
+              )),
+          ),
+          s.usable === false
+            ? h('button', { type: 'button', style: { ...S.btn, opacity: 0.5, cursor: 'not-allowed' }, disabled: true }, M('不可还原', 'Unusable'))
+            : h('button', { type: 'button', style: S.btn, disabled: busy, onClick: () => restore(s.dir) }, M('还原', 'Restore')),
+          )))
+        : h('div', { style: S.hint }, backup.exists
+          ? M('这个备份目录下还没有快照（apply.ps1 每次拉取/落地之前都会打一份）', 'No snapshots in this backup folder yet (apply.ps1 makes one before every pull/apply)')
+          : M(`备份目录不存在：${backup.root || defaultRoot}`, `Backup folder does not exist: ${backup.root || defaultRoot}`))
+
+      return h('div', { style: S.card },
+        h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' } },
+          h('div', { style: S.cardTitle }, M('还原备份', 'Restore backup')),
+          h('div', { style: { ...S.hint, flex: 1 } }, editing
+            ? M('编辑中：改完点保存', 'Editing: save when done')
+            : M('只读展示，点「修改」后可改备份目录', 'Read-only; click Edit to change the backup folder')),
+          h('div', { style: S.actions },
+            editing
+              ? h(react.Fragment, null,
+                h('button', { type: 'button', style: S.btnPrimary, disabled: busy, onClick: () => save({ backupRoot: root.trim() }) }, busy ? M('保存中…', 'Saving…') : M('保存', 'Save')),
+                h('button', { type: 'button', style: S.btn, disabled: busy, onClick: () => save({ clearBackupRoot: true }) }, M('恢复默认', 'Use default')),
+                h('button', { type: 'button', style: S.btn, disabled: busy, onClick: cancelEdit }, M('取消', 'Cancel')),
+              )
+              : h('button', { type: 'button', style: S.btn, disabled: !props.data || busy, onClick: startEdit }, M('修改', 'Edit')),
+          ),
+        ),
+        h('div', { style: S.kvRow },
+          h('div', { style: S.kvKey }, M('备份目录', 'Backup folder')),
+          editing
+            ? h('input', {
+              type: 'text', style: S.input, value: root, spellCheck: false,
+              placeholder: defaultRoot || M('留空 = 默认 <用户目录>\\.dsh\\backups', 'Empty = default <home>\\.dsh\\backups'),
+              onChange: (e) => setRoot(e.target.value),
+            })
+            : h('div', { style: { ...S.kvVal, fontFamily: 'Consolas, ui-monospace, monospace' } },
+              `${remote.backupRoot || backup.root || defaultRoot}${(remote.backupRootCustom ? M('（本机设置）', ' (machine setting)') : M('（默认）', ' (default)'))}`),
+        ),
+        h(Kv, { k: M('快照数量', 'Snapshots'), v: backup.exists
+          ? M(`${backup.count || 0} 份（下面列出最近 ${Math.min(snapshots.length, 60)} 份）`, `${backup.count || 0} total (${Math.min(snapshots.length, 60)} listed below)`)
+          : M('目录不存在', 'Folder missing') }),
+        rows,
+        made
+          ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: '4px' } },
+            h('div', { style: S.hint }, M(`已生成还原脚本：${made.path}`, `Restore script generated: ${made.path}`)),
+            made.backup && made.backup.dir
+              ? h('div', { style: S.hint }, M(
+                `将退回到：${made.backup.dir}（${when(made.backup.at)}）`,
+                `Will roll back to: ${made.backup.dir} (${when(made.backup.at)})`,
+              ))
+              : null,
+            h('div', { style: S.code }, made.command || ''),
+            h('div', { style: S.hint }, M(
+              '下一步：完全退出 DSH，双击上面这份 .cmd；它会先打印还原计划，输入 y 之后才真正写文件（写之前还会把当前状态另存一份 manual-<时间戳>）。',
+              'Next: fully quit DSH and double-click the .cmd above; it prints the plan first and only writes after you type y (it also saves the current state as manual-<timestamp> first).',
+            )),
+          )
+          : null,
+        err ? h('div', { style: { ...S.hint, color: 'var(--dsw-alias-state-error-primary)' } }, M(`操作失败：${err}`, `Failed: ${err}`)) : null,
+        msg ? h('div', { style: { ...S.hint, color: 'var(--dsw-alias-state-success-primary)' } }, msg) : null,
+        h('div', { style: S.hint }, M(
+          '备份目录留空就用默认 <用户目录>\\.dsh\\backups；只能选这个目录下的快照（填了别的路径也不会把范围放宽到任意文件夹）。还原只覆盖、不删除，本机多出来的文件不会被清掉。',
+          'Empty means the default <home>\\.dsh\\backups; only snapshots inside this folder are offered. Restore overwrites but never deletes, so extra local files are kept.',
+        )),
       )
     }
 
@@ -1346,6 +1484,8 @@ window.__ModuleLoader__.load({
 
       const remoteCard = data ? h(RemoteCard, { data, onSaved: refresh }) : null
       const autoCard = data ? h(AutoCard, { data, onSaved: refresh }) : null
+      // 「还原备份」自己拿 status 里的 backup 段（快照列表），改动后让父层 refresh 重新读
+      const restoreCard = data ? h(RestoreCard, { data, onSaved: refresh }) : null
       // 「同步内容」卡自己拉 /config-sync/scope，不依赖 status（status 读的是仓库与本机，跟勾选无关）
       const scopeCard = h(ScopeCard, {})
 
@@ -1384,6 +1524,8 @@ window.__ModuleLoader__.load({
           Section(M('同步目标', 'Sync targets'), M('仓库放哪、远端连哪，都是本机配置，改完立即生效', 'Where the repo lives and which remote it points at — both local settings, applied immediately'), [repoCard, remoteCard].filter(Boolean)),
           Section(M('自动化与插件更新', 'Automation & plugin update'), M('退出 DSH 后做什么、插件自己怎么升级', 'What runs after DSH exits, and how the plugin upgrades itself'), [autoCard, updCard].filter(Boolean)),
           Section(M('退出后执行', 'After exit'), null, [actionCard]),
+          // 「还原备份」跟在动作卡之后：先看怎么生成脚本，再挑具体退回到哪份快照
+          Section(M('还原备份', 'Restore backup'), M('备份目录可改；列出该目录下的快照，点一行即可生成对应的还原脚本', 'Change the backup folder, browse its snapshots, and generate a restore script for any one of them'), [restoreCard].filter(Boolean)),
           // 「同步内容」放在整页最下面：它是"细项配置"，看清前面的状态与动作后才会来调整
           Section(M('同步内容', 'Sync content'), M('云端同步哪十组内容：逐组勾选，组内还能单独排除；默认全勾', 'What syncs to the cloud: ten groups, per-item exclusions included; everything is checked by default'), [scopeCard]),
         ),

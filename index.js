@@ -22,7 +22,7 @@ import { createHash } from 'node:crypto'
 import { createRequire } from 'node:module'
 import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { basename, dirname, join } from 'node:path'
+import { basename, dirname, isAbsolute, join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const pluginRequire = createRequire(import.meta.url)
@@ -222,7 +222,15 @@ function readSettings(dshHome) {
     updateManifestUrl: typeof raw.updateManifestUrl === 'string' ? raw.updateManifestUrl : '',
     // 仓库是私有库时，读清单/下包都要带只读令牌（Gitee 私人令牌）；留空就按匿名 raw 读
     updateToken: typeof raw.updateToken === 'string' ? raw.updateToken : '',
+    // 备份快照放哪：留空 = 默认 <DshHome>\backups（apply.ps1 每次跑之前都往那儿打一份）
+    backupRoot: typeof raw.backupRoot === 'string' ? raw.backupRoot : '',
   }
+}
+
+/** 备份根：设置里填了就用填的，否则用默认 <DshHome>\backups。 */
+function backupRootOf(dshHome, settings) {
+  const custom = settings && typeof settings.backupRoot === 'string' ? settings.backupRoot.trim() : ''
+  return custom || join(dshHome, 'backups')
 }
 
 function writeSettings(dshHome, s) {
@@ -235,6 +243,7 @@ function writeSettings(dshHome, s) {
     autoRestart: s.autoRestart !== false,
     updateManifestUrl: s.updateManifestUrl || '',
     updateToken: s.updateToken || '',
+    backupRoot: s.backupRoot || '',
   }, null, 2) + '\n'
   writeFileSync(settingsPath(dshHome), payload, 'utf8')
 }
@@ -448,11 +457,13 @@ function missingDeps(deps, profileDir) {
 
 /**
  * 还原会用到的快照。规则与 restore.ps1 保持一致：不加 -BackupDir 时取
- * <DshHome>\backups 下按修改时间最新的一份。
+ * 「备份根」下按修改时间最新的一份；备份根默认 <DshHome>\backups，可在面板里改。
+ * 返回的不只是"最新一份"：面板要列出所有快照让人挑，所以带上全量列表（最多 60 份）。
  */
-function inspectBackup(dshHome) {
-  const root = join(dshHome, 'backups')
-  const empty = { root, exists: false, latest: '', latestAt: null, count: 0, latestFiles: 0, candidates: [] }
+function inspectBackup(dshHome, rootOverride) {
+  const root = rootOverride || join(dshHome, 'backups')
+  const defaultRoot = join(dshHome, 'backups')
+  const empty = { root, defaultRoot, custom: root !== defaultRoot, exists: false, latest: '', latestAt: null, count: 0, latestFiles: 0, candidates: [], snapshots: [] }
   let names = []
   try { names = readdirSync(root, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name) } catch { return empty }
   const all = []
@@ -461,20 +472,41 @@ function inspectBackup(dshHome) {
     try {
       const st = statSync(dir)
       let files = 0
-      try { files = readdirSync(dir).length } catch { }
-      all.push({ name, dir, at: st.mtimeMs, files })
+      let bytes = 0
+      const stack = [dir]
+      while (stack.length) {
+        const cur = stack.pop()
+        let entries = []
+        try { entries = readdirSync(cur, { withFileTypes: true }) } catch { continue }
+        for (const e of entries) {
+          const p = join(cur, e.name)
+          if (e.isDirectory()) stack.push(p)
+          else {
+            files++
+            try { bytes += statSync(p).size } catch { }
+          }
+        }
+      }
+      // 只有落过 profile 的快照能用来还原配置（新机器首次拉取时 apply 会留下空快照）
+      const hasProfile = isFile(join(dir, 'package.json'))
+      all.push({ name, dir, at: st.mtimeMs, files, bytes, hasProfile })
     } catch { }
   }
   all.sort((a, b) => b.at - a.at)
   if (!all.length) return { ...empty, exists: true }
+  const usable = all.filter((x) => x.hasProfile)
+  const latestPick = usable[0] || all[0]
   return {
     root,
+    defaultRoot,
+    custom: root !== defaultRoot,
     exists: true,
-    latest: all[0].dir,
-    latestAt: all[0].at,
+    latest: latestPick.dir,
+    latestAt: latestPick.at,
     count: all.length,
-    latestFiles: all[0].files,
-    candidates: all.slice(0, 8).map((x) => ({ name: x.name, dir: x.dir, at: x.at, files: x.files })),
+    latestFiles: latestPick.files,
+    candidates: all.slice(0, 8).map((x) => ({ name: x.name, dir: x.dir, at: x.at, files: x.files, bytes: x.bytes, usable: x.hasProfile })),
+    snapshots: all.slice(0, 60).map((x) => ({ name: x.name, dir: x.dir, at: x.at, files: x.files, bytes: x.bytes, usable: x.hasProfile })),
   }
 }
 
@@ -619,7 +651,7 @@ async function inspect(config) {
     bundles: { total: bundles.length, unresolved },
     deps: { total: deps.length, missing },
     advice,
-    backup: inspectBackup(dshHome),
+    backup: inspectBackup(dshHome, backupRootOf(dshHome, settings)),
     remote: {
       url: gitRemoteUrl || settings.remoteUrl || '',
       urlSource: gitRemoteUrl ? 'git' : (settings.remoteUrl ? 'settings' : 'none'),
@@ -630,6 +662,9 @@ async function inspect(config) {
       sshKeyFrom: settings.sshKey ? 'settings' : (sshKey ? 'default' : 'none'),
       sshConfig: isFile(join(homedir(), '.ssh', 'config')),
       updateTokenSet: Boolean(settings.updateToken),
+      // 备份根：留空=默认。面板「还原备份」卡据此显示当前值并判断是否被改过
+      backupRoot: backupRootOf(dshHome, settings),
+      backupRootCustom: Boolean(settings.backupRoot),
       settingsPath: settingsPath(dshHome),
     },
     paths: { appRoot, dshHome, profileDir },
@@ -743,8 +778,9 @@ function pluginRoot() {
 }
 
 function buildCmd(config, action, repo, appRoot, dshHome, state = {}) {
-  const restorePs1 = action === 'restore' ? pickPs1(repo, 'restore.ps1') : ''
-  const syncPs1 = action === 'restore' ? '' : pickPs1(repo, 'sync.ps1')
+  const isRestore = action === 'restore' || action === 'restore-backup'
+  const restorePs1 = isRestore ? pickPs1(repo, 'restore.ps1') : ''
+  const syncPs1 = isRestore ? '' : pickPs1(repo, 'sync.ps1')
   // 仓库还没克隆时先建出目录，脚本要落在那里；clone 由 sync.ps1 首次执行时做完。
   if (!isDir(repo)) { try { mkdirSync(repo) } catch { /* 建不出来就让后面的 writeFileSync 报 */ } }
   const common = [`-RepoRoot "${repo}"`, `-AppRoot "${appRoot}"`, `-DshHome "${dshHome}"`]
@@ -779,19 +815,23 @@ function buildCmd(config, action, repo, appRoot, dshHome, state = {}) {
     envLines = [`echo ${echoSafe('认证：未配置私钥，交给 .ssh\\config 决定')}`]
   }
 
-  if (action === 'restore') {
+  if (isRestore) {
     // 生成时如果已经有快照，就把那一份明写进脚本（双击前就知道退回哪里）；
     // 还没有快照（新机器刚装插件）时不写 -BackupDir，交给 restore.ps1 运行时取最新一份 ——
     // 否则脚本会一直咬住"生成那一刻没有快照"，之后拉取生成了快照也用不上。
-    const backup = inspectBackup(dshHome)
-    const backupArg = backup.latest ? [`-BackupDir "${backup.latest}"`] : []
+    // 面板「还原备份」里点某一行的还原时，state.backupDir 会带来那一份的绝对路径（已校验在备份根之下）。
+    const settings = readSettings(dshHome)
+    const backup = inspectBackup(dshHome, backupRootOf(dshHome, settings))
+    const picked = String(state.backupDir || '')
+    const pickedSnap = picked ? (backup.snapshots || []).find((s) => s.dir === picked) : null
+    const backupArg = (picked || backup.latest) ? [`-BackupDir "${picked || backup.latest}"`] : []
     const allArgs = [...common, ...backupArg]
     const dry = `${PS_EXE} -File "${restorePs1}" ${allArgs.join(' ')} -DryRun`
     const real = `${PS_EXE} -File "${restorePs1}" ${allArgs.join(' ')}`
-    const backupLines = backup.latest
+    const backupLines = (picked || backup.latest)
       ? [
-        `echo ${echoSafe(`备份快照：${backup.latest}`)}`,
-        `echo ${echoSafe(`快照时间：${new Date(backup.latestAt).toLocaleString('zh-CN', { hour12: false })}　共 ${backup.count} 份，最新这份含 ${backup.latestFiles} 个文件`)}`,
+        `echo ${echoSafe(`备份快照：${picked || backup.latest}`)}`,
+        `echo ${echoSafe(`快照时间：${new Date(pickedSnap ? pickedSnap.at : backup.latestAt).toLocaleString('zh-CN', { hour12: false })}　备份根下共 ${backup.count} 份，这份含 ${pickedSnap ? pickedSnap.files : backup.latestFiles} 个文件`)}`,
       ]
       : [
         `echo ${echoSafe(`备份快照：${backup.root}（生成脚本时这里还没有快照）`)}`,
@@ -819,9 +859,12 @@ function buildCmd(config, action, repo, appRoot, dshHome, state = {}) {
       'echo 执行结束。确认无误后再启动 DSH。',
       'pause',
     ].join('\r\n')
-    const path = join(repo, '同步-还原.cmd')
+    // 指定了某一份快照（面板点行还原）时脚本名带上快照名，多份还原脚本可以同时存在、互不覆盖
+    const fileName = pickedSnap ? `同步-还原-${pickedSnap.name}.cmd` : '同步-还原.cmd'
+    const path = join(repo, fileName)
     writeFileSync(path, text, 'utf8')
-    return { action, label: t('还原（本机 → 快照）', 'Restore (machine → snapshot)'), path, command: real, backup: { dir: backup.latest, root: backup.root, at: backup.latestAt, count: backup.count, files: backup.latestFiles } }
+    return { action, label: t('还原（本机 → 快照）', 'Restore (machine → snapshot)'), path, command: real,
+      backup: { dir: picked || backup.latest, root: backup.root, at: pickedSnap ? pickedSnap.at : backup.latestAt, count: backup.count, files: pickedSnap ? pickedSnap.files : backup.latestFiles } }
   }
 
   const target = action === 'push' ? 'push' : 'pull'
@@ -1276,7 +1319,7 @@ async function aheadCount(repo) {
 }
 
 /** action 白名单：单个动作，或 all=一次性生成三个脚本。 */
-const ACTIONS = ['push', 'pull', 'restore', 'all']
+const ACTIONS = ['push', 'pull', 'restore', 'restore-backup', 'all']
 
 
 /** 远端地址只接受三种写法，别的一律拒（避免把乱七八糟的东西塞进 git remote）。 */
@@ -1344,6 +1387,17 @@ async function handleSettings(req, res, config) {
       }
     }
 
+    // 备份根：留空 = 恢复默认 <DshHome>\backups；填了必须是绝对路径（相对路径会随 cwd 漂）
+    let backupRoot = before.backupRoot
+    if (body.clearBackupRoot === true) backupRoot = ''
+    else if (has('backupRoot')) {
+      backupRoot = String(body.backupRoot || '').trim().replace(/[\\/]+$/, '')
+      if (backupRoot && !isAbsolute(backupRoot)) {
+        throw new Error(t('备份目录要填绝对路径（例如 D:\\DSH备份）', 'The backup folder must be an absolute path (e.g. D:\\DSH-backups)'))
+      }
+      if (/["\r\n]/.test(backupRoot)) throw new Error(t('备份路径里不能含引号或换行', 'The backup path must not contain quotes or newlines'))
+    }
+
     // 两个自动化开关：只能布尔；字段没给就沿用原值（面板保存单个字段时不会把开关冲掉）
     const autoPull = has('autoPull') ? body.autoPull === true : before.autoPull
     const autoPush = has('autoPush') ? body.autoPush === true : before.autoPush
@@ -1351,16 +1405,17 @@ async function handleSettings(req, res, config) {
 
     if (!has('repoPath') && !has('remoteUrl') && !has('sshKey') &&
         !has('autoPull') && !has('autoPush') && !has('autoRestart') &&
-        !has('updateToken') && !has('updateManifestUrl') && body.clearUpdateToken !== true && body.clearUpdateManifestUrl !== true) {
+        !has('backupRoot') &&
+        !has('updateToken') && !has('updateManifestUrl') && body.clearUpdateToken !== true && body.clearUpdateManifestUrl !== true && body.clearBackupRoot !== true) {
       throw new Error(t(
-        '没有要保存的字段（repoPath / remoteUrl / sshKey / autoPull / autoPush / updateToken / updateManifestUrl 至少给一个）',
-        'Nothing to save (provide at least one of repoPath / remoteUrl / sshKey / autoPull / autoPush / updateToken / updateManifestUrl)',
+        '没有要保存的字段（repoPath / remoteUrl / sshKey / autoPull / autoPush / backupRoot / updateToken / updateManifestUrl 至少给一个）',
+        'Nothing to save (provide at least one of repoPath / remoteUrl / sshKey / autoPull / autoPush / backupRoot / updateToken / updateManifestUrl)',
       ))
     }
 
     // 新仓库路径一落盘，后面的 git remote 要对它做，别用改之前解析出来的旧仓库。
     const repo = repoPath || (resolveRepo(config?.repoPath, dshHome).repo || '')
-    writeSettings(dshHome, { repoPath, remoteUrl, sshKey, autoPull, autoPush, autoRestart, updateToken, updateManifestUrl })
+    writeSettings(dshHome, { repoPath, remoteUrl, sshKey, autoPull, autoPush, autoRestart, updateToken, updateManifestUrl, backupRoot })
 
     const changed = {
       repoPath: before.repoPath !== repoPath,
@@ -1368,6 +1423,7 @@ async function handleSettings(req, res, config) {
       sshKey: before.sshKey !== sshKey,
       autoPull: before.autoPull !== autoPull,
       autoPush: before.autoPush !== autoPush,
+      backupRoot: before.backupRoot !== backupRoot,
     }
     let gitSet = null
     if (repo && isDir(join(repo, '.git')) && remoteUrl) {
@@ -1412,6 +1468,8 @@ async function handleSettings(req, res, config) {
         sshKeyFrom: sshKey ? 'settings' : (sshKey2 ? 'default' : 'none'),
         updateTokenSet: Boolean(updateToken),
         updateManifestUrl: updateManifestUrl || '',
+        backupRoot: backupRoot || backupRootOf(dshHome, { backupRoot: '' }),
+        backupRootCustom: Boolean(backupRoot),
         settingsPath: file,
       },
     })
@@ -2353,8 +2411,8 @@ async function handlePrepare(req, res, config) {
       ))
     }
     const repoReady = isRepoDir(repo)
-    // 推送 / 拉取都以「云端仓库地址」为前置；还原只动本机快照，不需要远端。
-    if (action !== 'restore') {
+    // 推送 / 拉取都以「云端仓库地址」为前置；还原（最新快照或指定快照）只动本机快照，不需要远端。
+    if (action !== 'restore' && action !== 'restore-backup') {
       const origin = isDir(join(repo, '.git')) ? await git(repo, ['remote', 'get-url', 'origin']) : null
       const remoteUrl = origin || readSettings(dshHome).remoteUrl
       if (!remoteUrl) {
@@ -2375,6 +2433,27 @@ async function handlePrepare(req, res, config) {
       ))
     }
     const state = {...await repoState(repo), message}
+    // 「还原备份」点某一行：备份目录必须是备份根之下真实存在的一份快照 ——
+    // 面板传来的路径直接拼进 cmd，所以这里既校验存在，也校验不含引号/换行，避免生成出跑不起来的脚本。
+    let backupDir = ''
+    if (action === 'restore-backup') {
+      backupDir = String(body.backupDir || '').trim()
+      if (!backupDir) throw new Error(t('没有指定要还原的备份目录', 'No backup directory was given'))
+      if (/["\r\n]/.test(backupDir)) throw new Error(t('备份路径里不能含引号或换行', 'The backup path must not contain quotes or newlines'))
+      if (!isDir(backupDir)) throw new Error(t(`备份目录不存在：${backupDir}`, `Backup directory does not exist: ${backupDir}`))
+      const root = backupRootOf(dshHome, readSettings(dshHome))
+      const rel = relative(root, backupDir)
+      if (rel.startsWith('..') || rel === '' || isAbsolute(rel)) {
+        throw new Error(t(`只能在备份根 ${root} 下选快照，不接受 ${backupDir}`, `Only snapshots under ${root} can be restored; refusing ${backupDir}`))
+      }
+      if (!isFile(join(backupDir, 'package.json'))) {
+        throw new Error(t(
+          `这份快照里没有 profile 文件（package.json），还原会失败：${backupDir}`,
+          `That snapshot has no profile files (package.json) and cannot be restored: ${backupDir}`,
+        ))
+      }
+    }
+    const stateWithBackup = { ...state, backupDir }
     const bootstrap = repoReady ? null : {
       repo,
       note: t(
@@ -2387,7 +2466,7 @@ async function handlePrepare(req, res, config) {
       sendJson(res, 200, { ok: true, action, built, bootstrap })
       return
     }
-    const built = buildCmd(config, action, repo, appRoot, dshHome, state)
+    const built = buildCmd(config, action, repo, appRoot, dshHome, stateWithBackup)
     sendJson(res, 200, { ok: true, action, ...built, bootstrap })
   } catch (error) {
     sendJson(res, 400, { ok: false, error: String((error && error.message) || error) })

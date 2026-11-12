@@ -524,9 +524,21 @@ if (prevScope === null) { try { unlinkSync(scopeFile) } catch { } } else writeFi
     !clientSrc.includes("M('明细', 'Details')")
     && clientSrc.includes('onClick: canExpand')
     && clientSrc.includes("expanded ? '▾' : '▸'"), 'client.js')
-  check('同步内容卡挂在页面最下面（最后一个 Section）',
-    /Section\(M\('退出后执行'[\s\S]{0,240}?Section\(M\('同步内容'/.test(clientSrc)
-    && !/Section\(M\('同步内容'[^\n]*\n\s*Section\(M\('自动化与插件更新'/.test(clientSrc), 'client.js')
+  check('同步内容卡挂在页面最下面（最后一个 Section）', (() => {
+    // 顺序：概览 → 同步目标 → 自动化与插件更新 → 退出后执行 → 还原备份 → 同步内容；
+    // 判据是「同步内容」之后不再出现任何 Section(...)，而不是写死它紧跟谁（中间还会插卡）。
+    const at = clientSrc.indexOf("Section(M('同步内容'")
+    if (at < 0) return false
+    const after = clientSrc.slice(at + 1)
+    if (/Section\(M\(/.test(after)) return false
+    const order = ["概览", "同步目标", "自动化与插件更新", "退出后执行", "还原备份", "同步内容"]
+      .map((k) => clientSrc.indexOf(`Section(M('${k}'`))
+    return order.every((p, i) => p >= 0 && (i === 0 || p > order[i - 1]))
+  })(), 'client.js')
+  // 「还原备份」卡：地址可改（留空=默认）、列出快照、点行生成脚本
+  check('控件：还原备份卡有备份目录、快照列表与逐份还原',
+    clientSrc.includes('backupRoot') && clientSrc.includes('backup.snapshots')
+    && clientSrc.includes("callPrepare('restore-backup'") && clientSrc.includes("M('还原备份', 'Restore backup')"), 'client.js')
 }
 
 // 提交说明：面板里填的那句要进 push 脚本，时间由 sync.ps1 执行时追加
