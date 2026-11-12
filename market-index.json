@@ -1,11 +1,20 @@
 {
   "format": 1,
-  "title": { "en": "QcWyGm plugins", "zh": "QcWyGm 插件" },
-  "description": { "en": "DSH plugins by QcWyGm.", "zh": "QcWyGm 的 DSH 插件。" },
+  "title": {
+    "en": "QcWyGm plugins",
+    "zh": "QcWyGm 插件"
+  },
+  "description": {
+    "en": "DSH plugins by QcWyGm.",
+    "zh": "QcWyGm 的 DSH 插件。"
+  },
   "plugins": [
     {
       "name": "dsh-config-sync",
-      "title": { "en": "Config Sync", "zh": "配置同步" },
+      "title": {
+        "en": "Config Sync",
+        "zh": "配置同步"
+      },
       "description": {
         "en": "Inspect the state of a DSH config repo versus this machine, and generate post-exit push/pull/restore scripts.",
         "zh": "在 DSH 面板里查看配置仓库与本机的同步状态，并生成退出后执行的推送/拉取/还原脚本。"
@@ -13,8 +22,19 @@
       "icon": "https://raw.githubusercontent.com/QcWyGm/dsh-config-sync/main/docs/panel.png",
       "author": "QcWyGm",
       "homepage": "https://github.com/QcWyGm/dsh-config-sync#readme",
-      "repository": { "url": "https://github.com/QcWyGm/dsh-config-sync" },
+      "repository": {
+        "url": "https://github.com/QcWyGm/dsh-config-sync"
+      },
       "versions": [
+        {
+          "version": "0.3.5",
+          "publishTimestamp": 1794452445,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/QcWyGm/dsh-config-sync",
+            "commit": "PENDING"
+          }
+        },
         {
           "version": "0.3.4",
           "publishTimestamp": 1794450483,

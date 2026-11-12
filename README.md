@@ -112,6 +112,7 @@ https://raw.githubusercontent.com/QcWyGm/dsh-config-sync/main/market-index.json
 - **重启前清环境变量**：从插件链路起的客户端连续 3 次"起来就退"，干净 shell 跑同一个脚本却成功 —— 差在继承的 `ELECTRON_RUN_AS_NODE`（还有 `ELECTRON_NO_ATTACH_CONSOLE`/`NODE_OPTIONS`/`NODE_PATH`），清掉后一次成功；启动后还数进程、没活等 8 秒重试，最多 3 次。
 - **拉取失败自动回滚**：`git reset --hard` 回原提交 → 用这次 apply 写盘前刚建的 `backups\config-<时间戳>` 跑 `restore.ps1` → 回滚成不成功都写日志，不完整会提示「请打开日志核对」。
 - **拉取/推送都重启**：成功用新配置，失败用回滚后的原配置。重启成功后会刷新 `config-sync-state.json` 的 `lastSyncAt`，避免刚 apply 写过的文件被下一次首检误判成"待推送"。
+- **进度窗口收尾**：拉取/推送跑完后窗口**不自动关闭**（原来停 3 秒自己消失，结果一闪就没了，看不到失败原因），改成把「同步已完成 / 日志路径」留在屏幕上，按任意键或点右上角 × 才退出。客户端是**在这之前**由 `explorer.exe` 代启的，跟这个窗口没有父子/作业关系，所以窗口留多久、还是被点 × 直接结束，都不会把客户端带走（`update` / `relaunch` 两种模式没有"等你看结果"的需求，仍旧停 3 秒自动关）。
 - 退出码：`0` 完成、`2` 等待超时、`3` 缺 sync.ps1、`4` 重启失败、`5` 同步失败（pull 已尝试回滚）。
 - 「取消排队」只撤插件里的排队记录；已拉起的外部等待进程仍会等你退出，要停就手动结束它（`auto-sync-wait.log` / launch 日志有 pid）。
 

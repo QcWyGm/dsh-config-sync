@@ -155,8 +155,27 @@ function Finish([int]$code, [string]$note) {
       if ([int]$lock.pid -eq $PID) { Remove-Item -LiteralPath $lockPath -Force }
     }
   } catch { }
-  # 窗口跟着进程一起关，停 3 秒让用户看清成功/失败与日志路径
-  try { Start-Sleep -Seconds 3 } catch { }
+
+  # 推送 / 拉取：**不自动关窗**，把结果留在屏幕上让用户自己关。
+  # 为什么敢一直挂着：客户端是在这之前的 RestartClient 里用 explorer 代启的，跟本窗口没有父子/作业关系，
+  # 所以窗口留多久、还是被点 × 直接结束，都不会把客户端带走。
+  # update / relaunch 没有"等你看结果"的需求，仍旧停 3 秒自动关。
+  if ($Mode -eq 'pull' -or $Mode -eq 'push') {
+    try {
+      Write-Host ''
+      Write-Host '================ 同步已完成 ================'
+      Write-Host '  这个窗口不会自动关闭：看完按任意键，或点右上角 × 关闭。'
+      Write-Host '  客户端已在后台由 explorer 拉起，关掉这个窗口不会影响它。'
+      Write-Host '==========================================='
+      $null = $Host.UI.RawUI.ReadKey('NoEcho,IncludeKeyDown')
+    } catch {
+      # 不是真控制台（被重定向/无窗口）时 ReadKey 会抛，退化成长时间挂起而不是立刻消失
+      try { Start-Sleep -Seconds 3600 } catch { }
+    }
+  } else {
+    # 窗口跟着进程一起关，停 3 秒让用户看清成功/失败与日志路径
+    try { Start-Sleep -Seconds 3 } catch { }
+  }
   exit $code
 }
 

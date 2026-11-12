@@ -329,6 +329,16 @@ else writeFileSync(settingsFile, prevSettings, 'utf8')
     postExitSrc.includes('function Start-Detached') && /explorer\.exe/.test(postExitSrc) && postExitSrc.includes('Start-Detached $exe'),
     postExit || 'post-exit.ps1')
 
+  // 进度窗口的收尾：推送/拉取完成后窗口留着等用户自己关（不自动消失），
+  // 且客户端是在这之前由 explorer 拉起来的 —— 所以点 × 关掉窗口不会把客户端带走。
+  check('推送/拉取完成后进度窗口不自动关闭（等按键或点 ×）',
+    postExitSrc.includes("if ($Mode -eq 'pull' -or $Mode -eq 'push')") && postExitSrc.includes('RawUI.ReadKey'),
+    postExit || 'post-exit.ps1')
+  check('客户端在窗口开始等待之前就已拉起（关窗口不影响它）',
+    postExitSrc.indexOf('if ($Restart) { RestartClient }') > 0
+      && postExitSrc.indexOf('if ($Restart) { RestartClient }') < postExitSrc.lastIndexOf('Finish 0'),
+    postExit || 'post-exit.ps1')
+
   // 更新源自检：raw.githubusercontent.com 在部分网络下直连不通，而 Node 的 fetch 不读系统代理，
   // 超时一到就 abort（面板上那句 "This operation was aborted"）。所以内置候选必须带实时反代排在前面。
   // 不要用 jsDelivr 兜清单：它对 @main 这类分支别名缓存很久，发版后仍返回上一版清单（实测 + purge 也没立刻刷新）。
