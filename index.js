@@ -63,17 +63,22 @@ const PLUGIN_VERSION = (() => {
 // version.json 放在公开插件仓库根：{ version, notes, releasedAt, tgz, sha256 }
 // 更新检查只读这一个文件，几百字节，不拉整包。公开仓库不需要令牌。
 //
-// 为什么不止一个地址：国内直连 raw.githubusercontent.com 经常不通（本机实测 curl 20 秒超时、code=000），
-// 而宿主的 fetch 是 Node 内置实现、**不读系统代理**，超时一到就被 AbortController 掐断，
-// 面板上只剩一句 "This operation was aborted"。jsDelivr 的 CDN 对同一仓库给同样内容
-// （实测 1.5 秒、包 sha256 与清单一致），所以把它排第一位，raw 兜底。
+// 为什么不止一个地址：raw.githubusercontent.com 在这类网络上时通时不通（本机实测一次 20 秒超时 code=000、
+// 另一次 538ms 正常），而宿主的 fetch 是 Node 内置实现、**不读系统代理**，超时一到就被 AbortController 掐断，
+// 面板上只剩一句 "This operation was aborted"。
+//
+// 候选顺序：两个实时反代（gh-proxy / ghfast，实测 1 秒内拿到最新清单，且能把 tgz 一起拉下来）→ 直连 raw。
+// **不要**用 jsDelivr 兜清单：它对 `@main` 这类分支别名有明显缓存（实测发版后仍返回上一版清单，purge 接口也没
+// 立刻刷新），拿它当清单源会让"有新版本"晚几小时才出现，比读不到更误导人。
 // 用户自己在设置里填了清单地址时只用他那一个 —— 不掺镜像，免得"读到的其实不是他指定的源"。
+const RAW_MANIFEST_URL = 'https://raw.githubusercontent.com/QcWyGm/dsh-config-sync/main/version.json'
 const UPDATE_MANIFEST_MIRRORS = [
-  'https://cdn.jsdelivr.net/gh/QcWyGm/dsh-config-sync@main/version.json',
-  'https://raw.githubusercontent.com/QcWyGm/dsh-config-sync/main/version.json',
+  'https://gh-proxy.com/https://raw.githubusercontent.com/QcWyGm/dsh-config-sync/main/version.json',
+  'https://ghfast.top/https://raw.githubusercontent.com/QcWyGm/dsh-config-sync/main/version.json',
+  RAW_MANIFEST_URL,
 ]
-const UPDATE_MANIFEST_URL = UPDATE_MANIFEST_MIRRORS[UPDATE_MANIFEST_MIRRORS.length - 1]
-// 30 秒：raw 那种"能连但很慢"的链路 10 秒根本不够（download 138 KB 都要十几秒）
+const UPDATE_MANIFEST_URL = RAW_MANIFEST_URL
+// 30 秒：慢链路 10 秒根本不够（raw 通的时候也要几百毫秒到十几秒不等）
 const UPDATE_FETCH_TIMEOUT = 30 * 1000
 const UPDATE_CHECK_TTL = 30 * 60 * 1000
 

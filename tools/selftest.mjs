@@ -330,10 +330,12 @@ else writeFileSync(settingsFile, prevSettings, 'utf8')
     postExit || 'post-exit.ps1')
 
   // 更新源自检：raw.githubusercontent.com 在部分网络下直连不通，而 Node 的 fetch 不读系统代理，
-  // 10 秒一到就 abort（面板上那句 "This operation was aborted"）。所以内置候选必须带 CDN 兜在前面。
+  // 超时一到就 abort（面板上那句 "This operation was aborted"）。所以内置候选必须带实时反代排在前面。
+  // 不要用 jsDelivr 兜清单：它对 @main 这类分支别名缓存很久，发版后仍返回上一版清单（实测 + purge 也没立刻刷新）。
   const indexSrc = readFileSync(join(pluginRoot, 'index.js'), 'utf8')
-  check('更新清单带 CDN 候选（jsDelivr 排在最前）',
-    indexSrc.includes('cdn.jsdelivr.net/gh/QcWyGm/dsh-config-sync') && indexSrc.includes('UPDATE_MANIFEST_MIRRORS'),
+  check('更新清单带实时反代候选（gh-proxy 排在最前，raw 兜底）',
+    indexSrc.includes('gh-proxy.com') && indexSrc.includes('ghfast.top') &&
+    indexSrc.includes('UPDATE_MANIFEST_MIRRORS') && !indexSrc.includes('cdn.jsdelivr.net/gh/QcWyGm'),
     'index.js')
   check('清单按候选依次尝试并汇总失败原因', indexSrc.includes('async function fetchManifestAuto'), 'index.js')
   check('清单超时放宽到 30 秒（raw 慢链路 10 秒会假失败）',
