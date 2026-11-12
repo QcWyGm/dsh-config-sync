@@ -322,6 +322,12 @@ else writeFileSync(settingsFile, prevSettings, 'utf8')
   check('打包脚本会把 ps1 打进 runtime', Boolean(packScript), packScript || 'tools/pack-plugin.ps1')
   const syncScript = [join(pluginRoot, 'runtime', 'sync.ps1'), join(pluginRoot, 'sync.ps1'), join(repoRoot, 'runtime', 'sync.ps1')].find((p) => existsSync(p)) || ''
   check('sync.ps1 支持首次自动初始化仓库', Boolean(syncScript) && readFileSync(syncScript, 'utf8').includes('Initialize-RepoIfNeeded'), syncScript || 'sync.ps1')
+  // 重启客户端必须脱离进度窗口的控制台/作业，否则手动关窗口会把刚重启的客户端一起带走。
+  const postExit = [join(pluginRoot, 'runtime', 'post-exit.ps1'), join(pluginRoot, 'post-exit.ps1'), join(repoRoot, 'post-exit.ps1')].find((p) => existsSync(p)) || ''
+  const postExitSrc = postExit ? readFileSync(postExit, 'utf8') : ''
+  check('重启客户端走 explorer 代启（不被进度窗口连坐）',
+    postExitSrc.includes('function Start-Detached') && /explorer\.exe/.test(postExitSrc) && postExitSrc.includes('Start-Detached $exe'),
+    postExit || 'post-exit.ps1')
 }
 
 // 提交说明：面板里填的那句要进 push 脚本，时间由 sync.ps1 执行时追加

@@ -197,6 +197,35 @@ if ($WatchPid -gt 0) {
 
 
 # ---------- 自动重启：动作做完就把客户端拉起来（pull / push / update 共用） ----------
+
+# 为什么不能直接用 Start-Process 拉客户端：
+#   进度窗口是个控制台程序，从它里面 Start-Process 出来的客户端会跟着进那个控制台的作业；
+#   用户点窗口的 × 关掉进度显示时，conhost 清理作业会把刚重启的客户端一起结束（实测复现：
+#   结束探测窗口进程后，它用 Start-Process 起的子进程同时消失）。
+#   而窗口自己跑完、进程正常退出时不做这次清理，所以"等它自己关"看起来是好的。
+# 实测三种启动方式（visible 控制台 + notepad 做探针）：
+#   Start-Process  → 关窗口后子进程被连坐
+#   explorer 代启  → 子进程存活（Explorer 长期驻留，不在本窗口的作业里）
+#   自建 DETACHED/BREAKAWAY 进程 → 进程起不活，不可用（所以没保留这条分支）
+function Start-Detached([string]$exe) {
+  $workDir = Split-Path -Parent $exe
+  $explorer = Join-Path $env:SystemRoot 'explorer.exe'
+  if (Test-Path -LiteralPath $explorer) {
+    try {
+      Start-Process -FilePath $explorer -ArgumentList ('"' + $exe + '"') | Out-Null
+      return 'explorer'
+    } catch { Log ("explorer 代启失败：{0}" -f $_.Exception.Message) }
+  }
+  # 兜底：原方式。会把客户端挂进本窗口的作业，手动关进度窗口时仍有被连坐的风险。
+  try {
+    Start-Process -FilePath $exe -WorkingDirectory $workDir | Out-Null
+    return 'plain'
+  } catch {
+    Log ("启动命令失败：{0}" -f $_.Exception.Message)
+    return $null
+  }
+}
+
 function RestartClient {
   $exe = $null
   if ($AppRoot) { $candidate = Join-Path $AppRoot 'DeepSeek Harness.exe'; if (Test-Path -LiteralPath $candidate) { $exe = $candidate } }
@@ -230,12 +259,9 @@ function RestartClient {
     $ok = $false
     for ($attempt = 1; $attempt -le 3; $attempt++) {
       Log ("重启客户端（第 {0} 次）：{1}" -f $attempt, $exe)
-      try {
-        Start-Process -FilePath $exe -WorkingDirectory (Split-Path -Parent $exe) | Out-Null
-      } catch {
-        Log ("启动命令失败：{0}" -f $_.Exception.Message)
-        continue
-      }
+      $how = Start-Detached $exe
+      if (-not $how) { continue }
+      Log ("启动方式：{0}（不继承进度窗口的控制台与作业）" -f $how)
       Start-Sleep -Seconds 5
       $alive = @(Get-Process -Name 'DeepSeek Harness' -ErrorAction SilentlyContinue).Count
       if ($alive -gt 0) { Log ("已启动（当前 {0} 个进程）" -f $alive); $ok = $true; break }

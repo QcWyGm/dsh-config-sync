@@ -14,7 +14,7 @@ DSH 插件：左侧栏加一行「配置同步」，点开是整页体检面板�
 
 ```sh
 # 从本仓库的 release 包安装（无需构建，包内已含宿主/前端/runtime 脚本）
-dsh plugin add https://raw.githubusercontent.com/QcWyGm/dsh-config-sync/main/releases/dsh-config-sync-0.3.2.tgz
+dsh plugin add https://raw.githubusercontent.com/QcWyGm/dsh-config-sync/main/releases/dsh-config-sync-0.3.3.tgz
 ```
 
 或在 DSH 面板「插件 → 插件市场」里搜索 `dsh-config-sync`（本仓库已将 `dsh-plugin`、`deepseek-harness` 写进包关键词，并声明了 `dsh.bundle.patch`）。
@@ -161,7 +161,7 @@ https://raw.githubusercontent.com/QcWyGm/dsh-config-sync/main/market-index.json
 
 ## 安装与自检
 
-`apply.ps1` 负责：`local-plugins\dsh-config-sync-0.1.0.tgz` 解压到 `<AppRoot>\dsh-config-sync-0.1.0`，`package.json` 加一条 `link:` 依赖与一条 `dsh.profile.bundles`，`cordis.patch.yml` 加 `config-sync` 行。
+`apply.ps1` 负责：`local-plugins\dsh-config-sync-0.3.3.tgz` 解压到 `<AppRoot>\dsh-config-sync-0.1.0`，`package.json` 加一条 `link:` 依赖与一条 `dsh.profile.bundles`，`cordis.patch.yml` 加 `config-sync` 行。
 
 - `node tools\selftest.mjs <仓库路径>`：假 ctx 拉起宿主半身，打 status、生成脚本、断言 JSON 与落地文件；会先备份仓库根已有的同名 `同步-*.cmd`，断言完原样还原。**必须显式传仓库路径**。
 - `node tools\clientcheck.mjs`：假 `__ModuleLoader__` + react 替身跑客户端半身，断言模块能加载、`apply()` 三处注册成功（侧栏行与 main 的 id/key 成对）、`inject` 返回回收函数、组件在无数据下渲染不抛。验的是契约与结构，UI 效果仍需重启后目视。
