@@ -156,14 +156,15 @@ function Finish([int]$code, [string]$note) {
     }
   } catch { }
 
-  # 推送 / 拉取：**不自动关窗**，把结果留在屏幕上让用户自己关。
+  # 推送 / 拉取 / 插件更新：**不自动关窗**，把结果留在屏幕上让用户自己关。
   # 为什么敢一直挂着：客户端是在这之前的 RestartClient 里用 explorer 代启的，跟本窗口没有父子/作业关系，
   # 所以窗口留多久、还是被点 × 直接结束，都不会把客户端带走。
-  # update / relaunch 没有"等你看结果"的需求，仍旧停 3 秒自动关。
-  if ($Mode -eq 'pull' -or $Mode -eq 'push') {
+  # 只有 relaunch（纯重启，窗口里没有可看的结果）仍旧停 3 秒自动关。
+  if ($Mode -eq 'pull' -or $Mode -eq 'push' -or $Mode -eq 'update') {
+    $title = if ($Mode -eq 'update') { '插件更新已完成' } else { '同步已完成' }
     try {
       Write-Host ''
-      Write-Host '================ 同步已完成 ================'
+      Write-Host ("================ {0} ================" -f $title)
       Write-Host '  这个窗口不会自动关闭：看完按任意键，或点右上角 × 关闭。'
       Write-Host '  客户端已在后台由 explorer 拉起，关掉这个窗口不会影响它。'
       Write-Host '==========================================='

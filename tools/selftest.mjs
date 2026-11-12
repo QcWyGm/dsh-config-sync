@@ -332,7 +332,10 @@ else writeFileSync(settingsFile, prevSettings, 'utf8')
   // 进度窗口的收尾：推送/拉取完成后窗口留着等用户自己关（不自动消失），
   // 且客户端是在这之前由 explorer 拉起来的 —— 所以点 × 关掉窗口不会把客户端带走。
   check('推送/拉取完成后进度窗口不自动关闭（等按键或点 ×）',
-    postExitSrc.includes("if ($Mode -eq 'pull' -or $Mode -eq 'push')") && postExitSrc.includes('RawUI.ReadKey'),
+    postExitSrc.includes("if ($Mode -eq 'pull' -or $Mode -eq 'push'") && postExitSrc.includes('RawUI.ReadKey'),
+    postExit || 'post-exit.ps1')
+  check('插件更新完成后窗口同样留着（不与同步窗口两套行为）',
+    /-eq 'pull'.*?-eq 'push'.*?-eq 'update'/.test(postExitSrc) && postExitSrc.includes('插件更新已完成'),
     postExit || 'post-exit.ps1')
   check('客户端在窗口开始等待之前就已拉起（关窗口不影响它）',
     postExitSrc.indexOf('if ($Restart) { RestartClient }') > 0
