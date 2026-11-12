@@ -17,7 +17,7 @@ DSH 插件：左侧栏加一行「配置同步」，点开是整页体检面板�
 dsh plugin add https://raw.githubusercontent.com/QcWyGm/dsh-config-sync/main/releases/dsh-config-sync-0.3.26.tgz
 ```
 
-或在 DSH 面板「插件 → 插件市场」里搜索 `dsh-config-sync`（本仓库已将 `dsh-plugin`、`deepseek-harness` 写进包关键词，并声明了 `dsh.bundle.patch`）。
+或在 DSH 面板的官方「插件 → 发现 → 索引源」里添加本仓库的索引（做法见下文「作为插件市场的索引源」）。**第三方市场插件 dshmarket 不读这份索引**，原因见同一节。
 
 装好后需要指向你自己的配置仓库（默认自动探测常见路径），并在「插件更新」卡里按需填写清单地址与令牌——**本仓库是公开的，从 GitHub 分发时不填令牌也能更新**。
 
@@ -198,7 +198,12 @@ dsh plugin add https://raw.githubusercontent.com/QcWyGm/dsh-config-sync/main/rel
 https://raw.githubusercontent.com/QcWyGm/dsh-config-sync/main/market-index.json
 ```
 
-在 DSH 里「插件 → 插件市场 / 发现 → 管理索引源 → 添加索引源」填入上面的 URL，即可在列表里看到「配置同步」，点安装即按该 commit 拉取本仓库。
+在 DSH 里「插件 → 发现 → 索引源」填入上面的 URL，即可在列表里看到「配置同步」，点安装即按该 commit 拉取本仓库。
+
+- **前提**：这是**宿主官方发现页**（`@deepseek-ai/dsh-plugin-market`）的索引源，需要 profile 启用官方 `@deepseek-ai/dsh-experimental-plugin-market-bundle` 组合包；没启用时「发现」页与索引源入口都不存在。
+- **dshmarket 里搜不到，是正常的**：第三方市场插件 dshmarket 的列表只来自它自己的精选目录（`awesome-dsh-plugin.com/plugins.json`，国内走 npm 上的 `dsh-plugin-catalog`），源码里没有自定义索引源这条路（`lib/registry.js` 每次只从 region 路由表拉那一份目录，`lib/sources.js` 只解析该目录的条目），而且它的安装被限定在「该目录里列出的来源」，其它来源一律拒绝。所以自建索引再怎么标准，也不会出现在 dshmarket 的搜索结果里。要出现在那里，只能向 [awesome-dsh-plugin](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin) 仓库提 PR 收录（它的 README 明确写着：别对 dshmarket 仓库提插件条目）。
+- **国内取索引**：`raw.githubusercontent.com` 时通时不通，可以换 `https://gh-proxy.com/` 或 `https://ghfast.top/` 前缀；jsDelivr 的 `https://cdn.jsdelivr.net/gh/QcWyGm/dsh-config-sync@main/market-index.json` 也能用，但它对 `@main` 这类分支别名有缓存，发布后可能几小时才读到新版本。
+- **只想自己装**：不必绕市场，直接 `dsh plugin add` 那份 tgz 就是最省事的路径（见上面的安装段）。
 
 升级流程：改代码 → `pwsh -File tools\pack-plugin.ps1` 打包 `releases/dsh-config-sync-<版本>.tgz`（脚本会按 `package.json` 的 `files` 收内容，并自动把 sha256 回填进 `version.json`）→ 手动改 `version.json` 的 `version`（以及 `notes`）→ 把 `market-index.json` 里那条 `versions` 的 `version` 与 `commit` 换成新提交 → 推送。索引只引用 commit，所以旧版本也能随时装回。打完包先跑 `node tools\selftest.mjs <仓库路径>` + `node tools\clientcheck.mjs` 自检。
 
