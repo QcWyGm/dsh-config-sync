@@ -750,17 +750,34 @@ window.__ModuleLoader__.load({
         toastTimer.current = setTimeout(() => setToast(''), 5000)
       }
 
+      // 更新 = 运行中静默安装（DSH 不退出）：下载 → 校验 sha256 → 备份旧版 → 覆盖插件目录，
+      // 装完只提示「重启生效」。真正干活的是宿主 install-live + runtime/install-plugin.ps1。
       const applyUpdate = async () => {
         setUpdBusy(true)
+        setUpdMsg(M('正在下载并安装（DSH 不会退出）…', 'Downloading and installing (DSH stays open)…'))
         try {
-          const r = await callUpdate({ action: 'apply' })
-          if (r && r.cancelled) showToast(M('已取消更新', 'Update cancelled'))
-          else showToast(M(
-            `正在更新到 ${(r.remote && r.remote.version) || '新版本'}：DSH 会先退出，下载安装完自动重启`,
-            `Updating to ${(r.remote && r.remote.version) || 'the new version'}: DSH exits first, then it downloads, installs and relaunches`,
-          ))
+          const r = await callUpdate({ action: 'install-live' })
+          setUpd(r)
+          const v = (r && r.installed && r.installed.version) || (r && r.remote && r.remote.version) || ''
+          setUpdMsg(M(`已安装 ${v}，重启 DSH 后生效`, `Installed ${v}; restart DSH to take effect`))
+          showToast(M(`插件已更新到 ${v}，点「重启 DSH」生效`, `Plugin updated to ${v} — click "Restart DSH" to apply`))
         } catch (e) {
-          showToast(M('更新失败：', 'Update failed: ') + String((e && e.message) || e))
+          const msg = String((e && e.message) || e)
+          setUpdMsg(M('更新失败：', 'Update failed: ') + msg)
+          showToast(M('更新失败：', 'Update failed: ') + msg)
+        } finally {
+          setUpdBusy(false)
+        }
+      }
+
+      // 装完只需要一次重启：退出 DSH，由退出后的脚本用 explorer 代启拉回来（不继承本窗口的作业）
+      const restartDsh = async () => {
+        setUpdBusy(true)
+        try {
+          await callUpdate({ action: 'restart' })
+          showToast(M('DSH 即将退出并自动重启…', 'DSH will exit and relaunch…'))
+        } catch (e) {
+          showToast(M('重启失败：', 'Restart failed: ') + String((e && e.message) || e))
         } finally {
           setUpdBusy(false)
         }
@@ -867,29 +884,51 @@ window.__ModuleLoader__.load({
         const local = (u.local && u.local.version) || '…'
         const remote = (u.remote && u.remote.version) || ''
         const has = u.hasUpdate === true
-        const failed = !has && u.ok === false
-        const kind = has ? 'warn' : (failed ? 'error' : 'ok')
+        const installed = u.installed || null
+        const restartRequired = u.restartRequired === true
+        const failed = !has && u.ok === false && !restartRequired
+        const kind = (restartRequired || has) ? 'warn' : (failed ? 'error' : 'ok')
         const notesText = (u.remote && (langIsZh() ? (u.remote.notes || u.remote.notesEn) : (u.remote.notesEn || u.remote.notes))) || ''
-        const label = has
-          ? M(`有新版本 ${remote}`, `New version ${remote}`)
-          : (failed ? M('检查失败', 'Check failed') : (u.checkedAt ? M('已是最新', 'Up to date') : M('检查中', 'Checking')))
-        const text = has
+        // 检查失败时把每个源的失败原因摆出来，别只给一句 aborted
+        const badSources = (Array.isArray(u.sources) ? u.sources : []).filter((x) => x && x.ok === false)
+        const sourceNote = badSources.length
           ? M(
-            `当前 ${local} → 可更新到 ${remote}${notesText ? ` · ${notesText}` : ''}`,
-            `Current ${local} → can update to ${remote}${notesText ? ` · ${notesText}` : ''}`,
+            `（${badSources.map((x) => `${x.host || x.url}: ${x.error || '失败'}`).join('；')}）`,
+            ` (${badSources.map((x) => `${x.host || x.url}: ${x.error || 'failed'}`).join('; ')})`,
           )
-          : (failed
-            ? M(`读不到更新清单：${u.error || '未知原因'}`, `Cannot read the manifest: ${u.error || 'unknown reason'}`)
-            : (u.checkedAt ? M(`当前 ${local}，云端没有更新的版本`, `Current ${local}; no newer version upstream`) : M('正在读云端版本清单…', 'Reading the cloud manifest…')))
+          : ''
+        const label = restartRequired
+          ? M('已安装，待重启', 'Installed, restart pending')
+          : (has
+            ? M(`有新版本 ${remote}`, `New version ${remote}`)
+            : (failed ? M('检查失败', 'Check failed') : (u.checkedAt ? M('已是最新', 'Up to date') : M('检查中', 'Checking'))))
+        const text = restartRequired
+          ? M(
+            `已装好 ${(installed && installed.version) || remote}，当前进程还是 ${local}；点「重启 DSH」后生效`,
+            `Installed ${(installed && installed.version) || remote}; this process still runs ${local} — click "Restart DSH" to apply`,
+          )
+          : (has
+            ? M(
+              `当前 ${local} → 可更新到 ${remote}${notesText ? ` · ${notesText}` : ''}`,
+              `Current ${local} → can update to ${remote}${notesText ? ` · ${notesText}` : ''}`,
+            )
+            : (failed
+              ? M(`读不到更新清单：${u.error || '未知原因'}${sourceNote}`, `Cannot read the manifest: ${u.error || 'unknown reason'}${sourceNote}`)
+              : (u.checkedAt ? M(`当前 ${local}，云端没有更新的版本`, `Current ${local}; no newer version upstream`) : M('正在读云端版本清单…', 'Reading the cloud manifest…'))))
         return h('div', { style: S.card },
           h('div', { style: S.cardTitle }, M('插件更新', 'Plugin update')),
           h('div', { style: { display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' } },
             h('span', { style: chipStyle(kind) }, label),
             h('div', { style: { ...S.hint, flex: 1, minWidth: '200px' } }, text),
-            has ? h('button', {
-              type: 'button', style: S.btn, disabled: updBusy || !u.remote,
-              onClick: applyUpdate,
-            }, updBusy ? M('更新中…', 'Updating…') : M(`更新到 ${remote}`, `Update to ${remote}`)) : null,
+            restartRequired
+              ? h('button', {
+                type: 'button', style: S.btnPrimary, disabled: updBusy,
+                onClick: restartDsh,
+              }, updBusy ? M('重启中…', 'Restarting…') : M('重启 DSH', 'Restart DSH'))
+              : (has ? h('button', {
+                type: 'button', style: S.btnPrimary, disabled: updBusy || !u.remote,
+                onClick: applyUpdate,
+              }, updBusy ? M('下载安装中…', 'Downloading…') : M(`更新到 ${remote}`, `Update to ${remote}`)) : null),
             h('button', { type: 'button', style: S.btn, disabled: updBusy, onClick: checkUpdateNow }, M('检查更新', 'Check for updates')),
             updEdit
               ? null
@@ -928,9 +967,15 @@ window.__ModuleLoader__.load({
             : h('div', null,
               h(Kv, {
                 k: M('更新清单', 'Manifest'),
-                v: cfg.manifestUrl
-                  ? `${cfg.manifestUrl}${cfg.manifestUrlIsDefault ? M('（内置默认）', ' (built-in default)') : ''}`
-                  : '…',
+                v: cfg.manifestUrlIsDefault
+                  ? M('内置默认（按顺序尝试：jsDelivr CDN → GitHub raw）', 'Built-in default (tried in order: jsDelivr CDN → GitHub raw)')
+                  : (cfg.manifestUrl || '…'),
+              }),
+              h(Kv, {
+                k: M('更新源', 'Source'),
+                v: u.sourceUsed
+                  ? u.sourceUsed
+                  : M('本次检查还没读到清单', 'No source reached yet'),
               }),
               h(Kv, {
                 k: M('更新令牌', 'Token'),
@@ -941,8 +986,8 @@ window.__ModuleLoader__.load({
             ),
           h('div', { style: S.hint },
             M(
-              '清单只读几百字节、30 分钟查一次；点更新会先退出 DSH，再下载校验、备份旧版、覆盖安装并自动重启。令牌只存本机设置文件，不进仓库。',
-              'The manifest is a few hundred bytes and is re-read every 30 minutes. Updating exits DSH first, then downloads and verifies the package, backs up the old version, installs over it and relaunches. Tokens live only in the local settings file, never in the repo.',
+              '清单只读几百字节、30 分钟查一次。点「更新到 x.y.z」是**运行中静默安装**：DSH 不退出，直接下载、校验 sha256、备份旧版、覆盖插件目录，装好后点「重启 DSH」生效（失败会用备份自动回滚）。令牌只存本机设置文件，不进仓库。',
+              'The manifest is a few hundred bytes and is re-read every 30 minutes. "Update to x.y.z" installs silently while DSH keeps running: download, verify sha256, back up the old version, overwrite the plugin directory, then click "Restart DSH" to apply (a failed write rolls back from the backup). Tokens live only in the local settings file, never in the repo.',
             )),
           updErr ? h('div', { style: { ...S.hint, color: 'var(--dsw-alias-state-error-primary)' } }, M(`保存失败：${updErr}`, `Save failed: ${updErr}`)) : null,
           updMsg ? h('div', { style: { ...S.hint, color: 'var(--dsw-alias-state-success-primary)' } }, updMsg) : null,

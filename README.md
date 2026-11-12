@@ -14,7 +14,7 @@ DSH 插件：左侧栏加一行「配置同步」，点开是整页体检面板�
 
 ```sh
 # 从本仓库的 release 包安装（无需构建，包内已含宿主/前端/runtime 脚本）
-dsh plugin add https://raw.githubusercontent.com/QcWyGm/dsh-config-sync/main/releases/dsh-config-sync-0.3.3.tgz
+dsh plugin add https://raw.githubusercontent.com/QcWyGm/dsh-config-sync/main/releases/dsh-config-sync-0.3.4.tgz
 ```
 
 或在 DSH 面板「插件 → 插件市场」里搜索 `dsh-config-sync`（本仓库已将 `dsh-plugin`、`deepseek-harness` 写进包关键词，并声明了 `dsh.bundle.patch`）。
@@ -34,7 +34,7 @@ dsh plugin add https://raw.githubusercontent.com/QcWyGm/dsh-config-sync/main/rel
 
 ## 自更新
 
-面板「插件更新」卡读取 `version.json`（默认 `https://raw.githubusercontent.com/QcWyGm/dsh-config-sync/main/version.json`，30 分钟缓存），发现更高版本后：退出 DSH → 下载 tgz → 校验 sha256 → 备份旧目录到 `~\.dsh\backups\plugin-<旧版本>-<时间>` → 覆盖 → 重启。
+面板「插件更新」卡读取 `version.json`（内置默认按顺序尝试 jsDelivr CDN 与 `https://raw.githubusercontent.com/QcWyGm/dsh-config-sync/main/version.json`，单次 30 秒超时、30 分钟缓存）。发现更高版本后点「更新到 x.y.z」：**DSH 不退出** —— 宿主直接下载 tgz → 校验 sha256 → 备份旧目录到 `~\.dsh\backups\plugin-<旧版本>-<时间>` → 覆盖插件目录，装好后卡片变成「已安装，待重启」，点「重启 DSH」退出并由 explorer 代启拉回来（不继承任何窗口的作业）。写入失败会用刚备的备份自动回滚。
 
 ## 作为插件市场的索引源
 
@@ -123,12 +123,14 @@ https://raw.githubusercontent.com/QcWyGm/dsh-config-sync/main/market-index.json
 |---|---|
 | 绿色「已是最新」 | 本地版本 ≥ 清单版本 |
 | 橙色「有新版本 x.y.z」 | 清单版本更大，附一句新版本说明和「更新到 x.y.z」按钮 |
-| 红色「检查失败」 | 清单读不到（网络 / 仓库没建 / 404），附「检查更新」可强制重查 |
+| 橙色「已安装，待重启」 | 新版本已经覆盖进插件目录，但当前进程还跑着旧代码，点「重启 DSH」生效 |
+| 红色「检查失败」 | 清单读不到（网络 / 仓库没建 / 404），附「检查更新」可强制重查，并逐个列出每个源的失败原因 |
 
-- 清单与安装包都在配置仓库自己的 `plugin/dsh-config-sync/` 下：清单 `version.json`、安装包 `releases/dsh-config-sync-<版本>.tgz`，只读几百字节，不拉整包；服务端缓存 30 分钟，挂载时查一次、之后每 30 分钟复查。
-- **私有库要填令牌**：`dsh-config` 是私有库，匿名 raw 一律 403。更新相关的配置都集中在「插件更新」卡里（点「修改配置」进入编辑态）：「更新清单」留空即用内置默认地址，也可指向自建清单；「更新令牌」填 Gitee 私人令牌后，清单和安装包都改走 API raw 端点（`/api/v5/repos/qcwygm/dsh-config/raw/<path>?ref=main&access_token=…`），分支用 `ref` 传、不能写进路径。「云端仓库」卡只保留仓库地址与 SSH 私钥，不再掺更新相关的东西。令牌只存本机设置文件，不进仓库；留空保存表示"不改动已存令牌"，另给「清除已存令牌」按钮。
-- 点「更新到 x.y.z」会先弹系统确认框（Yes 才继续），确认后**退出 DSH** → 后台脚本下载 tgz、比 sha256、备份旧目录到 `~\.dsh\backups\plugin-<旧版本>-<时间>`、覆盖安装、重启客户端。任一步失败退出码 7，版本保持不变。
-- 设置项 `updateManifestUrl` 可以把清单指到自建地址（留空即用内置地址），相对路径的 `tgz` 会相对**实际读到的那份清单**解析，换地址不会拼错域名。
+- 清单与安装包都在这个公开仓库里：清单 `version.json`、安装包 `releases/dsh-config-sync-<版本>.tgz`，只读几百字节，不拉整包；服务端缓存 30 分钟，挂载时查一次、之后每 30 分钟复查。
+- **清单有多个源，按顺序试**：内置默认先走 jsDelivr（`https://cdn.jsdelivr.net/gh/QcWyGm/dsh-config-sync@main/version.json`）、再走 GitHub raw。国内直连 `raw.githubusercontent.com` 经常不通，而宿主的 `fetch` 是 Node 内置实现、**不读系统代理**，超时一到就被掐断（面板上一句 `This operation was aborted` 就是这么来的）。下载安装包同样按「读到清单的那个源 → 其余源」依次试，清单通不等于包也能从同一个域名下来。
+- **私有库要填令牌**：如果把 `dsh-config` 私有库当清单源，匿名 raw 一律 403。更新相关的配置都集中在「插件更新」卡里（点「修改配置」进入编辑态）：「更新清单」留空即用内置候选，也可指向自建清单（**填了就只用你填的那个，不掺镜像**）；「更新令牌」填 Gitee 私人令牌后，清单和安装包都改走 API raw 端点（`/api/v5/repos/qcwygm/dsh-config/raw/<path>?ref=main&access_token=…`），分支用 `ref` 传、不能写进路径。令牌只存本机设置文件，不进仓库；留空保存表示"不改动已存令牌"，另给「清除已存令牌」按钮。
+- 点「更新到 x.y.z」是**运行中静默安装**（0.3.4 起）：DSH 不退出，宿主下载 tgz、比 sha256、备份旧目录到 `~\.dsh\backups\plugin-<旧版本>-<时间>`、覆盖插件目录（`runtime\install-plugin.ps1` 干的，失败自动回滚），然后面板提示「已安装，待重启」，点「重启 DSH」退出并自动拉起。插件是 Node 模块，覆盖文件不会热重载，所以那一次重启省不掉；老做法（退出 DSH 后再下载安装）仍保留为 `POST {action:'apply'}`。
+- 设置项 `updateManifestUrl` 可以把清单指到自建地址（留空即用内置候选），相对路径的 `tgz` 会相对**实际读到的那份清单**解析，换地址不会拼错域名。
 
 ## 接口与路径
 
@@ -138,8 +140,9 @@ https://raw.githubusercontent.com/QcWyGm/dsh-config-sync/main/market-index.json
 | `POST /config-sync/prepare` | `{action:'push'\|'pull'\|'restore'\|'all', message?}`，生成对应 `.cmd`；`all` 返回 `built: [...]` |
 | `POST /config-sync/settings` | `{repoPath?, remoteUrl?, sshKey?, autoPull?, autoPush?, autoRestart?}`：校验 → 写设置 →（地址变了才动 git），失败回滚并 400 |
 | `POST /config-sync/auto` | `{action:'check'\|'pull-now'\|'push-now'\|'cancel', closeNow?, restart?}`；`check` 只读 fetch 比对，`pull-now`/`push-now` 不带 `/F` 关闭客户端（走正常退出，配置能存下来）；`status` 里 `auto.pending` 带 `reason`（为什么排队） |
+| `GET/POST /config-sync/update` | `{action:'check'\|'install-live'\|'restart'\|'apply'}`：`check` 重新读清单（多源依次试）；`install-live` 运行中下载+校验+覆盖安装（不退出 DSH，回 `installed` 与 `restartRequired`）；`restart` 排队 relaunch 后关闭 DSH；`apply` 是「退出 DSH 后再安装」的兜底 |
 
-跨站请求 403。客户端只 `fetch` 这四条，不 import 任何 `@deepseek-ai/dsh-client-*`，样式只用 `--dsw-alias-*` token。
+跨站请求 403。客户端只 `fetch` 这几条，不 import 任何 `@deepseek-ai/dsh-client-*`，样式只用 `--dsw-alias-*` token。
 
 路径：仓库按上面的优先级；客户端根 `config.appRoot` 优先，留空则由插件自身位置推出（插件装在 `<AppRoot>\dsh-config-sync-0.1.0`），换机不用改；`.dsh` 为 `config.dshHome` → `%DSH_HOME%` → `~\.dsh`。同步状态文件 `~\.dsh\config-sync-state.json` 由 `sync.ps1` 写，插件只读。
 
@@ -161,7 +164,7 @@ https://raw.githubusercontent.com/QcWyGm/dsh-config-sync/main/market-index.json
 
 ## 安装与自检
 
-`apply.ps1` 负责：`local-plugins\dsh-config-sync-0.3.3.tgz` 解压到 `<AppRoot>\dsh-config-sync-0.1.0`，`package.json` 加一条 `link:` 依赖与一条 `dsh.profile.bundles`，`cordis.patch.yml` 加 `config-sync` 行。
+`apply.ps1` 负责：`local-plugins\dsh-config-sync-0.3.4.tgz` 解压到 `<AppRoot>\dsh-config-sync-0.1.0`，`package.json` 加一条 `link:` 依赖与一条 `dsh.profile.bundles`，`cordis.patch.yml` 加 `config-sync` 行。
 
 - `node tools\selftest.mjs <仓库路径>`：假 ctx 拉起宿主半身，打 status、生成脚本、断言 JSON 与落地文件；会先备份仓库根已有的同名 `同步-*.cmd`，断言完原样还原。**必须显式传仓库路径**。
 - `node tools\clientcheck.mjs`：假 `__ModuleLoader__` + react 替身跑客户端半身，断言模块能加载、`apply()` 三处注册成功（侧栏行与 main 的 id/key 成对）、`inject` 返回回收函数、组件在无数据下渲染不抛。验的是契约与结构，UI 效果仍需重启后目视。

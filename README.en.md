@@ -14,7 +14,7 @@ The plugin is a standard DSH bundle; install it into the current profile:
 
 ```sh
 # Install from this repo's release package (no build needed: host, client and runtime scripts are already inside)
-dsh plugin add https://raw.githubusercontent.com/QcWyGm/dsh-config-sync/main/releases/dsh-config-sync-0.3.3.tgz
+dsh plugin add https://raw.githubusercontent.com/QcWyGm/dsh-config-sync/main/releases/dsh-config-sync-0.3.4.tgz
 ```
 
 Or search `dsh-config-sync` in the DSH panel under **Plugins → Plugin market** (this repo lists `dsh-plugin` and `deepseek-harness` as package keywords and declares `dsh.bundle.patch`).
@@ -34,7 +34,7 @@ After installing, point it at your own config repo (common paths are auto-detect
 
 ## Self-update
 
-The **Plugin update** card reads `version.json` (default `https://raw.githubusercontent.com/QcWyGm/dsh-config-sync/main/version.json`, cached for 30 minutes). When a higher version appears: exit DSH → download the tgz → verify sha256 → back up the old directory to `~\.dsh\backups\plugin-<old version>-<time>` → install over it → relaunch.
+The **Plugin update** card reads `version.json` (the built-in default tries jsDelivr CDN first, then `https://raw.githubusercontent.com/QcWyGm/dsh-config-sync/main/version.json`; 30-second timeout per request, cached for 30 minutes). When a higher version appears, "Update to x.y.z" installs it **while DSH keeps running**: the host downloads the tgz, verifies sha256, backs up the old directory to `~\.dsh\backups\plugin-<old version>-<time>` and overwrites the plugin directory. The card then shows "Installed, restart pending" — click "Restart DSH" to exit and let explorer relaunch it (outside any window's job object). A failed write rolls back from the backup it just made.
 
 ## Using this repo as a market index source
 
@@ -123,12 +123,14 @@ The **Plugin update** card sits after the version contract card and shows the lo
 |---|---|
 | Green "Up to date" | local version ≥ manifest version |
 | Orange "New version x.y.z" | the manifest is higher, with a one-line note and an "Update to x.y.z" button |
-| Red "Check failed" | manifest unreadable (network / repo missing / 404), with "Check for updates" to force a re-check |
+| Orange "Installed, restart pending" | the new version already overwrote the plugin directory, but this process still runs the old code — click "Restart DSH" to apply |
+| Red "Check failed" | manifest unreadable (network / repo missing / 404), with "Check for updates" to force a re-check and the per-source failure reason listed |
 
-- The manifest and package are published in this repo: `version.json` and `releases/dsh-config-sync-<version>.tgz`. Only a few hundred bytes are read, the package is not; cached 30 minutes, checked on mount and every 30 minutes after.
-- **Token**: this repo is public, so no token is needed. If `updateManifestUrl` points at a private Gitee mirror instead, fill in a Gitee personal token and both the manifest and the package switch to the API raw endpoint (`/api/v5/repos/<owner>/<repo>/raw/<path>?ref=main&access_token=…`), passing the branch as `ref` rather than in the path. The **Cloud repo** card keeps only the repo URL and SSH key. The token lives only in the local settings file, never in the repo; saving empty means "keep the stored token", and there is a separate "Clear stored token" button.
-- Clicking "Update to x.y.z" shows a system confirmation dialog first (Yes to continue), then **exits DSH** → a background script downloads the tgz, compares sha256, backs up the old directory to `~\.dsh\backups\plugin-<old version>-<time>`, installs over it and relaunches. Any failure exits with code 7 and the version stays put.
-- The `updateManifestUrl` setting can point at your own manifest (empty means the built-in URL); a relative `tgz` resolves against **the manifest actually read**, so switching addresses cannot build the wrong domain.
+- The manifest and package are published in this public repo: `version.json` and `releases/dsh-config-sync-<version>.tgz`. Only a few hundred bytes are read, the package is not; cached 30 minutes, checked on mount and every 30 minutes after.
+- **The manifest has several sources, tried in order**: the built-in default goes to jsDelivr first (`https://cdn.jsdelivr.net/gh/QcWyGm/dsh-config-sync@main/version.json`, then GitHub raw). `raw.githubusercontent.com` is frequently unreachable from mainland networks, and the host's `fetch` is Node's built-in one that **ignores system proxies** — so the request gets aborted on timeout (that is exactly the `This operation was aborted` line on the card). The package download follows the same order (the source that served the manifest first, then the rest): a reachable manifest does not guarantee the package is reachable on the same domain.
+- **Token**: this repo is public, so no token is needed. If `updateManifestUrl` points at a private Gitee mirror instead, fill in a Gitee personal token and both the manifest and the package switch to the API raw endpoint (`/api/v5/repos/<owner>/<repo>/raw/<path>?ref=main&access_token=…`), passing the branch as `ref` rather than in the path. A URL you fill in is used **alone**, with no mirrors mixed in. The token lives only in the local settings file, never in the repo; saving empty means "keep the stored token", and there is a separate "Clear stored token" button.
+- "Update to x.y.z" is a **silent install while running** (since 0.3.4): DSH does not exit; the host downloads the tgz, compares sha256, backs up the old directory to `~\.dsh\backups\plugin-<old version>-<time>` and overwrites the plugin directory (`runtime\install-plugin.ps1` does that, rolling back automatically on failure). The card then says "Installed, restart pending", and "Restart DSH" exits and relaunches it. Plugins are Node modules, so overwritten files are not hot-reloaded — that one restart cannot be avoided. The old path (exit DSH, then download and install) remains available as `POST {action:'apply'}`.
+- The `updateManifestUrl` setting can point at your own manifest (empty means the built-in candidates); a relative `tgz` resolves against **the manifest actually read**, so switching addresses cannot build the wrong domain.
 
 ## Interfaces and paths
 
@@ -161,7 +163,7 @@ Session header `cwd`, empty-snapshot fallback and missing `Get-FileHash` are han
 
 ## Install and self-check
 
-`apply.ps1` unpacks `local-plugins\dsh-config-sync-0.3.3.tgz` into `<AppRoot>\dsh-config-sync-0.1.0`, adds a `link:` dependency and a `dsh.profile.bundles` entry to `package.json`, and a `config-sync` line to `cordis.patch.yml`.
+`apply.ps1` unpacks `local-plugins\dsh-config-sync-0.3.4.tgz` into `<AppRoot>\dsh-config-sync-0.1.0`, adds a `link:` dependency and a `dsh.profile.bundles` entry to `package.json`, and a `config-sync` line to `cordis.patch.yml`.
 
 - `node tools\selftest.mjs <repo path>`: starts the host half with a fake ctx, hits status, generates scripts and asserts the JSON and the files on disk; it backs up any existing `同步-*.cmd` in the repo root and restores them afterwards. **The repo path must be passed explicitly.**
 - `node tools\clientcheck.mjs`: runs the client half with a fake `__ModuleLoader__` and a react stand-in, asserting the module loads, all three `apply()` registrations succeed (sidebar row and main with matching id/key), `inject` returns a disposer, and the component renders without throwing when data is empty. It validates the contract and structure; the UI still needs a restart and a look.

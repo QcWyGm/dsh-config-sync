@@ -17,7 +17,7 @@
     <DshHome>\logs\auto-sync-<时间戳>.log（窗口被关/没显示时也能查）。
 #>
 param(
-  [Parameter(Mandatory = $true)][ValidateSet('pull', 'push', 'update')][string]$Mode,
+  [Parameter(Mandatory = $true)][ValidateSet('pull', 'push', 'update', 'relaunch')][string]$Mode,
   [int]$WatchPid = 0,
   # wait：隐藏进程，只等 DSH 退出，退出后换一个**可见窗口**跑 run
   # run ：真正执行同步（默认，直接调用时不用传）
@@ -99,7 +99,7 @@ $ErrorActionPreference = 'Continue'
 $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 
 # 窗口是可见的：给它一个能看懂的标题，并把控制台编码设成 UTF-8（否则中文进度全是乱码）
-try { $Host.UI.RawUI.WindowTitle = ('DSH 配置同步 · ' + $(if ($Mode -eq 'update') { '插件更新' } elseif ($Mode -eq 'pull') { '拉取' } else { '推送' })) } catch { }
+try { $Host.UI.RawUI.WindowTitle = ('DSH 配置同步 · ' + $(if ($Mode -eq 'update') { '插件更新' } elseif ($Mode -eq 'relaunch') { '重启' } elseif ($Mode -eq 'pull') { '拉取' } else { '推送' })) } catch { }
 try { [Console]::OutputEncoding = New-Object Text.UTF8Encoding $false; $OutputEncoding = [Console]::OutputEncoding } catch { }
 
 if (-not $LogFile) {
@@ -291,6 +291,16 @@ function RestartClient {
   } else {
     Log '找不到 DeepSeek Harness.exe，跳过自动重启'
   }
+}
+
+# ---------- 仅重启：不碰仓库、不装插件，纯粹为了让运行中装好的新版本生效 ----------
+# 新版本是宿主在 DSH 运行期就覆盖进插件目录的（install-plugin.ps1），进程里仍是旧代码，
+# 用户点「重启」后走这条，只做一件事：等退出 → 用 explorer 代启拉回来。
+if ($Mode -eq 'relaunch') {
+  Log '只重启客户端（新版本插件在重启后生效）'
+  Write-Result $true 0 '已重启客户端' $false
+  if ($Restart) { RestartClient }
+  Finish 0 '完成（已重启）'
 }
 
 # ---------- 仅更新模式：下载插件包 → 校验 sha256 → 备份旧版 → 覆盖安装 → 重启 ----------

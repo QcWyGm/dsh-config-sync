@@ -328,6 +328,31 @@ else writeFileSync(settingsFile, prevSettings, 'utf8')
   check('重启客户端走 explorer 代启（不被进度窗口连坐）',
     postExitSrc.includes('function Start-Detached') && /explorer\.exe/.test(postExitSrc) && postExitSrc.includes('Start-Detached $exe'),
     postExit || 'post-exit.ps1')
+
+  // 更新源自检：raw.githubusercontent.com 在部分网络下直连不通，而 Node 的 fetch 不读系统代理，
+  // 10 秒一到就 abort（面板上那句 "This operation was aborted"）。所以内置候选必须带 CDN 兜在前面。
+  const indexSrc = readFileSync(join(pluginRoot, 'index.js'), 'utf8')
+  check('更新清单带 CDN 候选（jsDelivr 排在最前）',
+    indexSrc.includes('cdn.jsdelivr.net/gh/QcWyGm/dsh-config-sync') && indexSrc.includes('UPDATE_MANIFEST_MIRRORS'),
+    'index.js')
+  check('清单按候选依次尝试并汇总失败原因', indexSrc.includes('async function fetchManifestAuto'), 'index.js')
+  check('清单超时放宽到 30 秒（raw 慢链路 10 秒会假失败）',
+    indexSrc.includes('UPDATE_FETCH_TIMEOUT = 30 * 1000'), 'index.js')
+  // 运行中静默安装：宿主调 install-plugin.ps1，装完提示重启，不退出 DSH
+  check('宿主支持运行中静默安装（install-live）',
+    indexSrc.includes("action === 'install-live'") && indexSrc.includes('function runInstallPlugin'), 'index.js')
+  check('只重启走 relaunch（不碰仓库也不装插件）',
+    indexSrc.includes("mode: 'relaunch'") && postExitSrc.includes("'relaunch'"), postExit || 'post-exit.ps1')
+  const installer = [join(pluginRoot, 'runtime', 'install-plugin.ps1'), join(pluginRoot, 'install-plugin.ps1')].find((p) => existsSync(p)) || ''
+  const installerSrc = installer ? readFileSync(installer, 'utf8') : ''
+  check('安装器存在并自报结果（RESULT: 行）', Boolean(installer) && installerSrc.includes('RESULT:'), installer || 'runtime/install-plugin.ps1')
+  check('安装器覆盖前先备份、写坏能回滚',
+    installerSrc.includes('function Restore-Backup') && installerSrc.includes('plugin-{0}-{1}'),
+    installer || 'runtime/install-plugin.ps1')
+  check('安装器按候选地址逐个下载', installerSrc.includes("-split '\\|'"), installer || 'runtime/install-plugin.ps1')
+  const clientSrc = readFileSync(join(pluginRoot, 'client.js'), 'utf8')
+  check('面板按钮走静默安装 + 单独重启',
+    clientSrc.includes("action: 'install-live'") && clientSrc.includes("action: 'restart'"), 'client.js')
 }
 
 // 提交说明：面板里填的那句要进 push 脚本，时间由 sync.ps1 执行时追加

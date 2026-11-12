@@ -62,7 +62,19 @@ const PLUGIN_VERSION = (() => {
 })()
 // version.json 放在公开插件仓库根：{ version, notes, releasedAt, tgz, sha256 }
 // 更新检查只读这一个文件，几百字节，不拉整包。公开仓库不需要令牌。
-const UPDATE_MANIFEST_URL = 'https://raw.githubusercontent.com/QcWyGm/dsh-config-sync/main/version.json'
+//
+// 为什么不止一个地址：国内直连 raw.githubusercontent.com 经常不通（本机实测 curl 20 秒超时、code=000），
+// 而宿主的 fetch 是 Node 内置实现、**不读系统代理**，超时一到就被 AbortController 掐断，
+// 面板上只剩一句 "This operation was aborted"。jsDelivr 的 CDN 对同一仓库给同样内容
+// （实测 1.5 秒、包 sha256 与清单一致），所以把它排第一位，raw 兜底。
+// 用户自己在设置里填了清单地址时只用他那一个 —— 不掺镜像，免得"读到的其实不是他指定的源"。
+const UPDATE_MANIFEST_MIRRORS = [
+  'https://cdn.jsdelivr.net/gh/QcWyGm/dsh-config-sync@main/version.json',
+  'https://raw.githubusercontent.com/QcWyGm/dsh-config-sync/main/version.json',
+]
+const UPDATE_MANIFEST_URL = UPDATE_MANIFEST_MIRRORS[UPDATE_MANIFEST_MIRRORS.length - 1]
+// 30 秒：raw 那种"能连但很慢"的链路 10 秒根本不够（download 138 KB 都要十几秒）
+const UPDATE_FETCH_TIMEOUT = 30 * 1000
 const UPDATE_CHECK_TTL = 30 * 60 * 1000
 
 /**
@@ -1413,6 +1425,12 @@ const updateState = {
   checking: false,
   manifest: null,   // { version, notes, releasedAt, tgz, sha256 }
   error: '',
+  requestUrl: '',   // 用户配置的清单地址（空 = 用内置候选列表）
+  url: '',          // 这次实际读到清单的源（tgz 的相对地址按它解析）
+  sources: [],      // 依次试过的源与各自结果，面板要能看见"为什么不通"
+  // DSH 运行中把包装好之后记在这里：{ version, at, backup, log }
+  // 只是本进程内存态：重启后 PLUGIN_VERSION 就是新版本，自然不需要它了
+  liveInstall: null,
 }
 
 function versionParts(v) {
@@ -1431,21 +1449,40 @@ function compareVersion(a, b) {
   return 0
 }
 
-/** version.json 里的 tgz 可以写相对路径（releases/xxx.tgz），拼在仓库 raw 根上。 */
-function resolveTgzUrl(manifest, manifestUrl = UPDATE_MANIFEST_URL) {
-  // 相对地址要相对"实际读到的那份清单"解析，而不是内置地址：
-  // 设置项 updateManifestUrl 可以指向自建/测试清单，拼错基址会让下载打到别的域名上。
-  const base = String(manifestUrl || UPDATE_MANIFEST_URL).replace(/[^/]*$/, '')
+/**
+ * 清单里 tgz 可以写相对路径（releases/xxx.tgz）。下载地址按"读到清单的那个源"优先，
+ * 其余镜像依次兜底 —— 清单通了不代表包一定也能从同一个域名下下来。
+ */
+function resolveTgzCandidates(manifest, manifestUrl = '') {
   const tgz = String((manifest && manifest.tgz) || '')
-  if (!tgz) return ''
-  if (/^https?:\/\//i.test(tgz)) return tgz
-  return base + tgz.replace(/^\.?\//, '')
+  if (!tgz) return []
+  // 清单里写了绝对地址就照它来，不替用户猜镜像
+  if (/^https?:\/\//i.test(tgz)) return [tgz]
+  const rel = tgz.replace(/^\.?\//, '')
+  const bases = []
+  const actual = String(manifestUrl || '').replace(/[^/]*$/, '')
+  if (actual) bases.push(actual)
+  for (const cand of UPDATE_MANIFEST_MIRRORS) {
+    const base = cand.replace(/[^/]*$/, '')
+    if (base && !bases.includes(base)) bases.push(base)
+  }
+  return bases.map((base) => base + rel)
 }
 
-async function fetchManifest(url) {
+/** version.json 里的 tgz 可以写相对路径（releases/xxx.tgz），拼在仓库 raw 根上。 */
+function resolveTgzUrl(manifest, manifestUrl = UPDATE_MANIFEST_URL) {
+  const list = resolveTgzCandidates(manifest, manifestUrl)
+  if (list.length) return list[0]
+  // 没给 tgz 时保留原来的兜底行为（返回空串，调用方自己报错）
+  return ''
+}
+
+async function fetchManifest(url, timeoutMs = UPDATE_FETCH_TIMEOUT) {
   if (typeof fetch !== 'function') throw new Error(t('当前运行环境没有 fetch，无法检查更新', 'fetch is unavailable in this runtime — cannot check for updates'))
+  const seconds = Math.round(timeoutMs / 1000)
   const ctrl = typeof AbortController === 'function' ? new AbortController() : null
-  const timer = ctrl ? setTimeout(() => { try { ctrl.abort() } catch { } }, 10 * 1000) : null
+  let timedOut = false
+  const timer = ctrl ? setTimeout(() => { timedOut = true; try { ctrl.abort() } catch { } }, timeoutMs) : null
   try {
     const res = await fetch(url, { cache: 'no-store', signal: ctrl ? ctrl.signal : undefined })
     if (!res.ok) {
@@ -1454,9 +1491,40 @@ async function fetchManifest(url) {
     const json = await res.json()
     if (!json || !json.version) throw new Error(t('version.json 里没有 version 字段', 'version.json has no "version" field'))
     return json
+  } catch (error) {
+    // abort 的原话是 "This operation was aborted"，看不出是谁的问题，换成能看懂的话
+    if (timedOut) throw new Error(t(`超时（${seconds} 秒内没有响应）`, `timed out (no response in ${seconds}s)`))
+    throw error
   } finally {
     if (timer) clearTimeout(timer)
   }
+}
+
+/**
+ * 读清单：自定义地址只用它自己；没配则按 UPDATE_MANIFEST_MIRRORS 依次试，第一个成功的就用。
+ * 全失败时把每个源各自的失败原因汇总抛出 —— 面板上一眼能看出是超时、HTTP 状态还是解析失败。
+ */
+async function fetchManifestAuto(targetUrl, token = '', timeoutMs = UPDATE_FETCH_TIMEOUT) {
+  const custom = String(targetUrl || '').trim()
+  const candidates = custom ? [custom] : UPDATE_MANIFEST_MIRRORS.slice()
+  const tried = []
+  for (const cand of candidates) {
+    try {
+      const manifest = await fetchManifest(withAccessToken(cand, token), timeoutMs)
+      tried.push({ url: cand, ok: true })
+      return { manifest, url: cand, tried }
+    } catch (error) {
+      const msg = String((error && error.message) || error)
+      let host = cand
+      try { host = new URL(cand).host } catch { }
+      tried.push({ url: cand, host, ok: false, error: msg })
+      if (custom) break
+    }
+  }
+  const detail = tried.map((x) => `${x.host || x.url}：${x.ok ? 'ok' : x.error}`).join('；')
+  const error = new Error(t(`所有更新源都读不到（${detail}）`, `No update source could be reached (${detail})`))
+  error.sources = tried
+  throw error
 }
 
 /**
@@ -1476,20 +1544,24 @@ function withAccessToken(url, token) {
   return target + sep + 'access_token=' + encodeURIComponent(token)
 }
 
-async function checkUpdate({ force = false, url, token = '' } = {}) {
-  const target = url || UPDATE_MANIFEST_URL
+async function checkUpdate({ force = false, url = '', token = '' } = {}) {
+  const custom = String(url || '').trim()
   const now = Date.now()
-  if (!force && updateState.url === target && updateState.token === token && updateState.checkedAt && now - updateState.checkedAt < UPDATE_CHECK_TTL && (updateState.manifest || updateState.error)) {
+  if (!force && updateState.requestUrl === custom && updateState.token === token && updateState.checkedAt && now - updateState.checkedAt < UPDATE_CHECK_TTL && (updateState.manifest || updateState.error)) {
     return updateState
   }
   updateState.checking = true
-  updateState.url = target
+  updateState.requestUrl = custom
   updateState.token = token
   try {
-    updateState.manifest = await fetchManifest(withAccessToken(target, token))
+    const got = await fetchManifestAuto(custom, token)
+    updateState.manifest = got.manifest
+    updateState.url = got.url
+    updateState.sources = got.tried
     updateState.error = ''
   } catch (error) {
     updateState.manifest = null
+    if (Array.isArray(error && error.sources)) updateState.sources = error.sources
     updateState.error = String((error && error.message) || error)
   } finally {
     updateState.checking = false
@@ -1500,13 +1572,18 @@ async function checkUpdate({ force = false, url, token = '' } = {}) {
 
 function updatePayload(state, settings = {}) {
   const remote = state.manifest
+  const custom = String(settings.updateManifestUrl || '')
+  const installed = state.liveInstall || null
+  // 装好了但进程还在跑旧代码 = 需要重启；重启后 PLUGIN_VERSION 追上来，这条自然消失
+  const restartRequired = Boolean(installed && compareVersion(installed.version, PLUGIN_VERSION) > 0)
   return {
     ok: !state.error,
     local: { version: PLUGIN_VERSION || t('未知', 'unknown'), dir: PLUGIN_DIR },
     // 更新相关的配置集中在这里（清单地址、令牌是否已存），别散到「云端仓库」卡里
     config: {
-      manifestUrl: String(settings.updateManifestUrl || '') || UPDATE_MANIFEST_URL,
-      manifestUrlIsDefault: !String(settings.updateManifestUrl || ''),
+      manifestUrl: custom || UPDATE_MANIFEST_MIRRORS[0],
+      manifestUrlIsDefault: !custom,
+      manifestSources: custom ? [] : UPDATE_MANIFEST_MIRRORS.slice(),
       tokenSet: Boolean(settings.updateToken),
     },
     remote: remote ? {
@@ -1522,21 +1599,65 @@ function updatePayload(state, settings = {}) {
     checking: state.checking,
     checkedAt: state.checkedAt || 0,
     error: state.error || '',
+    // 这次实际用上的源，以及每个源的成败 —— 检查失败时面板直接把原因列出来
+    sourceUsed: state.url || '',
+    sources: Array.isArray(state.sources) ? state.sources : [],
+    installed,
+    restartRequired,
     pending: autoState.pending,
   }
+}
+
+/**
+ * 运行中直接把新版本装进插件目录（不退出 DSH）。
+ *
+ * 为什么能这么干：插件的 ps1 只是磁盘上的脚本，index.js 已经读进内存 —— 覆盖文件不会让当前进程崩，
+ * 只是"文件是新的、进程还是旧的"，所以装完必须提示重启才生效。
+ * 真正干活的是 runtime/install-plugin.ps1：它自己依次尝试候选下载地址、校验 sha256、解包、
+ * 备份旧目录（<DshHome>\backups\plugin-<旧版本>-<时间戳>）、覆盖，失败就把备份拷回去。
+ * 返回 { ok, version, backup, log, error }
+ */
+function runInstallPlugin({ version, sha256, urls, dshHome }) {
+  const script = join(PLUGIN_DIR, 'runtime', 'install-plugin.ps1')
+  if (!isFile(script)) return Promise.resolve({ ok: false, error: t('插件目录里没有 runtime\\install-plugin.ps1', 'runtime\\install-plugin.ps1 is missing from the plugin directory') })
+  const sysRoot = process.env.SystemRoot || 'C:\\Windows'
+  const ps = join(sysRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
+  const args = [
+    '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script,
+    '-PluginDir', PLUGIN_DIR,
+    '-Version', String(version || ''),
+    '-Sha256', String(sha256 || ''),
+    '-TgzUrls', urls.join('|'),
+    '-DshHome', dshHome,
+  ]
+  return new Promise((resolve) => {
+    execFile(ps, args, { windowsHide: true, timeout: 6 * 60 * 1000, maxBuffer: 8 * 1024 * 1024 }, (err, stdout, stderr) => {
+      const text = String(stdout || '') + String(stderr || '')
+      // 脚本最后一行固定是 RESULT:{json}；前面是给人看的进度
+      const line = text.split(/\r?\n/).filter((l) => l.startsWith('RESULT:')).pop()
+      if (!line) {
+        resolve({ ok: false, error: t('安装脚本没有返回结果：', 'The installer returned no result: ') + (text.trim().slice(-400) || String((err && err.message) || '无输出')) })
+        return
+      }
+      try { resolve(JSON.parse(line.slice('RESULT:'.length))) } catch { resolve({ ok: false, error: t('安装脚本返回的结果不是合法 JSON', 'The installer result is not valid JSON') }) }
+    })
+  })
 }
 
 /**
  * 更新接口：
  *   GET  /config-sync/update             读缓存（30 分钟内不重复拉）
  *   POST {action:'check'}                强制重新检查
- *   POST {action:'apply'}                确认后排队更新：退出 DSH → 可见窗口下载/校验/安装 → 自动重启
+ *   POST {action:'install-live'}         运行中下载+校验+覆盖安装（不退出 DSH），装完提示重启生效
+ *   POST {action:'restart'}              排队"退出后重启"，立刻关闭 DSH，由退出后的脚本用 explorer 代启拉回来
+ *   POST {action:'apply'}                兜底：退出 DSH → 可见窗口下载/校验/安装 → 自动重启
  */
 async function handleUpdate(req, res, config) {
   const dshHome = config?.dshHome || process.env.DSH_HOME || join(homedir(), '.dsh')
   const settings = readSettings(dshHome)
-  // 清单地址允许被设置覆盖：换镜像/自建仓库、或本地搭测试服务时不改动插件源码
-  const manifestUrl = String(settings.updateManifestUrl || '') || UPDATE_MANIFEST_URL
+  // 清单地址允许被设置覆盖：换镜像/自建仓库、或本地搭测试服务时不改动插件源码。
+  // 留空 = 用内置候选列表（jsDelivr 优先、raw 兜底）
+  const manifestUrl = String(settings.updateManifestUrl || '')
   const updateToken = String(settings.updateToken || '')
   try {
     if (req.method === 'GET') {
@@ -1552,6 +1673,44 @@ async function handleUpdate(req, res, config) {
     if (action === 'check') {
       const state = await checkUpdate({ force: true, url: manifestUrl, token: updateToken })
       sendJson(res, 200, { ok: !state.error, action, ...updatePayload(state, settings) })
+      return
+    }
+
+    // 运行中直接装（不退出 DSH）：下载 → 校验 sha256 → 备份旧版 → 覆盖插件目录
+    if (action === 'install-live') {
+      const state = await checkUpdate({ force: true, url: manifestUrl, token: updateToken })
+      const remote = state.manifest
+      if (!remote) throw new Error(t(`读不到更新清单：${state.error || '未知原因'}`, `Cannot read the update manifest: ${state.error || 'unknown reason'}`))
+      if (compareVersion(remote.version, PLUGIN_VERSION) <= 0) {
+        throw new Error(t(`已经是最新版本（${PLUGIN_VERSION}），无需更新`, `Already on the latest version (${PLUGIN_VERSION}) — no update needed`))
+      }
+      const urls = resolveTgzCandidates(remote, state.url)
+      if (!urls.length) throw new Error(t('version.json 里没有给 tgz 下载地址', 'version.json gives no tgz download URL'))
+      // 包只有一百多 KB，同步做完再回包：前端把按钮置灰等这一下就够了
+      const report = await runInstallPlugin({ version: String(remote.version), sha256: String(remote.sha256 || ''), urls, dshHome })
+      if (!report.ok) throw new Error(String(report.error || t('安装失败', 'install failed')))
+      updateState.liveInstall = {
+        version: String(remote.version),
+        at: Date.now(),
+        backup: String(report.backup || ''),
+        log: String(report.log || ''),
+      }
+      // 注意 hasUpdate 仍是 true：进程里跑的还是旧代码，重启后 PLUGIN_VERSION 才追上来。
+      // 面板靠 restartRequired 换成「已装好，重启生效」
+      sendJson(res, 200, { ok: true, action, installed: updateState.liveInstall, ...updatePayload(state, settings) })
+      return
+    }
+
+    // 只重启：排队"退出后拉起"，由 post-exit 的 relaunch 模式用 explorer 代启（不继承本窗口作业）
+    if (action === 'restart') {
+      const repo = resolveRepo(config?.repoPath, dshHome).repo || ''
+      const appRoot = resolveAppRoot(config?.appRoot) || ''
+      const started = await spawnWatcher({ mode: 'relaunch', repo, appRoot, dshHome, restart: true })
+      if (!started.ok) throw new Error(started.error)
+      autoState.pending = { mode: 'relaunch', at: Date.now(), restart: true, watcherPid: started.pid }
+      const closed = closeDsh()
+      autoState.pending.closeRequested = closed
+      sendJson(res, 200, { ok: true, action, pending: autoState.pending, closeRequested: closed })
       return
     }
 
@@ -1602,7 +1761,7 @@ async function handleUpdate(req, res, config) {
       return
     }
 
-    throw new Error(t('action 只能是 check / apply', 'action must be check or apply'))
+    throw new Error(t('action 只能是 check / install-live / restart / apply', 'action must be check / install-live / restart / apply'))
   } catch (error) {
     sendJson(res, 400, { ok: false, error: String((error && error.message) || error) })
   }
