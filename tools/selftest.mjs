@@ -794,6 +794,30 @@ if (!existsSync(repoArg) || !existsSync(pluginRuntime)) {
     existsSync(mirrorTool) ? '内容已漂移，跑 tools/sync-plugin-mirror.ps1 重新同步' : '配置仓库没有 tools/fix-session-cwd.mjs')
 }
 
+// 内置运行时链接修复（0.3.24）：客户端升级会清空 resources\runtime，
+// 装卸插件的 pnpm 调用随即报 MODULE_NOT_FOUND（真正运行时在 ~\.dsh\dsh-runtimes 下）。
+// apply 每次落地幂等补回 junction，这 4 条断言盯住「函数在、被调用、不覆盖、探针对」。
+console.log('')
+console.log('== 内置运行时链接修复 ==')
+{
+  const commonPath = join(pluginRuntime, 'dsh-sync-common.ps1')
+  const applyPath = join(pluginRuntime, 'apply.ps1')
+  const commonText = existsSync(commonPath) ? readFileSync(commonPath, 'utf8') : ''
+  const applyText = existsSync(applyPath) ? readFileSync(applyPath, 'utf8') : ''
+  check('common 提供 Repair-PrimaryRuntimeLink 函数',
+    /function\s+Repair-PrimaryRuntimeLink\s*\(/.test(commonText),
+    '插件 runtime 的 dsh-sync-common.ps1 里没有该函数')
+  check('apply.ps1 落地时调用该函数（不靠人手补链接）',
+    /Repair-PrimaryRuntimeLink\s+\$AppRoot\s+\$DshHome/.test(applyText),
+    'apply.ps1 里找不到调用点，升级后链接不会自动补回')
+  check('已有真实运行时目录时绝不覆盖（只告警不重建）',
+    /LinkType/.test(commonText) && /客户端自带运行时目录存在/.test(commonText) && /本次不动/.test(commonText),
+    '缺少 LinkType 判据：可能把客户端自带的真实目录当成链接处理')
+  check('探针落在 pnpm.mjs 本身，不是只看目录存在',
+    /dependencies\\pnpm\\bin\\pnpm\.mjs/.test(commonText),
+    '探针路径不是 pnpm.mjs，运行时缺文件时会被误判为已就绪')
+}
+
 console.log('')
 console.log(failures === 0 ? '结论：全部通过' : `结论：${failures} 项失败`)
 process.exit(failures === 0 ? 0 : 1)

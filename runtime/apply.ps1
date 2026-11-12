@@ -1015,6 +1015,12 @@ if ($SkipInstall) {
   }
 }
 
+# ---------- 9.5 内置运行时链接修复 ----------
+# 客户端升级会清空 resources\runtime，装卸插件所依赖的 pnpm 路径随之失效
+# （报错形如 Cannot find module ...\dependencies\pnpm\bin\pnpm.mjs）。
+# 每次落地都幂等补回一次链接；已在就别动，是真实目录也别动。
+Repair-PrimaryRuntimeLink $AppRoot $DshHome
+
 # ---------- 10. 自检 ----------
 Say ""
 Say "== 自检 =="

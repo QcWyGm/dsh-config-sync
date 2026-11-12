@@ -489,3 +489,55 @@ function Skip-SyncItem($Scope, [string]$RepoRoot, [string]$Group, [string]$Item,
   }
 }
 
+# ============================================================
+# 内置运行时链接修复
+# -----------------------------------------------------------
+# 现象：插件页点「卸载」或装新插件时报
+#   Cannot find module '<AppRoot>\resources\runtime\primary-runtime\dependencies\pnpm\bin\pnpm.mjs'
+# 原因：客户端把内置运行时实际放在 <DshHome>\dsh-runtimes\dsh-primary-runtime，
+#       而装卸插件时的 pnpm 调用拼的却是安装目录下的 resources\runtime\primary-runtime。
+#       客户端升级会重建 resources\runtime（清空它），链接就此消失，之后所有
+#       link: 型插件的装卸都会失败（插件本体没坏，是 pnpm 找不到）。
+# 做法：每次 apply 幂等补回一次 junction。只建、不删、不覆盖已有真实目录。
+# ============================================================
+function Repair-PrimaryRuntimeLink([string]$appRoot, [string]$dshHome) {
+  if (-not $appRoot -or -not $dshHome) { return }
+  $target     = Join-Path $dshHome 'dsh-runtimes\dsh-primary-runtime'
+  $targetProbe = Join-Path $target 'dependencies\pnpm\bin\pnpm.mjs'
+  $link       = Join-Path $appRoot 'resources\runtime\primary-runtime'
+  $linkProbe  = Join-Path $link 'dependencies\pnpm\bin\pnpm.mjs'
+
+  # 判据只认「能不能解析出 pnpm.mjs」，不比路径字符串：
+  # $dshHome 可能传成 8.3 短名（如 ADMINI~1），而 junction 的 Target 是长名，
+  # 字符串一比就误判成「指向别处」，白报一次告警。
+  if (Test-Path -LiteralPath $link) {
+    if (Test-Path -LiteralPath $linkProbe) { Ok '内置运行时链接已就绪'; return }
+    $item = Get-Item -LiteralPath $link -Force
+    if ($item.LinkType -and $item.Target) {
+      Warn ("内置运行时链接在，但取不到 pnpm.mjs（指向 " + [string](@($item.Target)[0]) + "）；本次不动，需人工确认")
+    } else {
+      Warn ("客户端自带运行时目录存在，但里面没有 pnpm.mjs（" + $link + "）；本次不动，若装卸插件失败请检查客户端安装是否完整")
+    }
+    return
+  }
+
+  # 探针必须落到 pnpm.mjs 本身：只看目录存在会误判「运行时齐了」，而客户端真正 require 的是这个文件
+  if (-not (Test-Path -LiteralPath $targetProbe)) {
+    Warn ("本机没有可用的内置运行时（" + $target + "），跳过链接修复；插件装卸仍会失败，先让客户端把运行时装好")
+    return
+  }
+
+  $parent = Split-Path -Parent $link
+  if (-not (Test-Path -LiteralPath $parent)) {
+    Warn ("缺少 " + $parent + "（客户端目录结构有变？），跳过运行时链接修复")
+    return
+  }
+
+  try {
+    New-Item -ItemType Junction -Path $link -Target $target -ErrorAction Stop | Out-Null
+    Ok ("已补回内置运行时链接：" + $link + " -> " + $target)
+  } catch {
+    Warn ("补内置运行时链接失败：" + $_.Exception.Message + "；可手动执行：cmd /c mklink /J `"" + $link + "`" `"" + $target + "`"")
+  }
+}
+
