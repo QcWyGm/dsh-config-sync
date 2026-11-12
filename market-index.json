@@ -21,7 +21,7 @@
           "source": {
             "type": "git",
             "url": "https://github.com/QcWyGm/dsh-config-sync",
-            "commit": "PENDING"
+            "commit": "fd3648f40fe660febe6dc47c98b6e877280b1ad4"
           }
         },
         {
