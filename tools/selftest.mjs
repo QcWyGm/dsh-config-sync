@@ -545,12 +545,12 @@ if (prevScope === null) { try { unlinkSync(scopeFile) } catch { } } else writeFi
   // 旧版没有冲突清单/exit 6，会把 pull 退回「直接 git pull + 失败回滚」——
   // 真实故障：面板 18 项全选「用云端」，清单读都没读就被旧执行体覆盖回滚。
   check('执行体选择：插件 runtime 优先、仓库副本兜底',
-    postExitSrc.includes('function Find-PluginSync')
-      && postExitSrc.indexOf('function Find-PluginSync') < postExitSrc.indexOf('$sync = Find-PluginSync'),
+    postExitSrc.includes('function Find-PluginScript')
+      && postExitSrc.indexOf('function Find-PluginScript') < postExitSrc.indexOf("$sync = Find-PluginScript 'sync.ps1'"),
     postExit || 'post-exit.ps1')
   check('仓库 sync.ps1 只作兜底（不得排在插件前面）',
-    postExitSrc.indexOf('$sync = Find-PluginSync') > 0
-      && postExitSrc.indexOf('$sync = Find-PluginSync') < postExitSrc.indexOf('if (-not $sync -and $RepoRoot)'),
+    postExitSrc.indexOf("$sync = Find-PluginScript 'sync.ps1'") > 0
+      && postExitSrc.indexOf("$sync = Find-PluginScript 'sync.ps1'") < postExitSrc.indexOf('if (-not $sync -and $RepoRoot)'),
     postExit || 'post-exit.ps1')
 
   // 更新源自检：raw.githubusercontent.com 在部分网络下直连不通，而 Node 的 fetch 不读系统代理，
@@ -614,7 +614,7 @@ if (prevScope === null) { try { unlinkSync(scopeFile) } catch { } } else writeFi
       && /if \(-not \$invokeOk\)[\s\S]{0,260}\$code = 1/.test(postExitSrc),
     'post-exit.ps1')
   check('调用执行体前确认文件仍存在（安装覆盖到一半也能拦住）',
-    /\$sync = Find-PluginSync[\s\S]{0,1200}Test-Path -LiteralPath \$sync/.test(postExitSrc),
+    /\$sync = Find-PluginScript 'sync\.ps1'[\s\S]{0,1200}Test-Path -LiteralPath \$sync/.test(postExitSrc),
     'post-exit.ps1')
   check('同步失败时不刷新同步分水岭（免得失败变成静默漏推）',
     postExitSrc.includes('RestartClient -SkipWatermark:$failed')
@@ -729,10 +729,48 @@ if (prevScope === null) { try { unlinkSync(scopeFile) } catch { } } else writeFi
       .map((k) => clientSrc.indexOf(`Section(M('${k}'`))
     return order.every((p, i) => p >= 0 && (i === 0 || p > order[i - 1]))
   })(), 'client.js')
-  // 「还原备份」卡：地址可改（留空=默认）、列出快照、点行生成脚本
-  check('控件：还原备份卡有备份目录、快照列表与逐份还原',
+  // 「还原备份」卡：地址可改（留空=默认）、列出快照、点「立即还原」先出确认框再排队
+  check('控件：还原备份卡有备份目录、快照列表与立即还原',
     clientSrc.includes('backupRoot') && clientSrc.includes('backup.snapshots')
-    && clientSrc.includes("callPrepare('restore-backup'") && clientSrc.includes("M('还原备份', 'Restore backup')"), 'client.js')
+    && clientSrc.includes("M('立即还原', 'Restore now')") && clientSrc.includes("M('还原备份', 'Restore backup')"), 'client.js')
+  check('控件：还原先弹确认（差异预览）再排队，不是点了就动手',
+    clientSrc.includes("action: 'restore-preview'") && clientSrc.includes("action: 'restore-now'")
+    && clientSrc.includes('askRestore') && clientSrc.includes('doRestore')
+    && clientSrc.includes('pvRemovePlugins') && clientSrc.includes('pvRemoveFiles'), 'client.js')
+  check('控件：快照行显示相对时间与插件数',
+    clientSrc.includes('const rel = (at)') && clientSrc.includes('${s.plugins ? ` · ${s.plugins} 个插件`'), 'client.js')
+
+  // 0.3.25 起「还原」与「立即拉取」共用一条流水线：面板排队 → 客户端退出 → 可见进度窗口执行 → 自动重启
+  const restoreScript = [join(pluginRoot, 'runtime', 'restore.ps1'), join(repoRoot, 'restore.ps1')].find((p) => existsSync(p)) || ''
+  const restoreSrc = restoreScript ? readFileSync(restoreScript, 'utf8') : ''
+  check('post-exit 有 restore 分支：执行体是 restore.ps1，且必须带 -RollbackToPoint',
+    postExitSrc.includes("if ($Mode -eq 'restore')")
+    && postExitSrc.includes("Find-PluginScript 'restore.ps1'")
+    && postExitSrc.includes('RollbackToPoint = $true'), postExit || 'post-exit.ps1')
+  check('post-exit 的 restore 分支沿用同一套返回码判据（哨兵 -1 + 没跑完即失败）',
+    /if \(\$Mode -eq 'restore'\)[\s\S]{0,3000}?\$LASTEXITCODE = -1/.test(postExitSrc)
+    && /if \(\$Mode -eq 'restore'\)[\s\S]{0,3500}?执行体没有正常跑完/.test(postExitSrc),
+    'post-exit.ps1')
+  check('post-exit 的 restore 分支有专属收尾文案',
+    postExitSrc.includes('完成（已还原）') && postExitSrc.includes('还原失败'), 'post-exit.ps1')
+  check('restore.ps1 提供 -RollbackToPoint 时点回退',
+    restoreSrc.includes('[switch]$RollbackToPoint') && restoreSrc.includes('3.5 时点回退'), 'restore.ps1')
+  check('时点回退：撤走的插件只删 junction 链接（不穿进去删目标）',
+    /if \(\$item\.LinkType\)[\s\S]{0,220}\[IO\.Directory\]::Delete/.test(restoreSrc.replace(/\r/g, '')), 'restore.ps1')
+  check('时点回退：写 rollback-manifest.json（可再还原，不留糊涂账）',
+    restoreSrc.includes('rollback-manifest.json') && restoreSrc.includes('rollback\\files'), 'restore.ps1')
+  check('时点回退：相对路径基准先归一成完整路径（避免 8.3 短名算错）',
+    restoreSrc.includes('(Get-Item -LiteralPath $ProfileDir -Force).FullName'), 'restore.ps1')
+  check('备份列表带插件数（面板要显示 N 个插件）',
+    indexSrc.includes('plugins = Object.keys(pkg?.dependencies') && indexSrc.includes('plugins: x.plugins'), 'index.js')
+  check('restore-now 复用 spawnWatcher，并把快照目录带进执行体',
+    /action === 'restore-now'[\s\S]{0,900}?spawnWatcher\(\{[\s\S]{0,220}?mode: 'restore'/.test(indexSrc)
+    && indexSrc.includes("extraArgs: ['-BackupDir', backupDir]"), 'index.js')
+  check('restore-preview 与 prepare 共用同一套快照校验（口径不漂移）',
+    indexSrc.includes('function resolveSnapshotDir')
+    && (indexSrc.match(/resolveSnapshotDir\(dshHome, body\.backupDir\)/g) || []).length >= 2, 'index.js')
+  check('还原不需要仓库也能排队（只动本机快照）',
+    /const isRestore = action === 'restore-now'/.test(indexSrc) && /if \(!repo && !isRestore\) throw/.test(indexSrc), 'index.js')
 }
 
 // 提交说明：面板里填的那句要进 push 脚本，时间由 sync.ps1 执行时追加

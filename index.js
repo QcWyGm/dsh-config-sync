@@ -490,7 +490,17 @@ function inspectBackup(dshHome, rootOverride) {
       }
       // 只有落过 profile 的快照能用来还原配置（新机器首次拉取时 apply 会留下空快照）
       const hasProfile = isFile(join(dir, 'package.json'))
-      all.push({ name, dir, at: st.mtimeMs, files, bytes, hasProfile })
+      // 快照里装了哪些插件（依赖数 + bundles 数）：面板要显示"23 个插件"，也是算差异的依据
+      let plugins = 0
+      let bundles = 0
+      if (hasProfile) {
+        try {
+          const pkg = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8'))
+          plugins = Object.keys(pkg?.dependencies || {}).length
+          bundles = Array.isArray(pkg?.dsh?.profile?.bundles) ? pkg.dsh.profile.bundles.length : 0
+        } catch { }
+      }
+      all.push({ name, dir, at: st.mtimeMs, files, bytes, hasProfile, plugins, bundles })
     } catch { }
   }
   all.sort((a, b) => b.at - a.at)
@@ -506,9 +516,120 @@ function inspectBackup(dshHome, rootOverride) {
     latestAt: latestPick.at,
     count: all.length,
     latestFiles: latestPick.files,
-    candidates: all.slice(0, 8).map((x) => ({ name: x.name, dir: x.dir, at: x.at, files: x.files, bytes: x.bytes, usable: x.hasProfile })),
-    snapshots: all.slice(0, 60).map((x) => ({ name: x.name, dir: x.dir, at: x.at, files: x.files, bytes: x.bytes, usable: x.hasProfile })),
+    candidates: all.slice(0, 8).map((x) => ({ name: x.name, dir: x.dir, at: x.at, files: x.files, bytes: x.bytes, usable: x.hasProfile, plugins: x.plugins, bundles: x.bundles })),
+    snapshots: all.slice(0, 60).map((x) => ({ name: x.name, dir: x.dir, at: x.at, files: x.files, bytes: x.bytes, usable: x.hasProfile, plugins: x.plugins, bundles: x.bundles })),
   }
+}
+
+/**
+ * 还原预览：算出「还原到这份快照会发生什么」，给面板的确认框用。
+ *
+ * 口径必须和 restore.ps1 -RollbackToPoint 完全一致，否则确认框会骗人：
+ *   willWrite / willOverwrite = 快照里有、会被写回（内容不同才列入 overwrite）
+ *   willRemove                = 当前 profile 有、快照没有 → 会被移进 manual\rollback\files
+ *   pluginsRemove             = 当前依赖有、快照没有 → 会被撤走（链接删掉或实体目录移入 rollback）
+ *   pluginsInstall            = 快照依赖有、当前没有 → 还原后由 pnpm install 装上
+ */
+function restorePreview(dshHome, snapshotDir, config) {
+  const profileDir = join(dshHome, 'profiles', config?.profileName || 'desktop')
+  const profileFiles = ['package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml', 'cordis.yml', 'cordis.patch.yml']
+  const homeFiles = ['AGENTS.md', 'prompt-inject.md']
+
+  const willWrite = []
+  const willOverwrite = []
+  const same = (a, b) => {
+    try { return readFileSync(a, 'utf8') === readFileSync(b, 'utf8') } catch { return false }
+  }
+  for (const f of profileFiles) {
+    const src = join(snapshotDir, f)
+    if (!isFile(src)) continue
+    const dst = join(profileDir, f)
+    if (!isFile(dst)) { willWrite.push(f); continue }
+    if (!same(src, dst)) willOverwrite.push(f)
+  }
+  for (const f of homeFiles) {
+    const src = join(snapshotDir, f)
+    if (!isFile(src)) continue
+    const dst = join(dshHome, f)
+    if (!isFile(dst)) { willWrite.push(f); continue }
+    if (!same(src, dst)) willOverwrite.push(f)
+  }
+  const settingsDir = join(snapshotDir, 'settings')
+  if (isDir(settingsDir)) {
+    let names = []
+    try { names = readdirSync(settingsDir, { withFileTypes: true }).filter((e) => e.isFile()).map((e) => e.name) } catch { }
+    for (const n of names) {
+      const src = join(settingsDir, n)
+      const dst = join(dshHome, n)
+      if (!isFile(dst)) { willWrite.push(`settings/${n}`); continue }
+      if (!same(src, dst)) willOverwrite.push(`settings/${n}`)
+    }
+  }
+
+  // 会移走的文件：当前 profile 目录里有、快照里没有（node_modules 单独按插件算）
+  const snapSet = new Set()
+  const walk = (root, onFile) => {
+    const stack = [root]
+    while (stack.length) {
+      const cur = stack.pop()
+      let entries = []
+      try { entries = readdirSync(cur, { withFileTypes: true }) } catch { continue }
+      for (const e of entries) {
+        const p = join(cur, e.name)
+        if (e.isDirectory()) stack.push(p)
+        else onFile(p, relative(root, p))
+      }
+    }
+  }
+  walk(snapshotDir, (_full, rel) => snapSet.add(rel))
+  const willRemove = []
+  walk(profileDir, (full, rel) => {
+    const normalized = rel.split('/').join('\\')
+    if (normalized.toLowerCase().startsWith('node_modules\\')) return
+    if (!snapSet.has(rel)) willRemove.push(normalized)
+  })
+
+  const readDeps = (p) => {
+    try { return Object.keys(JSON.parse(readFileSync(p, 'utf8'))?.dependencies || {}) } catch { return null }
+  }
+  const snapDeps = readDeps(join(snapshotDir, 'package.json')) || []
+  const curDeps = readDeps(join(profileDir, 'package.json'))
+  const pluginsRemove = curDeps === null ? [] : curDeps.filter((d) => !snapDeps.includes(d))
+  const pluginsInstall = snapDeps.filter((d) => !(curDeps || []).includes(d))
+
+  const CAP = 300
+  return {
+    snapshot: snapshotDir,
+    willWrite: willWrite.slice(0, CAP),
+    willOverwrite: willOverwrite.slice(0, CAP),
+    willRemove: willRemove.slice(0, CAP),
+    pluginsRemove,
+    pluginsInstall,
+    truncated: (willWrite.length + willOverwrite.length + willRemove.length) > CAP,
+  }
+}
+
+/**
+ * 校验「要还原哪一份快照」：存在、在备份根之下、且带 profile 文件。
+ * prepare（生成 cmd）与 restore-now（直接排队）共用，避免两处判断漂移。
+ */
+function resolveSnapshotDir(dshHome, backupDirRaw) {
+  const backupDir = String(backupDirRaw || '').trim()
+  if (!backupDir) throw new Error(t('没有指定要还原的备份目录', 'No backup directory was given'))
+  if (/["\r\n]/.test(backupDir)) throw new Error(t('备份路径里不能含引号或换行', 'The backup path must not contain quotes or newlines'))
+  if (!isDir(backupDir)) throw new Error(t(`备份目录不存在：${backupDir}`, `Backup directory does not exist: ${backupDir}`))
+  const root = backupRootOf(dshHome, readSettings(dshHome))
+  const rel = relative(root, backupDir)
+  if (rel.startsWith('..') || rel === '' || isAbsolute(rel)) {
+    throw new Error(t(`只能在备份根 ${root} 下选快照，不接受 ${backupDir}`, `Only snapshots under ${root} can be restored; refusing ${backupDir}`))
+  }
+  if (!isFile(join(backupDir, 'package.json'))) {
+    throw new Error(t(
+      `这份快照里没有 profile 文件（package.json），还原会失败：${backupDir}`,
+      `That snapshot has no profile files (package.json) and cannot be restored: ${backupDir}`,
+    ))
+  }
+  return backupDir
 }
 
 /**
@@ -2381,7 +2502,9 @@ async function handleAuto(req, res, config) {
     const dshHome = config?.dshHome || process.env.DSH_HOME || join(homedir(), '.dsh')
     const settings = readSettings(dshHome)
     const repo = resolveRepo(config?.repoPath, dshHome).repo || ''
-    if (!repo) throw new Error(t('还没有配置仓库目录，自动同步无从谈起', 'The repo directory is not configured, so auto sync cannot work'))
+    // 还原只动本机快照，仓库没配也能用；推送/拉取才必须以仓库目录为前置
+    const isRestore = action === 'restore-now' || action === 'restore-preview'
+    if (!repo && !isRestore) throw new Error(t('还没有配置仓库目录，自动同步无从谈起', 'The repo directory is not configured, so auto sync cannot work'))
     const appRoot = resolveAppRoot(config?.appRoot) || ''
 
     if (action === 'check') {
@@ -2407,6 +2530,32 @@ async function handleAuto(req, res, config) {
       return
     }
 
+    if (action === 'restore-preview') {
+      const backupDir = resolveSnapshotDir(dshHome, body.backupDir)
+      sendJson(res, 200, { ok: true, action, preview: restorePreview(dshHome, backupDir, config) })
+      return
+    }
+
+    if (action === 'restore-now') {
+      // 直接排队「退出后还原」：和 pull-now 一条流水线，只是执行体换成 restore.ps1。
+      // 面板点它之前会先弹确认框（预览差异），确认之后才走到这里。
+      const backupDir = resolveSnapshotDir(dshHome, body.backupDir)
+      const restart = body.restart !== false && settings.autoRestart !== false
+      const started = await spawnWatcher({
+        mode: 'restore', repo, appRoot, dshHome, restart,
+        extraArgs: ['-BackupDir', backupDir],
+      })
+      if (!started.ok) throw new Error(started.error)
+      autoState.pending = { mode: 'restore', at: Date.now(), restart, watcherPid: started.pid, closeRequested: false, backupDir }
+      let closed = false
+      if (body.closeNow !== false) {
+        closed = closeDsh()
+        autoState.pending.closeRequested = closed
+      }
+      sendJson(res, 200, { ok: true, action, pending: autoState.pending, closeRequested: closed })
+      return
+    }
+
     if (action === 'pull-now' || action === 'push-now') {
       const mode = action === 'pull-now' ? 'pull' : 'push'
       // 拉取/推送做完都把客户端拉回来（用户要求"完成后自动启动 dsh"），仍受 autoRestart 开关约束
@@ -2424,7 +2573,7 @@ async function handleAuto(req, res, config) {
       return
     }
 
-    throw new Error(t('action 只能是 check / pull-now / push-now / cancel', 'action must be check / pull-now / push-now / cancel'))
+    throw new Error(t('action 只能是 check / pull-now / push-now / restore-preview / restore-now / cancel', 'action must be check / pull-now / push-now / restore-preview / restore-now / cancel'))
   } catch (error) {
     sendJson(res, 400, { ok: false, error: String((error && error.message) || error) })
   }
@@ -2573,21 +2722,8 @@ async function handlePrepare(req, res, config) {
     // 面板传来的路径直接拼进 cmd，所以这里既校验存在，也校验不含引号/换行，避免生成出跑不起来的脚本。
     let backupDir = ''
     if (action === 'restore-backup') {
-      backupDir = String(body.backupDir || '').trim()
-      if (!backupDir) throw new Error(t('没有指定要还原的备份目录', 'No backup directory was given'))
-      if (/["\r\n]/.test(backupDir)) throw new Error(t('备份路径里不能含引号或换行', 'The backup path must not contain quotes or newlines'))
-      if (!isDir(backupDir)) throw new Error(t(`备份目录不存在：${backupDir}`, `Backup directory does not exist: ${backupDir}`))
-      const root = backupRootOf(dshHome, readSettings(dshHome))
-      const rel = relative(root, backupDir)
-      if (rel.startsWith('..') || rel === '' || isAbsolute(rel)) {
-        throw new Error(t(`只能在备份根 ${root} 下选快照，不接受 ${backupDir}`, `Only snapshots under ${root} can be restored; refusing ${backupDir}`))
-      }
-      if (!isFile(join(backupDir, 'package.json'))) {
-        throw new Error(t(
-          `这份快照里没有 profile 文件（package.json），还原会失败：${backupDir}`,
-          `That snapshot has no profile files (package.json) and cannot be restored: ${backupDir}`,
-        ))
-      }
+      // 与 restore-now 共用同一套校验：存在、在备份根之下、带 profile 文件
+      backupDir = resolveSnapshotDir(dshHome, body.backupDir)
     }
     const stateWithBackup = { ...state, backupDir }
     const bootstrap = repoReady ? null : {

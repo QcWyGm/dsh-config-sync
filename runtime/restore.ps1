@@ -28,6 +28,8 @@ param(
   [string]$FromCommit = '',
   [switch]$SkipInstall,
   [switch]$WithMnemon,
+  # 时点还原：把快照之后新增的文件 / 插件一并撤走（不是真删，移进 manual-<时间戳>\rollback，可再还原）
+  [switch]$RollbackToPoint,
   [switch]$DryRun,
   [switch]$Force
 )
@@ -197,6 +199,145 @@ if ($mode -eq 'git') {
   }
 }
 Say ""
+
+# ---------- 3.5 时点回退：快照之后新增的文件与插件 ----------
+<#
+  「还原」不只是把快照里的文件盖回去，还要把快照之后新增的东西撤掉，否则退回去的只是一层皮：
+  profile 里多出来的文件（例如新插件的 cordis 补丁、新版本的 lock）和 node_modules 里多出来的插件，
+  会跟着还原后的 package.json 一起被加载，看起来就像"没还原"。
+  这里把它们移进 manual 备份的 rollback 子目录并写 rollback-manifest.json —— 全部可再还原，绝不物理删除。
+#>
+if ($RollbackToPoint) {
+  $rbRoot = Join-Path $safety 'rollback'
+  $rbFiles = Join-Path $rbRoot 'files'
+  $rbPlugins = Join-Path $rbRoot 'plugins'
+  $manifest = [ordered]@{
+    at = (Get-Date).ToString('o')
+    snapshot = $BackupDir
+    profile = $ProfileDir
+    files = @()
+    plugins = @()
+    errors = @()
+  }
+
+  # 快照里出现过的相对路径（restore.ps1 的快照根就是 profile 的内容，结构相同）
+  # 基准路径必须先归一成**长名**：$DshHome 常是 8.3 短名（ADMINI~1），而 Get-ChildItem 返回的是长名，
+  # 直接拿源字符串长度做 Substring 会把相对路径切错，于是"快照里的文件"一个都匹配不上、
+  # 整个 profile 被当成新增文件搬走（隔离测试实测把 package.json 也搬走了）。
+  $snapFull = (Get-Item -LiteralPath $BackupDir -Force).FullName
+  $profFull = (Get-Item -LiteralPath $ProfileDir -Force).FullName
+  $snapSet = @{}
+  if ($mode -eq 'backup') {
+    Get-ChildItem -LiteralPath $snapFull -Recurse -File -Force -ErrorAction SilentlyContinue | ForEach-Object {
+      $rel = $_.FullName.Substring($snapFull.Length + 1)
+      $snapSet[$rel] = $true
+    }
+  }
+  # git 模式没有"快照目录"，时点回退无从比较，明确跳过而不是瞎猜
+  if ($mode -eq 'git') {
+    Warn '来自 git 提交的还原不做时点回退（没有可比对的快照目录）'
+  } else {
+    $nmPrefix = (Join-Path $profFull 'node_modules') + '\'
+    $extra = @()
+    foreach ($f in @(Get-ChildItem -LiteralPath $profFull -Recurse -File -Force -ErrorAction SilentlyContinue)) {
+      $rel = $f.FullName.Substring($profFull.Length + 1)
+      if ($f.FullName.StartsWith($nmPrefix, [StringComparison]::OrdinalIgnoreCase)) { continue }
+      if ($snapSet.ContainsKey($rel)) { continue }
+      $extra += ,@($f.FullName, $rel)
+    }
+
+    if ($extra.Count -gt 0) {
+      if ($DryRun) {
+        Say ("  将移走 {0} 个快照之后新增的文件：" -f $extra.Count)
+        $extra | ForEach-Object { Say ("    - {0}" -f $_[1]) }
+      } else {
+        foreach ($pair in $extra) {
+          $full = $pair[0]; $rel = $pair[1]
+          try {
+            $dest = Join-Path $rbFiles $rel
+            $destDir = Split-Path -Parent $dest
+            if ($destDir -and -not (Test-Path -LiteralPath $destDir)) { New-Item -ItemType Directory -Path $destDir -Force | Out-Null }
+            Move-Item -LiteralPath $full -Destination $dest -Force
+            $manifest.files += $rel
+          } catch {
+            $manifest.errors += ("$rel : " + $_.Exception.Message)
+          }
+        }
+        if ($manifest.files.Count -gt 0) { Ok ("已移走 {0} 个快照之后新增的文件（在 rollback\files 下）" -f $manifest.files.Count) }
+      }
+    } else {
+      Say '  没有快照之后新增的文件'
+    }
+
+    # 插件收敛：还原后的 package.json 里没有的，就是快照之后装上的
+    $pkgPath = Join-Path $ProfileDir 'package.json'
+    $wantDeps = @{}
+    if (Test-Path -LiteralPath $pkgPath) {
+      try {
+        $pkg = Get-Content -LiteralPath $pkgPath -Raw -Encoding utf8 | ConvertFrom-Json
+        foreach ($p in @($pkg.dependencies.PSObject.Properties)) { $wantDeps[[string]$p.Name] = $true }
+      } catch { Warn '还原后的 package.json 读不出来，跳过插件收敛' }
+    }
+
+    $nm = Join-Path $profFull 'node_modules'
+    $dropList = @()
+    if ($wantDeps.Count -gt 0 -and (Test-Path -LiteralPath $nm)) {
+      foreach ($d in @(Get-ChildItem -LiteralPath $nm -Directory -Force -ErrorAction SilentlyContinue)) {
+        if ($d.Name.StartsWith('.')) { continue }
+        if ($d.Name.StartsWith('@')) {
+          foreach ($s in @(Get-ChildItem -LiteralPath $d.FullName -Directory -Force -ErrorAction SilentlyContinue)) {
+            $key = $d.Name + '/' + $s.Name
+            if (-not $wantDeps.ContainsKey($key)) { $dropList += ,@($s.FullName, ($d.Name + '--' + $s.Name), $key) }
+          }
+          continue
+        }
+        if ($d.Name -eq '.bin') { continue }
+        if (-not $wantDeps.ContainsKey($d.Name)) { $dropList += ,@($d.FullName, $d.Name, $d.Name) }
+      }
+    }
+
+    if ($dropList.Count -gt 0) {
+      if ($DryRun) {
+        Say ("  将撤走 {0} 个快照之后装上的插件：" -f $dropList.Count)
+        $dropList | ForEach-Object { Say ("    - {0}" -f $_[2]) }
+      } else {
+        foreach ($pair in $dropList) {
+          $full = $pair[0]; $safeName = $pair[1]; $depName = $pair[2]
+          try {
+            $item = Get-Item -LiteralPath $full -Force
+            if ($item.LinkType) {
+              # 链接只删链接本身：穿进链接会把别的插件的安装目录一起删掉（实测过）
+              [IO.Directory]::Delete($full)
+              $manifest.plugins += ($depName + '（链接已删，目标目录保留）')
+            } else {
+              $dest = Join-Path $rbPlugins $safeName
+              New-Item -ItemType Directory -Path $rbPlugins -Force | Out-Null
+              Move-Item -LiteralPath $full -Destination $dest -Force
+              $manifest.plugins += ($depName + '（实体目录已移入 rollback\plugins）')
+            }
+          } catch {
+            $manifest.errors += ("$depName : " + $_.Exception.Message)
+          }
+        }
+        if ($manifest.plugins.Count -gt 0) { Ok ("已撤走 {0} 个快照之后装上的插件" -f $manifest.plugins.Count) }
+      }
+    } else {
+      Say '  没有快照之后装上的插件'
+    }
+
+    if (-not $DryRun) {
+      try {
+        New-Item -ItemType Directory -Path $rbRoot -Force | Out-Null
+        $json = $manifest | ConvertTo-Json -Depth 5
+        [IO.File]::WriteAllText((Join-Path $rbRoot 'rollback-manifest.json'), $json, (New-Object Text.UTF8Encoding $false))
+        Ok ("回退清单已写入 " + (Join-Path $rbRoot 'rollback-manifest.json'))
+      } catch {
+        Warn ('写回退清单失败：' + $_.Exception.Message)
+      }
+    }
+  }
+  Say ""
+}
 
 # ---------- 4. 可选：记忆数据 mnemon ----------
 if ($WithMnemon) {

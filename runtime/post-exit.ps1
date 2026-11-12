@@ -17,7 +17,7 @@
     <DshHome>\logs\auto-sync-<时间戳>.log（窗口被关/没显示时也能查）。
 #>
 param(
-  [Parameter(Mandatory = $true)][ValidateSet('pull', 'push', 'update', 'relaunch')][string]$Mode,
+  [Parameter(Mandatory = $true)][ValidateSet('pull', 'push', 'restore', 'update', 'relaunch')][string]$Mode,
   [int]$WatchPid = 0,
   # wait：隐藏进程，只等 DSH 退出，退出后换一个**可见窗口**跑 run
   # run ：真正执行同步（默认，直接调用时不用传）
@@ -28,6 +28,8 @@ param(
   [switch]$Restart,
   [int]$MaxWaitMinutes = 30,
   [string]$LogFile,
+  # ---- 仅 -Mode restore 用：还原到哪份快照 ----
+  [string]$BackupDir = '',
   # ---- 仅 -Mode update 用：插件自身更新 ----
   [string]$PluginDir = '',
   [string]$UpdateVersion = '',
@@ -86,6 +88,7 @@ if ($Phase -eq 'wait') {
   if ($RepoRoot) { $relay += @('-RepoRoot', $RepoRoot) }
   if ($AppRoot) { $relay += @('-AppRoot', $AppRoot) }
   if ($Restart) { $relay += '-Restart' }
+  if ($BackupDir) { $relay += @('-BackupDir', $BackupDir) }
   if ($PluginDir) { $relay += @('-PluginDir', $PluginDir) }
   if ($UpdateVersion) { $relay += @('-UpdateVersion', $UpdateVersion) }
   if ($UpdateTgz) { $relay += @('-UpdateTgz', $UpdateTgz) }
@@ -99,7 +102,7 @@ $ErrorActionPreference = 'Continue'
 $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 
 # 窗口是可见的：给它一个能看懂的标题，并把控制台编码设成 UTF-8（否则中文进度全是乱码）
-try { $Host.UI.RawUI.WindowTitle = ('DSH 配置同步 · ' + $(if ($Mode -eq 'update') { '插件更新' } elseif ($Mode -eq 'relaunch') { '重启' } elseif ($Mode -eq 'pull') { '拉取' } else { '推送' })) } catch { }
+try { $Host.UI.RawUI.WindowTitle = ('DSH 配置同步 · ' + $(if ($Mode -eq 'update') { '插件更新' } elseif ($Mode -eq 'relaunch') { '重启' } elseif ($Mode -eq 'restore') { '还原' } elseif ($Mode -eq 'pull') { '拉取' } else { '推送' })) } catch { }
 try { [Console]::OutputEncoding = New-Object Text.UTF8Encoding $false; $OutputEncoding = [Console]::OutputEncoding } catch { }
 
 if (-not $LogFile) {
@@ -160,8 +163,8 @@ function Finish([int]$code, [string]$note) {
   # 为什么敢一直挂着：客户端是在这之前的 RestartClient 里用 explorer 代启的，跟本窗口没有父子/作业关系，
   # 所以窗口留多久、还是被点 × 直接结束，都不会把客户端带走。
   # 只有 relaunch（纯重启，窗口里没有可看的结果）仍旧停 3 秒自动关。
-  if ($Mode -eq 'pull' -or $Mode -eq 'push' -or $Mode -eq 'update') {
-    $title = if ($Mode -eq 'update') { '插件更新已完成' } else { '同步已完成' }
+  if ($Mode -eq 'pull' -or $Mode -eq 'push' -or $Mode -eq 'update' -or $Mode -eq 'restore') {
+    $title = if ($Mode -eq 'update') { '插件更新已完成' } elseif ($Mode -eq 'restore') { '还原已完成' } else { '同步已完成' }
     try {
       Write-Host ''
       Write-Host ("================ {0} ================" -f $title)
@@ -445,13 +448,13 @@ if ($Mode -eq 'update') {
   面板上选好的「用本机 / 用云端」就永远不会被消费（真实踩过：18 项全选云端却拉不下来）。
   所以顺序反过来：先插件 runtime，再 AppRoot 下最新安装的插件，最后才是仓库那份。
 #>
-function Find-PluginSync {
+function Find-PluginScript([string]$name = 'sync.ps1') {
   if ($PluginDir) {
-    $p = Join-Path $PluginDir 'runtime\sync.ps1'
+    $p = Join-Path $PluginDir ('runtime\' + $name)
     if (Test-Path -LiteralPath $p) { return $p }
   }
   if ($PSScriptRoot) {
-    $p = Join-Path $PSScriptRoot 'sync.ps1'
+    $p = Join-Path $PSScriptRoot $name
     $isRepoCopy = $false
     if ($RepoRoot) {
       try {
@@ -466,14 +469,68 @@ function Find-PluginSync {
     $cands = @(Get-ChildItem -LiteralPath $AppRoot -Directory -Filter 'dsh-config-sync*' -ErrorAction SilentlyContinue |
       Where-Object { -not $_.Name.EndsWith('.old') } | Sort-Object LastWriteTime -Descending)
     foreach ($cand in $cands) {
-      $p = Join-Path $cand.FullName 'runtime\sync.ps1'
+      $p = Join-Path $cand.FullName ('runtime\' + $name)
       if (Test-Path -LiteralPath $p) { return $p }
     }
   }
   return $null
 }
 
-$sync = Find-PluginSync
+# ---------- restore 模式：执行体是 restore.ps1，不走 sync.ps1 ----------
+<#
+  为什么要单独一条分支：还原不动仓库、也不跑 apply，靠的是 restore.ps1。
+  和 pull 的区别只在「执行体 + 参数」，其余全部沿用同一套（互斥锁、结果文件、日志、自动重启），
+  这样面板上的「立即还原」和「立即拉取」在体验上就是同一件事。
+#>
+if ($Mode -eq 'restore') {
+  $restore = Find-PluginScript 'restore.ps1'
+  if (-not $restore -and $RepoRoot) { $c = Join-Path $RepoRoot 'restore.ps1'; if (Test-Path -LiteralPath $c) { $restore = $c } }
+  if (-not $restore) { Log '找不到 restore.ps1（插件 runtime 和仓库都没有），放弃'; Finish 3 '缺 restore.ps1' }
+  if (-not $RepoRoot) { $RepoRoot = Split-Path -Parent $restore }
+  Log ("执行体：{0}" -f $restore)
+  if ($BackupDir) { Log ("目标快照：{0}" -f $BackupDir) } else { Log '未指定快照，由 restore.ps1 自己取最新一份' }
+
+  $rargs = @{
+    RepoRoot = $RepoRoot
+    DshHome = $DshHome
+    Force = $true
+    # 时点还原：快照之后新增的文件、插件一并撤走（先移进 manual 备份，能再还原）
+    RollbackToPoint = $true
+  }
+  if ($AppRoot) { $rargs['AppRoot'] = $AppRoot }
+  if ($BackupDir) { $rargs['BackupDir'] = $BackupDir }
+
+  # 返回码可信性与 sync 分支同一套规矩：压哨兵 → try/catch 记日志 → 没跑完即失败
+  $LASTEXITCODE = -1
+  $invokeOk = $false
+  try {
+    & $restore @rargs *>&1 | ForEach-Object { Log ([string]$_) }
+    $invokeOk = $true
+  } catch {
+    Log ('执行体调用异常：{0}' -f $_.Exception.Message)
+    if ($_.InvocationInfo) { Log ('  位置：{0}' -f (($_.InvocationInfo.PositionMessage) -replace "`r?`n", ' ')) }
+    if ($_.ScriptStackTrace) { Log ('  堆栈：{0}' -f (($_.ScriptStackTrace) -replace "`r?`n", ' ')) }
+  }
+  $code = $LASTEXITCODE
+  if (-not $invokeOk) {
+    if ($null -eq $code -or $code -le 0) { $code = 1 }
+    Log '执行体没有正常跑完，本次按失败处理'
+  } elseif ($null -eq $code) {
+    $code = 0
+  }
+  Log ("restore.ps1 还原退出码：{0}" -f $code)
+
+  if ($code -ne 0) {
+    Write-Result $false $code '还原失败：详见日志；还原前的状态已整份留在 backups\manual-<时间戳>，可再还原一次' $false
+  } else {
+    Write-Result $true 0 '配置已还原到所选快照；快照之后新增的文件与插件已移入 manual 备份，随时可再还原' $false
+  }
+  if ($Restart) { RestartClient -SkipWatermark:($code -ne 0) }
+  if ($code -ne 0) { Finish 5 '还原失败，请打开日志核对' }
+  Finish 0 '完成（已还原）'
+}
+
+$sync = Find-PluginScript 'sync.ps1'
 if (-not $sync -and $RepoRoot) { $candidate = Join-Path $RepoRoot 'sync.ps1'; if (Test-Path -LiteralPath $candidate) { $sync = $candidate } }
 if (-not $sync) { Log '找不到 sync.ps1（插件 runtime 和仓库都没有），放弃'; Finish 3 '缺 sync.ps1' }
 # 找到了也可能已经不可用（安装覆盖到一半、目录被移走）：真正调用前再确认一次文件在

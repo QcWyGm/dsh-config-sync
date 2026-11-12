@@ -661,12 +661,15 @@ window.__ModuleLoader__.load({
 
     /**
      * 「还原备份」卡：先看备份目录在哪（默认 <DshHome>\backups，可改成别的绝对路径），
-     * 再把该目录下的快照逐份列出来（时间 / 文件数 / 大小 / 能不能拿来还原）。
-     * 点某一行的「还原」= 按那一份快照生成 `同步-还原-<快照名>.cmd`，退出 DSH 后双击执行。
+     * 再把该目录下的快照逐份列出来（时间 / 相对时间 / 文件数 / 大小 / 插件数 / 能不能拿来还原）。
      *
-     * 为什么不是"点了就直接覆盖"：profile 文件在 DSH 运行时被客户端持有，边跑边覆盖会被退出时的
-     * 回写再盖回去，甚至把 profile 弄坏。整个插件从第一天起就是"生成脚本 → 退出后双击"，
-     * 这里沿用同一套：restore.ps1 自己也会先拦一次"DSH 还在跑"。
+     * 「立即还原」= 和「立即拉取」同一条流水线：点快照 → 弹确认框（服务端现算差异：会撤走哪些插件、
+     * 会覆盖/写回哪些文件、会移走哪些快照之后新增的文件）→ 确认后排队 auto-sync，客户端退出后
+     * 由 post-exit.ps1 弹可见窗口跑 restore.ps1 -RollbackToPoint → 完成后自动重启客户端。
+     *
+     * 为什么不能"点了就直接覆盖"：profile 文件在 DSH 运行时被客户端持有，边跑边覆盖会被退出时的
+     * 回写再盖回去，甚至把 profile 弄坏。所以仍然必须走"退出后执行"，只是不再让用户自己双击 .cmd。
+     * 需要生成脚本的老路径（用于手动/离线执行）仍保留在「动作」卡里。
      */
     function RestoreCard(props) {
       const backup = (props.data && props.data.backup) || {}
@@ -680,6 +683,8 @@ window.__ModuleLoader__.load({
       const [err, setErr] = react.useState('')
       const [msg, setMsg] = react.useState('')
       const [made, setMade] = react.useState(null)
+      const [confirm, setConfirm] = react.useState(null)   // { snap, preview }：确认环节
+      const [queued, setQueued] = react.useState(null)     // restore-now 的排队结果
 
       const startEdit = () => { setRoot(remote.backupRootCustom ? (remote.backupRoot || '') : ''); setErr(''); setMsg(''); setEditing(true) }
       const cancelEdit = () => { setEditing(false); setErr(''); setMsg('') }
@@ -698,12 +703,43 @@ window.__ModuleLoader__.load({
         } finally { setBusy(false) }
       }
 
-      const restore = async (dir) => {
-        setBusy(true); setErr(''); setMsg('')
-        try { setMade(await callPrepare('restore-backup', '', dir)) } catch (e) { setErr(String((e && e.message) || e)) } finally { setBusy(false) }
+      /**
+       * 第一步：点「立即还原」不是直接动手，先向服务端要一份差异预览 ——
+       * 会撤走哪些插件、会覆盖哪些文件、会移走哪些快照之后新增的文件，全部摆出来让人确认。
+       */
+      const askRestore = async (snap) => {
+        setBusy(true); setErr(''); setMsg(''); setQueued(null)
+        try {
+          const r = await callAuto({ action: 'restore-preview', backupDir: snap.dir })
+          setConfirm({ snap, preview: (r && r.preview) || {} })
+        } catch (e) { setErr(String((e && e.message) || e)) } finally { setBusy(false) }
+      }
+
+      /** 第二步：确认之后才排队「退出后还原」，随后请求客户端正常关闭（和立即拉取同一条流水线）。 */
+      const doRestore = async () => {
+        if (!confirm) return
+        setBusy(true); setErr('')
+        try {
+          const r = await callAuto({ action: 'restore-now', backupDir: confirm.snap.dir })
+          setQueued({ snap: confirm.snap, resp: r })
+          setConfirm(null)
+        } catch (e) { setErr(String((e && e.message) || e)) } finally { setBusy(false) }
       }
 
       const when = (at) => (at ? new Date(at).toLocaleString(localeNow(), { hour12: false }) : '?')
+      /** 相对时间：备份列表里"3 分钟前"比一串年月日更好判断新旧，具体时刻仍保留在旁边 */
+      const rel = (at) => {
+        if (!at) return '?'
+        const diff = Date.now() - Number(at)
+        if (diff < 0 || diff < 60000) return M('刚刚', 'just now')
+        const min = Math.floor(diff / 60000)
+        if (min < 60) return M(`${min} 分钟前`, `${min} min ago`)
+        const hr = Math.floor(min / 60)
+        if (hr < 24) return M(`${hr} 小时前`, `${hr} h ago`)
+        const day = Math.floor(hr / 24)
+        if (day < 30) return M(`${day} 天前`, `${day} d ago`)
+        return M(`${Math.floor(day / 30)} 个月前`, `${Math.floor(day / 30)} mo ago`)
+      }
       const size = (n) => {
         const v = Number(n) || 0
         if (v >= 1048576) return `${(v / 1048576).toFixed(1)} MB`
@@ -727,17 +763,103 @@ window.__ModuleLoader__.load({
             }, s.name),
             h('div', { style: S.hint },
               M(
-                `${when(s.at)} · ${s.files || 0} 个文件 · ${size(s.bytes)}${s.usable === false ? ' · 没有 profile 文件，不能还原' : ''}`,
-                `${when(s.at)} · ${s.files || 0} files · ${size(s.bytes)}${s.usable === false ? ' · no profile files, cannot restore' : ''}`,
+                `${when(s.at)} · ${rel(s.at)} · ${s.files || 0} 个文件 · ${size(s.bytes)}${s.plugins ? ` · ${s.plugins} 个插件` : ''}${s.usable === false ? ' · 没有 profile 文件，不能还原' : ''}`,
+                `${when(s.at)} · ${rel(s.at)} · ${s.files || 0} files · ${size(s.bytes)}${s.plugins ? ` · ${s.plugins} plugins` : ''}${s.usable === false ? ' · no profile files, cannot restore' : ''}`,
               )),
           ),
           s.usable === false
             ? h('button', { type: 'button', style: { ...S.btn, opacity: 0.5, cursor: 'not-allowed' }, disabled: true }, M('不可还原', 'Unusable'))
-            : h('button', { type: 'button', style: S.btn, disabled: busy, onClick: () => restore(s.dir) }, M('还原', 'Restore')),
+            : h('button', { type: 'button', style: S.btn, disabled: busy, onClick: () => askRestore(s) }, M('立即还原', 'Restore now')),
           )))
         : h('div', { style: S.hint }, backup.exists
           ? M('这个备份目录下还没有快照（apply.ps1 每次拉取/落地之前都会打一份）', 'No snapshots in this backup folder yet (apply.ps1 makes one before every pull/apply)')
           : M(`备份目录不存在：${backup.root || defaultRoot}`, `Backup folder does not exist: ${backup.root || defaultRoot}`))
+
+      /**
+       * 确认环节 + 排队回执 + 上次还原结果。
+       * 三个块都直接挂在卡片里（不是弹窗），这样确认时能同时看到快照列表做对照。
+       */
+      const listBox = (title, items, tone) => (items && items.length)
+        ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: '2px' } },
+          h('div', { style: { ...S.hint, color: tone || 'var(--dsw-alias-label-secondary)' } }, title),
+          h('div', {
+            style: {
+              ...S.hint, fontFamily: 'Consolas, ui-monospace, monospace',
+              maxHeight: '110px', overflowY: 'auto', wordBreak: 'break-all',
+            },
+          }, items.join('  ·  ')))
+        : null
+
+      const pv = (confirm && confirm.preview) || {}
+      const pvRemovePlugins = pv.pluginsRemove || []
+      const pvInstallPlugins = pv.pluginsInstall || []
+      const pvRemoveFiles = pv.willRemove || []
+      const pvOverwrite = pv.willOverwrite || []
+      const pvWrite = pv.willWrite || []
+
+      const confirmBlock = confirm
+        ? h('div', {
+          style: {
+            display: 'flex', flexDirection: 'column', gap: '5px',
+            padding: '9px 11px', borderRadius: '8px',
+            border: '1px solid var(--dsw-alias-border-l1)',
+            background: 'var(--dsw-alias-bg-module-platform)',
+          },
+        },
+        h('div', { style: { ...S.cardTitle, fontSize: '13px' } },
+          M(`确认还原到 ${confirm.snap.name}？`, `Restore to ${confirm.snap.name}?`)),
+        h('div', { style: S.hint }, M(
+          `快照时间 ${when(confirm.snap.at)}（${rel(confirm.snap.at)}）· ${confirm.snap.files || 0} 个文件 · ${size(confirm.snap.bytes)} · ${confirm.snap.plugins || 0} 个插件`,
+          `Snapshot ${when(confirm.snap.at)} (${rel(confirm.snap.at)}) · ${confirm.snap.files || 0} files · ${size(confirm.snap.bytes)} · ${confirm.snap.plugins || 0} plugins`,
+        )),
+        listBox(
+          M(`将撤走 ${pvRemovePlugins.length} 个快照之后装上的插件`, `Removing ${pvRemovePlugins.length} plugin(s) installed after this snapshot`),
+          pvRemovePlugins, 'var(--dsw-alias-state-error-primary)',
+        ),
+        listBox(
+          M(`将移走 ${pvRemoveFiles.length} 个快照之后新增的文件`, `Moving out ${pvRemoveFiles.length} file(s) created after this snapshot`),
+          pvRemoveFiles, 'var(--dsw-alias-state-error-primary)',
+        ),
+        listBox(
+          M(`将覆盖 ${pvOverwrite.length} 个、写回 ${pvWrite.length} 个文件`, `Overwriting ${pvOverwrite.length}, writing back ${pvWrite.length} file(s)`),
+          [].concat(pvOverwrite, pvWrite),
+        ),
+        listBox(
+          M(`还原后要重新安装 ${pvInstallPlugins.length} 个插件`, `Re-installing ${pvInstallPlugins.length} plugin(s) afterwards`),
+          pvInstallPlugins,
+        ),
+        h('div', { style: S.hint }, M(
+          '动手前会把当前配置整份存到 backups\\manual-<时间戳>；撤走的东西另有 rollback 清单，随时能再还原回来。',
+          'The current config is copied to backups\\manual-<timestamp> first, and everything removed is listed in a rollback manifest — both can be restored later.',
+        )),
+        h('div', { style: { ...S.hint, color: 'var(--dsw-alias-state-warning-primary)' } }, M(
+          '确认后：客户端正常退出 → 弹出进度窗口执行还原 → 完成后自动重启客户端。',
+          'After confirming: the client closes normally, a progress window runs the restore, then the client restarts automatically.',
+        )),
+        h('div', { style: S.actions },
+          h('button', { type: 'button', style: S.btnPrimary, disabled: busy, onClick: doRestore },
+            busy ? M('排队中…', 'Queuing…') : M('确认还原', 'Confirm restore')),
+          h('button', { type: 'button', style: S.btn, disabled: busy, onClick: () => setConfirm(null) }, M('取消', 'Cancel')),
+        ),
+        )
+        : null
+
+      const queuedBlock = queued
+        ? h('div', { style: { ...S.footnote, color: 'var(--dsw-alias-state-success-primary)' } },
+          M(
+            `已排队：还原到 ${queued.snap.name}。客户端即将退出，退出后会弹出进度窗口；完成后自动重启。`,
+            `Queued: restoring to ${queued.snap.name}. The client will close, a progress window will run it, then it restarts.`,
+          ))
+        : null
+
+      const lastRes = props.data && props.data.auto && props.data.auto.lastResult
+      const lastRestoreBlock = (lastRes && lastRes.mode === 'restore')
+        ? h('div', { style: { ...S.footnote, color: lastRes.ok ? 'var(--dsw-alias-state-success-primary)' : 'var(--dsw-alias-state-error-primary)' } },
+          M(
+            `上次还原：${lastRes.ok ? '成功' : '失败'} · ${when(lastRes.at)} · ${lastRes.message || ''}${lastRes.log ? ` · 日志 ${lastRes.log}` : ''}`,
+            `Last restore: ${lastRes.ok ? 'ok' : 'failed'} · ${when(lastRes.at)} · ${lastRes.message || ''}${lastRes.log ? ` · log ${lastRes.log}` : ''}`,
+          ))
+        : null
 
       return h('div', { style: S.card },
         h('div', { style: S.cardHead },
@@ -767,6 +889,9 @@ window.__ModuleLoader__.load({
               `${remote.backupRoot || backup.root || defaultRoot}${(remote.backupRootCustom ? M('（本机设置）', ' (machine setting)') : M('（默认）', ' (default)'))}`),
         ),
         rows,
+        confirmBlock,
+        queuedBlock,
+        lastRestoreBlock,
         made
           ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: '4px' } },
             h('div', { style: { ...S.footnote, color: 'var(--dsw-alias-state-success-primary)' } },
@@ -781,8 +906,8 @@ window.__ModuleLoader__.load({
         err ? h('div', { style: { ...S.footnote, color: 'var(--dsw-alias-state-error-primary)' } }, M(`操作失败：${err}`, `Failed: ${err}`)) : null,
         msg ? h('div', { style: { ...S.footnote, color: 'var(--dsw-alias-state-success-primary)' } }, msg) : null,
         h('div', { style: S.footnote }, M(
-          '留空 = 默认 ~\\.dsh\\backups；只能选该目录下的快照。还原只覆盖、不删除。',
-          'Empty = default ~\\.dsh\\backups; only snapshots inside it are offered. Restore overwrites, never deletes.',
+          '留空 = 默认 ~\\.dsh\\backups；只能选该目录下的快照。「立即还原」= 回到该时间点：配置写回，快照之后新增的文件与插件一并撤走（移进 backups\\manual-<时间戳> 的 rollback 备份，可再还原）。',
+          'Empty = default ~\\.dsh\\backups; only snapshots inside it are offered. "Restore now" rolls back to that point: config is written back and anything added afterwards is moved into the rollback folder under backups\\manual-<timestamp>, so it can be restored again.',
         )),
       )
     }
@@ -1779,7 +1904,7 @@ window.__ModuleLoader__.load({
           Section(M('自动化与插件更新', 'Automation & plugin update'), M('退出后自动做什么、插件自己怎么升级', 'What runs automatically after exit, and how the plugin upgrades'), [autoCard, updCard].filter(Boolean)),
           Section(M('退出后执行', 'After exit'), null, [actionCard]),
           // 「还原备份」跟在动作卡之后：先看怎么生成脚本，再挑具体退回到哪份快照
-          Section(M('还原备份', 'Restore backup'), M('备份目录可改，点快照即生成还原脚本', 'The folder is editable; click a snapshot to generate its restore script'), [restoreCard].filter(Boolean)),
+          Section(M('还原备份', 'Restore backup'), M('点快照 → 确认差异 → 排队还原（退出客户端后执行）', 'Pick a snapshot → confirm the diff → queued restore (runs after the client quits)'), [restoreCard].filter(Boolean)),
           // 「同步内容」放在整页最下面：它是"细项配置"，看清前面的状态与动作后才会来调整
           Section(M('同步内容', 'Sync content'), M('十组内容，默认全勾；必需组锁定', 'Ten groups, all checked; required groups are locked'), [scopeCard]),
         ),
