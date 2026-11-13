@@ -410,7 +410,9 @@ function git(repo, args) {
  * 返回 { heads, files }：files===null 表示判不了（离线/认证失败/超时），调用方按保守处理。
  */
 const remoteProbeCache = new Map()
-const REMOTE_PROBE_TTL = 60000
+// 缓存放长到 5 分钟：探测是打一次真实的 ls-remote（+ 可能一次 fetch），不该每分钟都来一遍。
+// 云端真变了也不怕：写操作（推送/拉取）都会自己取最新状态，这个值只用于面板上的「云端有没有内容」。
+const REMOTE_PROBE_TTL = 300000
 
 function gitProbeEnv(settings) {
   const key = (settings && settings.sshKey) || defaultSshKey()
@@ -475,6 +477,63 @@ async function probeRemote(url, settings) {
   else value = { heads, files: await remoteFileCount(url, settings, 'quiet') }
   remoteProbeCache.set(url, { at: Date.now(), value })
   return value
+}
+
+/** 只读缓存，不触发任何网络动作。 */
+function probeRemoteCached(url) {
+  const hit = remoteProbeCache.get(url)
+  return hit && Date.now() - hit.at < REMOTE_PROBE_TTL ? hit.value : null
+}
+
+/**
+ * 启动预热：插件装载后先探一次云端（只在本机仓库还没就位时才值得探）。
+ * 失败无所谓——probeRemote 自身全兜底，探不到就缓存 null，面板照常工作。
+ */
+function warmRemoteProbe(config) {
+  const dshHome = config?.dshHome || process.env.DSH_HOME || join(homedir(), '.dsh')
+  const settings = readSettings(dshHome)
+  const repo = resolveRepo(config?.repoPath, dshHome).repo || ''
+  if (repo && repoPhase(repo) === 'ok') return
+  const url = settings.remoteUrl || ''
+  if (!url) return
+  probeRemote(url, settings).catch(() => { })
+}
+
+/**
+ * 给 status 用的「带预算的探测」：缓存命中立刻返回；没命中就让探测在后台跑，
+ * 自己最多等 budgetMs —— 超时先返回「判不了」（heads/files 都是 null）。
+ *
+ * 为什么要有预算：Gitee 上 ls-remote 实测 2.5 秒，原样 await 会让整次 status 到
+ * 11 秒（还有备份统计的 7.7 秒），前端那一次 fetch 就很容易被宿主/浏览器掐掉，
+ * 表现成「几率性读取失败」。这里把等待压到一个可接受的常数，探测本身继续跑，
+ * 下次刷新（或后台预热）就能读到真值。
+ */
+function probeRemoteQuick(url, settings, budgetMs) {
+  if (!url) return Promise.resolve(null)
+  const cached = probeRemoteCached(url)
+  if (cached) return Promise.resolve(cached)
+  const unknown = { heads: null, files: null }
+  const running = probeRemote(url, settings)
+  return new Promise((resolve) => {
+    let done = false
+    const timer = setTimeout(() => {
+      if (done) return
+      done = true
+      resolve(probeRemoteCached(url) || unknown)
+    }, budgetMs)
+    if (typeof timer.unref === 'function') timer.unref()
+    running.then((value) => {
+      if (done) return
+      done = true
+      clearTimeout(timer)
+      resolve(value || unknown)
+    }, () => {
+      if (done) return
+      done = true
+      clearTimeout(timer)
+      resolve(unknown)
+    })
+  })
 }
 
 function readBundles(profileDir) {
@@ -561,27 +620,14 @@ function inspectBackup(dshHome, rootOverride) {
     const dir = join(root, name)
     try {
       const st = statSync(dir)
-      let files = 0
-      let bytes = 0
-      const stack = [dir]
-      while (stack.length) {
-        const cur = stack.pop()
-        let entries = []
-        try { entries = readdirSync(cur, { withFileTypes: true }) } catch { continue }
-        for (const e of entries) {
-          const p = join(cur, e.name)
-          if (e.isDirectory()) stack.push(p)
-          else {
-            files++
-            try { bytes += statSync(p).size } catch { }
-          }
-        }
-      }
+      // 体积/文件数**不在这里统计**：每个快照都是一份完整的 profile（几千个文件），
+      // 92 份快照 = 4.8 万个文件，逐个 statSync 要 7.7 秒 —— 而 status 每次刷新都会走这里。
+      // 列表只给「名字 + 时间 + 插件数 + 能不能还原」，体积交给资源管理器。
+      let plugins = 0
+      let bundles = 0
       // 只有落过 profile 的快照能用来还原配置（新机器首次拉取时 apply 会留下空快照）
       const hasProfile = isFile(join(dir, 'package.json'))
       // 快照里装了哪些插件（依赖数 + bundles 数）：面板要显示"23 个插件"，也是算差异的依据
-      let plugins = 0
-      let bundles = 0
       if (hasProfile) {
         try {
           const pkg = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8'))
@@ -589,7 +635,7 @@ function inspectBackup(dshHome, rootOverride) {
           bundles = Array.isArray(pkg?.dsh?.profile?.bundles) ? pkg.dsh.profile.bundles.length : 0
         } catch { }
       }
-      all.push({ name, dir, at: st.mtimeMs, files, bytes, hasProfile, plugins, bundles })
+      all.push({ name, dir, at: st.mtimeMs, files: null, bytes: null, hasProfile, plugins, bundles })
     } catch { }
   }
   all.sort((a, b) => b.at - a.at)
@@ -791,7 +837,7 @@ async function inspect(config) {
   const phase = repoPhase(repo)
   // 云端有没有「可拉的内容」：只在本地仓库还没就位时才探（真仓库不需要每次刷面板都打一次网络）
   const remoteProbeUrl = gitRemoteUrl || settings.remoteUrl || ''
-  const remoteProbe = (remoteProbeUrl && phase !== 'ok') ? await probeRemote(remoteProbeUrl, settings) : null
+  const remoteProbe = (remoteProbeUrl && phase !== 'ok') ? await probeRemoteQuick(remoteProbeUrl, settings, 2500) : null
   const remoteHeads = remoteProbe ? remoteProbe.heads : null
   // 分支指向的树里有几个文件 —— 这才是「有没有内容」的真判据：分支还在但树被删空，等同空中空
   const remoteFiles = remoteProbe ? remoteProbe.files : null
@@ -3607,6 +3653,9 @@ export function apply(ctx, config) {
     })
     // 开关打开才排一次启动检查（默认关 = 什么都不做）
     scheduleAutoStart(config)
+    // 云端探测预热：插件一装上就去探一次（不阻塞、不 await）。这样面板打开时缓存多半已经热了，
+    // status 不用再为首屏那 2.5 秒的 ls-remote 埋单。
+    typeof setTimeout === 'function' ? setTimeout(() => { try { warmRemoteProbe(config) } catch { } }, 300) : null
     installQuitWhenAllWindowsClosed(ctx)
   } catch (error) {
     // 不抛：缺 webServer 的 profile 里这个插件静默不激活即可

@@ -241,6 +241,13 @@ try {
     '缺 showRoots 三元 / 仍留着 forceShow')
   check('标题行按钮把告警数量挂在文案上（三类合计）',
     source.includes('项告警') && source.includes('data.localPaths && data.localPaths.alert'))
+  check('status 请求带超时与自动重试（一次抖动不该让面板卡在「读取失败」）',
+    source.includes('new AbortController()') && source.includes('15000')
+    && source.includes('已自动重试 3 次'),
+    '缺 AbortController 超时 / 缺重试文案')
+  check('备份列表不再逐个显示体积（体积由资源管理器看，status 不为此递归统计）',
+    !source.includes('个文件 · ${size(s.bytes)}'),
+    '仍在列表里渲染体积')
 } catch (e) {
   check('体检数据字段齐全', false, String(e && e.message))
 }

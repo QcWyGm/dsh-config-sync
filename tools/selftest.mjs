@@ -1281,5 +1281,32 @@ console.log('== 0.3.37：本机路径区默认不进页面 ==')
 }
 
 console.log('')
-console.log(failures === 0 ? '结论：全部通过' : `结论：${failures} 项失败`)
+console.log('== 0.3.41：status 提速（不再递归统计备份） ==')
+{
+  const index41 = readFileSync(join(pluginRootSelf, 'index.js'), 'utf8')
+  const client41 = readFileSync(join(pluginRootSelf, 'client.js'), 'utf8')
+  check('备份列表不再递归数文件/体积（92 份快照 4.8 万文件曾要 7.7 秒）',
+    /files: null, bytes: null, hasProfile, plugins, bundles/.test(index41)
+    && !/bytes \+= statSync\(p\)\.size/.test(index41),
+    'inspectBackup 仍在逐个 statSync 统计每个快照')
+  check('远端探测带预算 + 启动预热（status 不再等满一次 ls-remote）',
+    /function probeRemoteQuick\(url, settings, budgetMs\)/.test(index41)
+    && /function warmRemoteProbe\(config\)/.test(index41)
+    && /await probeRemoteQuick\(remoteProbeUrl, settings, 2500\)/.test(index41),
+    '缺 probeRemoteQuick / warmRemoteProbe / 调用处')
+  check('远端探测缓存拉长到 5 分钟', /REMOTE_PROBE_TTL = 300000/.test(index41))
+  check('前端 status 请求有超时与 3 次重试', /new AbortController\(\)/.test(client41)
+    && /已自动重试 3 次/.test(client41))
+  const t41 = Date.now()
+  const st41 = JSON.parse((await call('/config-sync/status', { headers: { host: 'localhost:3080' } })).body || '{}')
+  const ms41 = Date.now() - t41
+  check('status 实测在 3 秒内答完（当天首次含一次远端探测预算）',
+    st41.ok === true && ms41 < 3000, `${ms41}ms`)
+  check('备份快照列表仍可用：给名字/时间/插件数，体积字段为空',
+    Boolean(st41.backup) && (st41.backup.count === 0 || (Array.isArray(st41.backup.snapshots)
+      && st41.backup.snapshots.every((s) => s.files === null && s.bytes === null))),
+    JSON.stringify(st41.backup && { count: st41.backup.count, first: st41.backup.snapshots && st41.backup.snapshots[0] }))
+}
+
+console.log('')
 process.exit(failures === 0 ? 0 : 1)

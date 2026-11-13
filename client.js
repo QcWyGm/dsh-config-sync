@@ -267,13 +267,46 @@ window.__ModuleLoader__.load({
 
     function badJson(res) { return new Error(M(`${res.status} 返回非 JSON`, `${res.status} returned non-JSON`)) }
 
+    /** 单次 status 请求：15 秒超时（后端正常应在 2 秒内答完，超时基本就是后端卡住了）。 */
+    async function statusOnce() {
+      const controller = typeof AbortController === 'function' ? new AbortController() : null
+      const timer = controller ? setTimeout(() => { try { controller.abort() } catch { } }, 15000) : null
+      try {
+        const res = await fetch('/config-sync/status', {
+          cache: 'no-store',
+          credentials: 'same-origin',
+          headers: langHeaders(),
+          signal: controller ? controller.signal : undefined,
+        })
+        const text = await res.text()
+        let body
+        try { body = text ? JSON.parse(text) : null } catch { throw badJson(res) }
+        if (!res.ok || !body || body.ok !== true) throw new Error((body && body.error) || `${res.status}`)
+        return body
+      } finally {
+        if (timer) clearTimeout(timer)
+      }
+    }
+
+    /**
+     * status 会自动重试：一次抖动（宿主代理断流、后端那一刻正忙、请求被掐断）
+     * 不该让面板停在「读取失败」上等用户手动点「重新检测」。
+     * 3 次都失败才抛——并且文案里明确说重试过，免得用户以为是永久故障。
+     */
     async function callStatus() {
-      const res = await fetch('/config-sync/status', { cache: 'no-store', credentials: 'same-origin', headers: langHeaders() })
-      const text = await res.text()
-      let body
-      try { body = text ? JSON.parse(text) : null } catch { throw badJson(res) }
-      if (!res.ok || !body || body.ok !== true) throw new Error((body && body.error) || `${res.status}`)
-      return body
+      let last = null
+      for (let i = 0; i < 3; i++) {
+        try {
+          return await statusOnce()
+        } catch (e) {
+          last = e
+          const aborted = Boolean(e && (e.name === 'AbortError' || /abort/i.test(String(e.message || ''))))
+          if (aborted) last = new Error(M('读取超时（15 秒没有响应）', 'Read timed out (no response in 15s)'))
+          if (i < 2) await new Promise((r) => setTimeout(r, i === 0 ? 800 : 1800))
+        }
+      }
+      const reason = String((last && last.message) || last || '')
+      throw new Error(M(`${reason}（已自动重试 3 次）`, `${reason} (retried 3 times)`))
     }
 
     /** 每个 POST 都带 accept-language：宿主的建议句/错误信息按它出中文或英文。 */
@@ -489,8 +522,8 @@ window.__ModuleLoader__.load({
         )),
         backup
           ? h('div', { style: S.hint }, M(
-            `还原快照：${backup.dir}（${when}，共 ${backup.count} 份中的最新，含 ${backup.files} 个文件）`,
-            `Restore snapshot: ${backup.dir} (${when}; newest of ${backup.count}, ${backup.files} files)`,
+            `还原快照：${backup.dir}（${when}，${backup.count} 份中的最新）`,
+            `Restore snapshot: ${backup.dir} (${when}; newest of ${backup.count})`,
           ))
           : null,
         warnItems.length
@@ -838,8 +871,8 @@ window.__ModuleLoader__.load({
             }, s.name),
             h('div', { style: S.hint },
               M(
-                `${when(s.at)} · ${rel(s.at)} · ${s.files || 0} 个文件 · ${size(s.bytes)}${s.plugins ? ` · ${s.plugins} 个插件` : ''}${s.usable === false ? ' · 没有 profile 文件，不能还原' : ''}`,
-                `${when(s.at)} · ${rel(s.at)} · ${s.files || 0} files · ${size(s.bytes)}${s.plugins ? ` · ${s.plugins} plugins` : ''}${s.usable === false ? ' · no profile files, cannot restore' : ''}`,
+                `${when(s.at)} · ${rel(s.at)}${s.plugins ? ` · ${s.plugins} 个插件` : ''}${s.files ? ` · ${s.files} 个文件 / ${size(s.bytes)}` : ''}${s.usable === false ? ' · 没有 profile 文件，不能还原' : ''}`,
+                `${when(s.at)} · ${rel(s.at)}${s.plugins ? ` · ${s.plugins} plugins` : ''}${s.files ? ` · ${s.files} files / ${size(s.bytes)}` : ''}${s.usable === false ? ' · no profile files, cannot restore' : ''}`,
               )),
           ),
           s.usable === false
@@ -1949,8 +1982,8 @@ window.__ModuleLoader__.load({
         h('div', { style: S.footnote },
           data && data.backup && data.backup.latest
             ? M(
-              `还原快照：${data.backup.latest}（共 ${data.backup.count} 份中的最新，含 ${data.backup.latestFiles} 个文件）`,
-              `Restore snapshot: ${data.backup.latest} (newest of ${data.backup.count}, ${data.backup.latestFiles} files)`,
+              `还原快照：${data.backup.latest}（${data.backup.count} 份中的最新）`,
+              `Restore snapshot: ${data.backup.latest} (newest of ${data.backup.count})`,
             )
             : M('还原快照：还没有任何备份快照（还原将无从下手，需拉取或指定 -FromCommit）', 'Restore snapshot: no backups yet (restore has nothing to fall back to — pull first, or pass -FromCommit)')),
         data && data.repo && !data.repo.exists && !data.repo.empty
