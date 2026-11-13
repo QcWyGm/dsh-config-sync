@@ -27,6 +27,15 @@
       },
       "versions": [
         {
+          "version": "0.3.44",
+          "publishTimestamp": 1794600924,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/QcWyGm/dsh-config-sync",
+            "commit": "6bf956caf4c98a620bcccdb4cdadbc298e6404aa"
+          }
+        },
+        {
           "version": "0.3.43",
           "publishTimestamp": 1794595889,
           "source": {

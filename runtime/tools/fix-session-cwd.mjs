@@ -72,7 +72,8 @@ function firstFrameEnd(buf, expected) {
   return lo;
 }
 
-if (!fs.existsSync(sessionsRoot)) {
+const projSpec = spec.projcache || {};
+if (!fs.existsSync(sessionsRoot) && !Object.keys(projSpec).length) {
   emit(result);
   process.exit(0);
 }
@@ -111,5 +112,45 @@ for (const [dirName, cwd] of Object.entries(dirs)) {
   }
 }
 
+// projcache（<home>\storages\session_projcache\sessions\<sessionId>.json）里也存着
+// record.identity.cwd。它是纯 JSON，可以安全地只替换那一个字符串，其余字节不动。
+// 不换的话，B 机打开这些会话时 cwd 仍指 A 机的目录，历史对话回不到正确工作区。
+const projMap = projSpec;
+const projDir = path.join(home, 'storages', 'session_projcache', 'sessions');
+result.projFixed = 0;
+result.projAlreadyOk = 0;
+result.projFailed = [];
+if (Object.keys(projMap).length && fs.existsSync(projDir)) {
+  for (const entry of fs.readdirSync(projDir, { withFileTypes: true })) {
+    if (!entry.isFile() || !entry.name.toLowerCase().endsWith('.json')) continue;
+    const sid = entry.name.slice(0, -5);
+    const target = projMap[sid];
+    if (!target) continue;
+    const file = path.join(projDir, entry.name);
+    try {
+      const text = fs.readFileSync(file, 'utf8');
+      const doc = JSON.parse(text);
+      const cur = doc && doc.record && doc.record.identity && doc.record.identity.cwd;
+      if (typeof cur !== 'string') continue;
+      if (cur === target) { result.projAlreadyOk++; continue; }
+      // 只换第一处出现（record.identity.cwd 在文件靠前位置），其余字节原样保留
+      const re = /"cwd"\s*:\s*("(?:[^"\\]|\\.)*")/;
+      const m = re.exec(text);
+      if (!m) throw new Error('找不到 identity.cwd 的字面位置');
+      const from = m[1];
+      const to = JSON.stringify(target);
+      if (from === to) { result.projAlreadyOk++; continue; }
+      const next = text.slice(0, m.index) + '"cwd": ' + to + text.slice(m.index + m[0].length);
+      if (next.length === text.length) { result.projAlreadyOk++; continue; }
+      fs.writeFileSync(file, next, 'utf8');
+      const check = JSON.parse(fs.readFileSync(file, 'utf8'));
+      if (check.record.identity.cwd !== target) throw new Error('写回后校验失败');
+      result.projFixed++;
+    } catch (e) {
+      result.projFailed.push({ file, error: e.message });
+    }
+  }
+}
+
 emit(result);
-process.exit(result.failed.length ? 1 : 0);
+process.exit((result.failed.length || result.projFailed.length) ? 1 : 0);

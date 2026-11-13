@@ -97,6 +97,20 @@ dsh plugin add https://raw.githubusercontent.com/QcWyGm/dsh-config-sync/main/rel
 
 私有库要注意两点：①用 SSH 地址最省事；②插件**自身的更新清单**默认指向作者的公开仓库，如果你把它改成自己的私有库，目前只有 Gitee 的 raw 链接会自动换成 API + token，GitHub/GitLab 私有库的 raw 匿名读会失败——这是已知限制。
 
+## 工作区与会话也跟着机器走（0.3.44 起补齐 projcache 的 cwd）
+
+工作区和会话跨机能不能用，取决于三处路径是否被换成本机值：
+
+| 位置 | 里面存的是 | 换机器后怎么办 |
+|---|---|---|
+| `workspace\workspace-registry.json` | 每个工作区的落点，已写成 `{{APP_ROOT}}/xxx` 占位符 | 拉取时展开成本机路径，工作区直接开在本机对应目录 |
+| `conversations\sessions\--ws-<id>--\...\session.v4.jsonl.zstd` | 会话日志第一帧的 `cwd` | 拉取时按「本机这个工作区在哪」重写第一帧（只重写首帧，后面的帧一字节不动） |
+| `conversations\session_projcache\<sessionId>.json` | `record.identity.cwd` | **0.3.44 起**按登记表的 `sessionIds` 反查该工作区在本机的位置再改写；以前这一步漏了，所以工作区能列出来、但点开历史会话仍指着对方机器的目录 |
+
+所以「原机器的存放位置 → 新机器的存放位置」是这样推断的：先看工作区登记表里这个工作区的**标题/槽位/相对结构**（`{{APP_ROOT}}` 下面第几层、叫什么名字），在本机展开成绝对路径；会话靠 `sessionIds` 认领同一个工作区，跟着那个落点走，不靠猜盘符。推断不出来（工作区路径是绝对的老盘符、登记表里没有对应项）就**不改**，宁可留着让面板提示，也不写一个猜出来的路径。
+
+推送侧的报告也分了两组：`scope: config` 是配置文件里的路径，`scope: data` 是 `workspace\` 与 `conversations\` 里还指着对方机器的记录。面板把两组分开列（「配置文件里的路径」/「工作区与会话记录里的路径」），都能逐条采纳。
+
 ## 同步后新会话落在默认工作区（0.3.28 起）
 
 同步完成会顺手把 DSH 拉回来，客户端起来后会自己开一个新会话。这个新会话落在哪个工作区，由 `<DshHome>\storages\workspace.json` 里的 `global.defaultWorkspaceId` 决定——而这个值 DSH 只在本机**首次初始化**时写过一次，之后同步几轮就可能停在某个「上次用的工作区」上。

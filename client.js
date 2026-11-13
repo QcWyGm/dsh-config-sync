@@ -2332,11 +2332,11 @@ window.__ModuleLoader__.load({
         // 跨机路径提示（0.3.43）：只有这份配置确实是另一台机器推上来的才显示。
         // 本机自己推出去的路径在本机当然都在，列出来只会让人以为出了问题。
         data && data.absolutePaths && data.absolutePaths.total && data.absolutePaths.fromOtherMachine
-          ? h('div', { style: { ...S.panel, gap: '6px' } },
-            h('div', { style: { ...S.hint, color: 'var(--dsw-alias-state-warn-primary)' } },
-              M(`这份配置是 ${data.absolutePaths.machine || '另一台机器'} 推送的：其中有 ${data.absolutePaths.total} 处绝对路径不属于本机任何已确认根。箭头右边是按本机情况推出来的目录，点「采纳」就记进本机自选目录——下次推送起它们变成占位符，哪台机器拉取都换回自己的路径。`,
-                `This config was pushed from ${data.absolutePaths.machine || 'another machine'}: ${data.absolutePaths.total} absolute path(s) in it belong to no root confirmed on this machine. The folder after the arrow is what this machine would use - Accept records it as a custom root, so from the next push on they become placeholders that each machine expands to its own path.`)),
-            data.absolutePaths.items.map((it, i) => h('div', { key: `ap-${i}`, style: { display: 'flex', gap: '8px', alignItems: 'baseline', flexWrap: 'wrap', paddingBottom: '2px' } },
+          ? (() => {
+            const apItems = data.absolutePaths.items || [];
+            const confItems = apItems.filter((it) => (it.scope || 'config') === 'config');
+            const dataItems = apItems.filter((it) => it.scope === 'data');
+            const rowOf = (it, i) => h('div', { key: `ap-${it.scope || 'c'}-${i}`, style: { display: 'flex', gap: '8px', alignItems: 'baseline', flexWrap: 'wrap', paddingBottom: '2px' } },
               h('div', { style: { ...S.hint, fontFamily: 'Consolas, ui-monospace, monospace', flex: '1 1 300px', wordBreak: 'break-all' } }, `· ${it.path}`),
               it.suggest
                 ? h(react.Fragment, null,
@@ -2346,11 +2346,28 @@ window.__ModuleLoader__.load({
                   it.adopted
                     ? h('span', { style: { ...S.chip, color: 'var(--dsw-alias-state-success-primary, #2e7d32)' } }, M('已采纳', 'Accepted'))
                     : h('button', { type: 'button', style: S.btn, disabled: busy, onClick: () => adoptAbsolute(it) }, M('采纳', 'Accept')))
-                : h('div', { style: S.hint }, M('本机没有等价目录：这条可以不管，或者自己改掉文件里的路径', 'No equivalent folder on this machine: skip it, or edit that path by hand')),
-            )),
-            h('div', { style: S.footnote },
-              M(`${data.absolutePaths.suggested || 0} 条有推荐、${data.absolutePaths.adoptedCount || 0} 条已采纳。清单来自 ${data.absolutePaths.machine || '对方机器'} 的推送（${data.absolutePaths.at || '时间未记'}）。`,
-                `${data.absolutePaths.suggested || 0} with a suggestion, ${data.absolutePaths.adoptedCount || 0} already accepted. List produced by the push from ${data.absolutePaths.machine || 'the other machine'} (${data.absolutePaths.at || 'no timestamp'}).`)))
+                : h('div', { style: S.hint }, M('本机没有等价目录：这条可以不管，或者自己改掉文件里的路径', 'No equivalent folder on this machine: skip it, or edit that path by hand')))
+            return h('div', { style: { ...S.panel, gap: '6px' } },
+              h('div', { style: { ...S.hint, color: 'var(--dsw-alias-state-warn-primary)' } },
+                M(`这份配置是 ${data.absolutePaths.machine || '另一台机器'} 推送的：其中有 ${data.absolutePaths.total} 处绝对路径不属于本机任何已确认根。箭头右边是按本机情况推出来的目录，点「采纳」就记进本机自选目录——下次推送起它们变成占位符，哪台机器拉取都换回自己的路径。`,
+                  `This config was pushed from ${data.absolutePaths.machine || 'another machine'}: ${data.absolutePaths.total} absolute path(s) in it belong to no root confirmed on this machine. The folder after the arrow is what this machine would use - Accept records it as a custom root, so from the next push on they become placeholders that each machine expands to its own path.`)),
+              confItems.length
+                ? h('div', { style: { ...S.footnote, fontWeight: 600 } }, M(`配置文件里的路径（${confItems.length} 条）`, `Paths inside config files (${confItems.length})`))
+                : null,
+              confItems.map(rowOf),
+              dataItems.length
+                ? h('div', { style: { ...S.footnote, fontWeight: 600, marginTop: '6px' } }, M(`工作区与会话记录里的路径（${dataItems.length} 条）`, `Paths in workspace / session records (${dataItems.length})`))
+                : null,
+              dataItems.length
+                ? h('div', { style: S.footnote },
+                  M('这些决定工作区开在哪个目录、历史会话回到哪个目录。拉取时已经按工作区在本机的落点自动对齐；下面列的是仓库里还指着对方机器的那几条，要一起补成自选目录就点「采纳」。',
+                    'These decide which folder a workspace opens in and which folder a session returns to. The pull already aligns them with this machine\'s workspace locations; listed below are the records still pointing at the other machine - Accept adds them as custom roots too.'))
+                : null,
+              dataItems.map(rowOf),
+              h('div', { style: S.footnote },
+                M(`${data.absolutePaths.suggested || 0} 条有推荐、${data.absolutePaths.adoptedCount || 0} 条已采纳。清单来自 ${data.absolutePaths.machine || '对方机器'} 的推送（${data.absolutePaths.at || '时间未记'}）。`,
+                  `${data.absolutePaths.suggested || 0} with a suggestion, ${data.absolutePaths.adoptedCount || 0} already accepted. List produced by the push from ${data.absolutePaths.machine || 'the other machine'} (${data.absolutePaths.at || 'no timestamp'}).`)))
+          })()
           : null,
         data && data.overwrite && data.overwrite.total
           ? h('div', { style: { ...S.panel, gap: '4px' } },

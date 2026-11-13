@@ -1,9 +1,9 @@
 {
-  "version": "0.3.43",
+  "version": "0.3.44",
   "releasedAt": "2026-11-14",
-  "notes": "0.3.43：根外路径清单只在「接收方」提示，并直接给推荐目录。清单是推送时写的，本机自己推出去的路径在本机当然都在，摊在自己面板上只会像故障（实测 50 条里 40 多条是会话缓存）。现在报告带 machine：本机写的 → 不显示、也不计入告警；别的机器写的 → 显示「这份配置是 X 推送的」，并逐条给推荐目录（先按对方根值做前缀映射，保留原大小写；无根可映射就按目录名在本机各根/用户目录/桌面/盘根找同名目录；都没有就明说没有等价目录），每行一个「采纳」直接记进本机自选目录，下次推送起变占位符。清单只扫配置类文件（settings/profile/skills/presets/prompt/顶层 json），会话、工作区、记忆不再参与；`s://` 这类协议头误匹配也过滤掉了。",
-  "notesEn": "0.3.43: the stray-path report now speaks to the receiving machine only, and suggests a folder per entry. The list is written during a push, and paths this machine pushed obviously exist here, so showing them locally only looks like a fault (40+ of 50 entries were session-cache noise). The report now carries `machine`: written by this machine -> hidden and not counted as a warning; written by another machine -> \"this config was pushed from X\" plus a suggested folder per entry (prefix mapping through the remote root values with original case preserved; otherwise a same-named folder under this machine's roots / user profile / Desktop / drive roots; otherwise it says there is no equivalent). Each row has Accept, which records that folder as a custom root so the next push turns them into placeholders. The scan covers config files only (settings/profile/skills/presets/prompt/top-level json) - sessions, workspaces and memory no longer participate - and `s://`-style protocol false positives are filtered out.",
-  "tgz": "releases/dsh-config-sync-0.3.43.tgz",
-  "sha256":"b4105447c307c18b4171d087e37f5ef0f043fb162c2fb9a727d0f42fbb9ce450",
+  "notes": "0.3.44：工作区与会话的路径也按「原机器位置 → 本机位置」推断。补齐了 session_projcache 的 record.identity.cwd：以前只改会话日志首帧的 cwd，projcache 仍指着源机目录，所以工作区能列出来、点开历史会话却回不到正确目录。现在 apply 用工作区登记表的 sessionIds 反查该工作区在本机的落点，改写 projcache 里那一个字符串（其余字节不动、幂等）；推断不出来就不改，留给面板提示。推送侧报告分两组：配置文件里的路径 / 工作区与会话记录里的路径，面板分两段列出，都能逐条采纳。",
+  "notesEn": "0.3.44: workspace and session paths now follow \"original machine location -> this machine location\". It fills the gap in session_projcache's record.identity.cwd: only the first frame of the session log was rewritten before, so projcache still pointed at the source machine and a workspace listed fine while its history could not return to the right folder. Apply now looks each workspace up through the registry's sessionIds, finds where that workspace lives here, and rewrites that single string (nothing else changes, idempotent); when it cannot be inferred nothing is touched and the panel reports it. The push report is split into two groups - paths in config files, paths in workspace/session records - and the panel lists them separately, each accept-able.",
+  "tgz": "releases/dsh-config-sync-0.3.44.tgz",
+  "sha256":"bd299546a9896537cd9e337f3120d51525b3876a8e58c6272202f90418d8ae4a",
   "minClient": "0.2.2-rc.2"
 }

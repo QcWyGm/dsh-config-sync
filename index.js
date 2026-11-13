@@ -3263,13 +3263,15 @@ async function handleRoots(req, res, config) {
           const fromOtherMachine = Boolean(machine) && Boolean(localMachine) && !sameMachine(machine, localMachine)
           const candidates = candidateParentDirs(localRoots)
           const adoptedKeys = new Set(Object.values(localRoots.custom || {}).map(pathKeyOf))
-          const items = absItems.slice(0, 20).map((it) => {
+          const items = absItems.slice(0, 30).map((it) => {
             const remotePath = String(it.path || '')
             const sug = suggestLocalPathFor(remotePath, absReport, { ...localRoots, candidates })
             const suggestPath = sug.kind === 'none' ? '' : sug.path
             return {
               file: String(it.file || ''),
               path: remotePath,
+              // config = 配置文件里的路径；data = 工作区/会话记录里的路径（决定工作区开在哪个目录、会话回到哪个目录）
+              scope: String(it.scope || 'config'),
               suggest: suggestPath,
               suggestKind: sug.kind,
               suggestNote: sug.note || '',

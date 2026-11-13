@@ -460,7 +460,19 @@ function Sync-ConversationApply {
   $cwdHelper = Join-Path $PSScriptRoot 'tools\fix-session-cwd.mjs'
   if (-not (Test-Path -LiteralPath $cwdHelper)) { $cwdHelper = Join-Path $RepoRoot 'tools\fix-session-cwd.mjs' }
   $nodeRunner = Get-HostNodeRunner $AppRoot
-  if ($cwdMap.Count -gt 0) {
+  # projcache 也要按「本机的工作区落点」对齐：它的文件名是 sessionId，
+  # 登记表里每个工作区带着 sessionIds，所以能直接反查到本机路径。
+  # 不换的话 B 机打开这些会话时 cwd 仍指 A 机目录，历史对话回不到正确工作区。
+  $projMap = @{}
+  if ($mf -and (Test-Path -LiteralPath (Join-Path $DshHome 'storages\session_projcache\sessions'))) {
+    foreach ($w in @($mf.workspaces)) {
+      $wid = [string]$w.id
+      if (-not $idToLocal.ContainsKey($wid)) { continue }
+      $lid = $idToLocal[$wid]
+      foreach ($sid in @($w.sessionIds)) { if ($sid) { $projMap[[string]$sid] = $lid } }
+    }
+  }
+  if ($cwdMap.Count -gt 0 -or $projMap.Count -gt 0) {
     if (-not (Test-Path -LiteralPath $cwdHelper)) {
       Warn ('缺少会话头部修正脚本 {0}，本次跳过会话还原（铺进去的会话 DSH 会判为损坏）' -f $cwdHelper)
       return
@@ -521,7 +533,7 @@ function Sync-ConversationApply {
   # 4) 会话文件头部的 cwd 必须改成本机路径，否则 DSH 判 corrupt、整个会话层起不来
   if ($cwdMap.Count -gt 0) {
     $specPath = Join-Path ([IO.Path]::GetTempPath()) ('dsh-session-cwd-{0}.json' -f $stamp)
-    $specJson = [ordered]@{ home = $DshHome; dirs = $cwdMap } | ConvertTo-Json -Depth 4 -Compress
+    $specJson = [ordered]@{ home = $DshHome; dirs = $cwdMap; projcache = $projMap } | ConvertTo-Json -Depth 4 -Compress
     [IO.File]::WriteAllText($specPath, $specJson, (New-Object Text.UTF8Encoding($false)))
     $helper = $cwdHelper
     # 结果落文件而不是抓 stdout：执行器可能是客户端自带的 Electron（GUI 子系统，stdout 抓不到）
@@ -539,7 +551,11 @@ function Sync-ConversationApply {
           foreach ($fe in @($r.failed)) { Warn ('会话头部修正失败：{0}（{1}）' -f $fe.file, $fe.error) }
           Warn ('有 {0} 个会话文件没能修正，DSH 里这些会话可能显示为损坏' -f @($r.failed).Count)
         }
+        if (@($r.projFailed).Count -gt 0) {
+          foreach ($fe in @($r.projFailed)) { Warn ('会话 projcache 的 cwd 没改成：{0}（{1}）' -f $fe.file, $fe.error) }
+        }
         Ok ('会话头部 cwd 已对齐本机路径：修正 {0} 个、本就正确 {1} 个（目录 {2} 个）' -f $r.fixed, $r.alreadyOk, $cwdMap.Count)
+        Ok ('会话 projcache 的 cwd 已对齐本机路径：修正 {0} 个、本就正确 {1} 个（会话 {2} 个）' -f ([int]$r.projFixed), ([int]$r.projAlreadyOk), $projMap.Count)
       } catch {
         Warn ('会话头部修正执行失败：{0}' -f $_.Exception.Message)
         Warn '未修正的会话会在 DSH 里被判为损坏，导致工作区/会话列表为空，请先跑一次拉取再还原'

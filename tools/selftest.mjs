@@ -762,7 +762,7 @@ if (prevScope === null) { try { unlinkSync(scopeFile) } catch { } } else writeFi
       && commonSrc.includes('function Get-HostNodeExe'),
     'dsh-sync-common.ps1')
   check('找不到 Node 时跳过会话还原而不是铺坏文件',
-    /if \(\$cwdMap\.Count -gt 0\) \{[\s\S]{0,400}跳过会话还原[\s\S]{0,200}return/.test(applySrc),
+    /if \(\$cwdMap\.Count -gt 0 -or \$projMap\.Count -gt 0\) \{[\s\S]{0,400}跳过会话还原[\s\S]{0,200}return/.test(applySrc),
     'apply.ps1')
   check('会话还原用的是统一探测到的执行器（Node 或客户端 Electron）',
     applySrc.includes('$nodeRunner = Get-HostNodeRunner $AppRoot')
@@ -1345,6 +1345,34 @@ console.log('== 0.3.43：根外路径清单只在「配置来自别的机器」�
     && client43x.includes('adoptAbsolute(it)'), 'client.js')
   check('面板不再用旧文案「仓库里有 N 处绝对路径不在任何已确认根下」',
     !client43.includes('仓库里有 ${data.absolutePaths.total} 处绝对路径'), 'client.js')
+}
+
+console.log('')
+console.log('== 0.3.44：工作区与会话的路径也按本机落点推断 ==')
+{
+  const cap44 = readFileSync(join(pluginRootSelf, 'runtime', 'capture.ps1'), 'utf8')
+  const app44 = readFileSync(join(pluginRootSelf, 'runtime', 'apply.ps1'), 'utf8')
+  const hel44 = readFileSync(join(pluginRootSelf, 'runtime', 'tools', 'fix-session-cwd.mjs'), 'utf8')
+  const cli44 = readFileSync(join(pluginRootSelf, 'client.js'), 'utf8')
+  const idx44 = readFileSync(join(pluginRootSelf, 'index.js'), 'utf8')
+  check('报告分两类：配置类 + 工作区/会话记录，各自限额',
+    cap44.includes('$dataTop') && cap44.includes("'workspace', 'conversations'")
+    && cap44.includes('totalData = $nData') && cap44.includes('$scope = if ($dataTop')
+    && cap44.includes('$nData -ge 30') && cap44.includes('$nConf -ge 50'), 'capture.ps1 的扫描范围')
+  check('清单项带 scope，面板才能分两组列',
+    idx44.includes("scope: String(it.scope || 'config')"), 'index.js 的 items 结构')
+  check('apply 用登记表的 sessionIds 反查本机工作区路径，并交给 helper 改写 projcache',
+    app44.includes('$projMap') && app44.includes('foreach ($sid in @($w.sessionIds))')
+    && app44.includes('projcache = $projMap') && app44.includes('$cwdMap.Count -gt 0 -or $projMap.Count -gt 0'),
+    'apply.ps1 没把 projcache 的 cwd 对齐')
+  check('helper 只替换 identity.cwd 那一个字符串，且幂等',
+    hel44.includes('spec.projcache') && hel44.includes('result.projFixed')
+    && hel44.includes('record.identity.cwd !== target')
+    && hel44.includes('if (cur === target) { result.projAlreadyOk++'),
+    'fix-session-cwd.mjs 的 projcache 处理')
+  check('面板把配置与「工作区与会话记录」分两组显示',
+    cli44.includes("it.scope === 'data'") && cli44.includes('工作区与会话记录里的路径'),
+    'client.js 没分组')
 }
 
 console.log('')

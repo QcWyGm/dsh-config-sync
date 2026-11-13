@@ -98,6 +98,20 @@ The plugin does not pick a git host: the remote URL is only validated for its *f
 
 Two notes for private repos: ① SSH is the simplest; ② the plugin's **own update manifest** points at the author's public repo by default — if you repoint it at your own private repo, only Gitee raw links are currently rewritten to the API + token form, so anonymous raw reads of a private GitHub/GitLab repo will fail. That is a known limitation.
 
+## Workspaces and sessions follow the machine too (projcache cwd fixed in 0.3.44)
+
+Whether a workspace and its sessions work on a new machine depends on three paths being rewritten to this machine's value:
+
+| Where | What it stores | What happens on another machine |
+|---|---|---|
+| `workspace\workspace-registry.json` | each workspace's location, already written as a `{{APP_ROOT}}/xxx` placeholder | expanded to this machine's path on pull, so the workspace opens in the right folder |
+| `conversations\sessions\--ws-<id>--\...\session.v4.jsonl.zstd` | the `cwd` in the first frame of the session log | the first frame is rewritten from "where is this workspace on this machine" (only that frame - the rest of the file is untouched) |
+| `conversations\session_projcache\<sessionId>.json` | `record.identity.cwd` | **since 0.3.44** rewritten by looking the session's workspace up through the registry's `sessionIds`; this step used to be missing, so a workspace listed fine but its history still pointed at the other machine's folder |
+
+So "the original machine's location becomes this machine's location" is inferred like this: the registry tells you the workspace's title/slot and its shape under `{{APP_ROOT}}`, which expands to an absolute path here; sessions claim the same workspace through `sessionIds` and follow that location - never by guessing a drive letter. If it cannot be inferred (the registered path is a bare old drive path, or there is no matching entry), nothing is rewritten: the panel reports it instead of writing a guessed path.
+
+The report produced on push is split into two groups: `scope: config` for paths inside config files, `scope: data` for records under `workspace\` and `conversations\` that still point at the other machine. The panel lists them separately ("Paths inside config files" / "Paths in workspace / session records"), and both can be accepted row by row.
+
 ## New sessions land in the default workspace (since 0.3.28)
 
 A finished sync brings DSH back up, and the client opens a fresh session on startup. Where that session lands is decided by `global.defaultWorkspaceId` in `<DshHome>\storages\workspace.json` — and DSH writes that value only during **first-time initialization**, so after a few syncs it can be left pointing at whatever workspace was used last.

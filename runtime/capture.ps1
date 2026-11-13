@@ -882,21 +882,29 @@ function Write-OutsideRootReport {
   }
   $seen = @{}
   $items = New-Object System.Collections.ArrayList
-  # 只统计「配置」：conversations / workspace / mnemon / storages-record 里的路径是会话与运行时数据，
-  # 换机器本来就不该一致。以前扫全仓库，本机自己推上去的会话缓存也被当成问题报出来
-  # （实测 50 条里 40 多条是 session_projcache 的噪音）。
+  # 分两类统计：
+  #   config —— 真正要跟着机器走的配置（settings/profile/skills/presets/prompt/顶层 json）
+  #   data   —— 工作区与会话的登记/缓存（workspace-registry、session-index、session_projcache）
+  #            这些路径换机器后必须被改成本机对应目录，否则工作区打不开、历史会话回不到正确目录，
+  #            所以它们同样要报，只是归到「数据」一组，别和配置混在一起。
+  # 会话日志（zstd）和附件（blob）是二进制，不参与文本匹配。
   $confTop = @('settings', 'profile', 'skills', 'presets', 'prompt', 'local-plugins', 'plugin')
+  $dataTop = @('workspace', 'conversations')
   $files = @(Get-ChildItem -LiteralPath $RepoRoot -Recurse -File -Force -ErrorAction SilentlyContinue |
     Where-Object {
       $rel0 = $_.FullName.Substring($RepoRoot.Length).TrimStart('\', '/').Replace('\', '/')
-      (($confTop -contains ($rel0 -split '/')[0]) -or ($rel0 -notmatch '/')) -and
+      (($confTop -contains ($rel0 -split '/')[0]) -or ($dataTop -contains ($rel0 -split '/')[0]) -or ($rel0 -notmatch '/')) -and
       $rel0 -notmatch 'node_modules' -and
       $_.Length -lt 4194304 -and
       ($_.Extension -eq '.json' -or $_.Extension -eq '.jsonc' -or $_.Extension -eq '.yml' -or $_.Extension -eq '.yaml')
     })
+  $nConf = 0
+  $nData = 0
   foreach ($f in $files) {
     $txt = ''
     try { $txt = [IO.File]::ReadAllText($f.FullName) } catch { continue }
+    $rel = $f.FullName.Substring($RepoRoot.Length).TrimStart('\', '/').Replace('\', '/')
+    $scope = if ($dataTop -contains ($rel -split '/')[0]) { 'data' } else { 'config' }
     foreach ($m in [regex]::Matches($txt, '[A-Za-z]:[\\/][^"\s,;:}{\[\]]+')) {
       $raw = $m.Value
       $p = $raw.Replace('\', '/')
@@ -905,11 +913,13 @@ function Write-OutsideRootReport {
       $inside = $false
       foreach ($r in $norm) { if ($r -and ($pn -eq $r -or $pn.StartsWith($r + '/') -or $pn.StartsWith($r + '\'))) { $inside = $true; break } }
       if ($inside) { continue }
-      $rel = $f.FullName.Substring($RepoRoot.Length).TrimStart('\', '/').Replace('\', '/')
       $key = $rel + '|' + $pn
       if ($seen.ContainsKey($key)) { continue }
+      if ($scope -eq 'config' -and $nConf -ge 50) { continue }
+      if ($scope -eq 'data' -and $nData -ge 30) { continue }
       $seen[$key] = $true
-      if ($items.Count -lt 50) { [void]$items.Add([pscustomobject][ordered]@{ file = $rel; path = $p }) }
+      [void]$items.Add([pscustomobject][ordered]@{ file = $rel; path = $p; scope = $scope })
+      if ($scope -eq 'config') { $nConf++ } else { $nData++ }
     }
   }
   $reportPath = Join-Path $DshHome 'config-sync-absolute-paths.json'
@@ -939,10 +949,12 @@ function Write-OutsideRootReport {
       custom = $customOut
     }
     total = $items.Count
+    totalConfig = $nConf
+    totalData = $nData
     items = @($items)
   }
   [IO.File]::WriteAllText($reportPath, ($obj | ConvertTo-Json -Depth 5), (New-Object Text.UTF8Encoding($false)))
-  Warn ("有 " + $items.Count + " 处配置里的绝对路径不在任何已确认根下：换机器拉取时面板会给出推荐目录。")
+  Warn ("有 " + $items.Count + " 处绝对路径不在任何已确认根下（配置 " + $nConf + " 处、工作区与会话 " + $nData + " 处）：换机器拉取时面板会逐条给出推荐目录。")
   Warn ("  清单：" + $reportPath + "（面板「本机路径」卡会列出来）")
   foreach ($it in @($items | Select-Object -First 5)) { Warn ("  - " + $it.file + " → " + $it.path) }
   if ($items.Count -gt 5) { Warn ("  …还有 " + ($items.Count - 5) + " 处") }
