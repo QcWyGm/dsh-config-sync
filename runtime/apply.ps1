@@ -889,6 +889,32 @@ if (-not (Test-SyncGroupEnabled $Scope 'mnemon')) {
   Warn "仓库里没有 mnemon 数据，跳过记忆目录还原"
 }
 
+# 读归档里的插件版本：tgz 里是 package/package.json，zip 里是 <目录名>/package.json 或根 package.json。
+# 读不出来返回 $null，调用方回退到 mtime 判据（不因为读不到就盲目重铺）。
+function Get-ArchivePluginVersion([string]$archPath, [string]$dirName) {
+  try {
+    if ($archPath -like '*.tgz' -or $archPath -like '*.tar.gz') {
+      $tar = Join-Path $env:SystemRoot 'System32\tar.exe'
+      if (-not (Test-Path -LiteralPath $tar)) { return $null }
+      $json = & $tar -xzf $archPath -O package/package.json 2>$null
+      if ($LASTEXITCODE -ne 0 -or -not $json) { return $null }
+      return [string]((($json -join "`n")) | ConvertFrom-Json).version
+    }
+    if ($archPath -like '*.zip') {
+      try { Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction Stop } catch { }
+      $zip = [IO.Compression.ZipFile]::OpenRead($archPath)
+      try {
+        $entry = $zip.Entries | Where-Object { $_.FullName -match ("(^|/)" + [regex]::Escape($dirName) + "/package\.json$") } | Select-Object -First 1
+        if (-not $entry) { $entry = $zip.Entries | Where-Object { $_.FullName -match '^(package/)?package\.json$' } | Select-Object -First 1 }
+        if (-not $entry) { return $null }
+        $sr = New-Object IO.StreamReader($entry.Open())
+        try { return [string](($sr.ReadToEnd()) | ConvertFrom-Json).version } finally { $sr.Dispose() }
+      } finally { $zip.Dispose() }
+    }
+  } catch { return $null }
+  return $null
+}
+
 # ---------- 8. 就位本地插件（link: 依赖） ----------
 if (Test-SyncGroupEnabled $Scope 'local-plugins') {
 $needExtract = @()
@@ -897,11 +923,28 @@ foreach ($dirName in $localPluginMap.Keys) {
   $target = Join-Path $AppRoot $dirName
   if (Test-Path -LiteralPath $target) {
     # 已部署的目录不会被覆盖，否则插件升级永远到不了本机（仓库里的 tgz 更新了也没用）。
-    # 判据：tgz/zip 比已部署目录里最新的文件还新 → 认为是新版本，备份旧目录后重新部署。
+    # 判据改成比版本号：归档里的 package.json version vs 已部署目录的 version，不同才算新版本。
+    # 以前比 mtime，而 git checkout/fetch 会把归档的 mtime 刷成当前时间 → 每轮同步都误判「有新版本」，
+    # 于是反复改名备份 + 重新解压（实测 dsh-purge-1.1.92 与 .bak-时间戳 并存、每轮多搬一次目录就是这么来的）。
     $arch = Join-Path $RepoRoot "local-plugins\$dirName.tgz"
     if (-not (Test-Path -LiteralPath $arch)) { $arch = Join-Path $RepoRoot "local-plugins\$dirName.zip" }
-    if ((Test-Path -LiteralPath $arch) -and ((Get-Item -LiteralPath $arch).LastWriteTime -gt (Get-ChildItem -LiteralPath $target -Recurse -File -Force | Sort-Object LastWriteTime -Descending | Select-Object -First 1).LastWriteTime)) {
-      Warn "本地插件有新版本，将重新部署：$target（旧目录先改名备份）"
+    $archVer = if (Test-Path -LiteralPath $arch) { Get-ArchivePluginVersion $arch $dirName } else { $null }
+    $depVer = $null
+    $depPkgFile = Join-Path $target 'package.json'
+    if (Test-Path -LiteralPath $depPkgFile) {
+      try { $depVer = [string]((Get-Content -LiteralPath $depPkgFile -Raw -Encoding utf8 | ConvertFrom-Json).version) } catch { $depVer = $null }
+    }
+    $hasNewVersion = $false
+    if ((Test-Path -LiteralPath $arch) -and $archVer -and $depVer) {
+      $hasNewVersion = ($archVer -ne $depVer)
+    } elseif (Test-Path -LiteralPath $arch) {
+      # 读不到版本（老归档、结构异常）时退回 mtime，但要求比已部署目录新 10 秒以上，避免每轮误判
+      $archTime = (Get-Item -LiteralPath $arch).LastWriteTime
+      $depTime = (Get-ChildItem -LiteralPath $target -Recurse -File -Force | Sort-Object LastWriteTime -Descending | Select-Object -First 1).LastWriteTime
+      $hasNewVersion = $archTime -gt $depTime.AddSeconds(10)
+    }
+    if ($hasNewVersion) {
+      Warn "本地插件有新版本，将重新部署：$target（$depVer → $archVer，旧目录先改名备份）"
       $bak = "$target.bak-" + (Get-Date -Format 'yyyyMMddHHmmss')
       Move-Item -LiteralPath $target -Destination $bak
       Ok "旧版本已备份为：$bak"
@@ -1021,6 +1064,78 @@ if ($SkipInstall) {
 # 每次落地都幂等补回一次链接；已在就别动，是真实目录也别动。
 Repair-PrimaryRuntimeLink $AppRoot $DshHome
 
+# ---------- 9.6 清理卸载残留：孤儿链接 + 冗余插件备份 ----------
+# 插件卸载会删安装目录、package.json 依赖、cordis 段，却常常漏掉 profile\node_modules 里那条
+# junction（实测 dsh-image-search：目标目录删了、链接还指着它）。这类断链 pnpm 管不着——平铺布局下
+# 它只按 lockfile 重装，而链接不是它建的；同步过去也从来不清理，于是一直挂到下次重装。
+# 判据只认同时成立的三种情况，宁可漏删也不误删正常依赖：
+#   ① 是链接（Junction / SymbolicLink）
+#   ② 所有 Target 都不存在
+#   ③ 不在 package.json 的 dependencies 里
+if (Test-SyncGroupEnabled $Scope 'profile') {
+  $nmDir = Join-Path $ProfileDir 'node_modules'
+  if (Test-Path -LiteralPath $nmDir) {
+    $depNames = @()
+    try { $depNames = @((Get-Content -LiteralPath (Join-Path $ProfileDir 'package.json') -Raw -Encoding utf8 | ConvertFrom-Json).dependencies.PSObject.Properties.Name) } catch { $depNames = @() }
+
+    $candidates = New-Object System.Collections.ArrayList
+    Get-ChildItem -LiteralPath $nmDir -Force -ErrorAction SilentlyContinue | ForEach-Object {
+      [void]$candidates.Add([pscustomobject]@{ Rel = $_.Name; Item = $_ })
+    }
+    foreach ($sc in (Get-ChildItem -LiteralPath $nmDir -Force -Directory -ErrorAction SilentlyContinue | Where-Object { $_.Name -like '@*' -and -not $_.LinkType })) {
+      Get-ChildItem -LiteralPath $sc.FullName -Force -ErrorAction SilentlyContinue | ForEach-Object {
+        [void]$candidates.Add([pscustomobject]@{ Rel = ($sc.Name + '/' + $_.Name); Item = $_ })
+      }
+    }
+
+    $pruned = 0
+    foreach ($c in $candidates) {
+      $it = $c.Item
+      if (-not $it.LinkType) { continue }
+      if ($depNames -contains $c.Rel) { continue }
+      $alive = $false
+      foreach ($tg in @($it.Target)) { if ($tg -and (Test-Path -LiteralPath $tg)) { $alive = $true; break } }
+      if ($alive) { continue }
+      try {
+        # junction 必须用 Directory.Delete 删链接本身；Remove-Item -Recurse 在旧实现里可能顺着链接删到目标
+        if ($it.PSIsContainer) { [IO.Directory]::Delete($it.FullName, $false) }
+        else { [IO.File]::Delete($it.FullName) }
+        $pruned++
+        Warn ("已清理孤儿链接（卸载残留）：{0} → 目标不存在 {1}" -f $c.Rel, ($it.Target -join ','))
+      } catch {
+        Warn ("孤儿链接删不掉（可能被占用）：{0} → {1}" -f $c.Rel, $_.Exception.Message)
+      }
+    }
+    if ($pruned -gt 0) { Ok "已清理 $pruned 个孤儿链接" } else { Ok '没有孤儿链接' }
+  }
+
+  # 插件备份：<目录>.bak-<时间戳> 是「旧目录先改名备份」留下的。同版本备份毫无价值（内容就是刚
+  # 铺上去的那一份），直接清掉；版本不同的只留最新一份。主目录已不存在的备份保留（可能是唯一回滚点）。
+  $bakDirs = @(Get-ChildItem -LiteralPath $AppRoot -Directory -Force -ErrorAction SilentlyContinue | Where-Object { $_.Name -match '^(.+)\.bak-\d{14}$' })
+  if ($bakDirs.Count -gt 0) {
+    $bm = 0
+    foreach ($g in ($bakDirs | Group-Object { [regex]::Match($_.Name, '^(.+)\.bak-\d{14}$').Groups[1].Value })) {
+      $livePkg = Join-Path (Join-Path $AppRoot $g.Name) 'package.json'
+      $liveVer = $null
+      if (Test-Path -LiteralPath $livePkg) { try { $liveVer = [string]((Get-Content -LiteralPath $livePkg -Raw -Encoding utf8 | ConvertFrom-Json).version) } catch { } }
+      if (-not $liveVer) { continue }
+      $keep = ($g.Group | Sort-Object Name -Descending | Select-Object -First 1)
+      foreach ($b in $g.Group) {
+        $bPkg = Join-Path $b.FullName 'package.json'
+        $bVer = $null
+        if (Test-Path -LiteralPath $bPkg) { try { $bVer = [string]((Get-Content -LiteralPath $bPkg -Raw -Encoding utf8 | ConvertFrom-Json).version) } catch { } }
+        $same = ($bVer -and ($bVer -eq $liveVer))
+        $latest = ($b.FullName -eq $keep.FullName)
+        if ($same -or (-not $latest)) {
+          Remove-Item -LiteralPath $b.FullName -Recurse -Force -ErrorAction SilentlyContinue
+          $bm++
+          Warn ("已清理插件备份：{0}（{1}）" -f $b.Name, $(if ($same) { '与在用版本相同，冗余' } else { '只保留最新一份' }))
+        }
+      }
+    }
+    if ($bm -eq 0) { Ok '插件备份无需清理' }
+  }
+}
 # ---------- 10. 自检 ----------
 Say ""
 Say "== 自检 =="

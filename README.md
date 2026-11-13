@@ -156,6 +156,23 @@ dsh plugin add https://raw.githubusercontent.com/QcWyGm/dsh-config-sync/main/rel
 - **只在这个目录里选**：面板传来的必须是备份根之下真实存在的一份快照（越界、相对路径、含引号换行都直接报错），不会因为改了地址就把范围放宽到任意文件夹。
 - **老路径仍在**：「退出后执行」卡里的「只生成还原脚本」照旧写 `<仓库>\同步-还原-<快照名>.cmd`（含 `-DryRun` 预览、输 `y` 确认、`manual-<时间戳>` 自保），给离线 / 远控 / 手动执行用；`restore.ps1` 的 `-BackupDir` 参数没变，新增的 `-RollbackToPoint` 由面板那条链路自动加上。
 
+## 卸载残留自动清理（0.3.29 起）
+
+卸载插件是宿主做的：删安装目录、删 `package.json` 里的依赖、删 `cordis.patch.yml` 里的模块段。但它**不删 `profile\node_modules` 里那条 junction**——实测 `dsh-image-search` 卸载后目标目录 `D:\DeepSeekHarness\dsh-image-search-0.1.0` 已经没了、链接还指着它。这类断链 pnpm 也不管（平铺布局下它只按 lockfile 重装，而链接不是它建的），同步同样从不清，于是一直挂到下次重装。
+
+所以 `apply.ps1` 每次落地都巡检一遍（第 9.6 段），只删**三条同时成立**的链接：
+
+| 判据 | 说明 |
+|---|---|
+| 是链接 | `LinkType` 为 Junction / SymbolicLink，普通目录不碰 |
+| 所有 Target 都不存在 | 只要有一个目标还在，就当正常软链留着 |
+| 不在 `package.json` 的 dependencies 里 | 在用的 `link:` 插件一律跳过 |
+
+删除用 `Directory.Delete`，只删链接本身、不顺着链接动目标；日志逐条写 `已清理孤儿链接（卸载残留）：xxx → 目标不存在 yyy`。
+
+**顺手清插件备份**：同步每轮「旧目录先改名备份」会攒出 `<目录>.bak-<时间戳>`。与在用版本**相同**的备份是纯冗余（内容就是刚铺上去的那一份），直接删；版本不同的只留最新一份；主目录已不存在的备份保留（可能是唯一回滚点）。
+
+**同时修掉一个误判**：0.3.29 之前部署判据比的是 mtime，而 `git checkout/fetch` 会把归档的 mtime 刷成当前时间 → 每轮同步都判「有新版本」，反复改名备份 + 重新解压（`dsh-purge-1.1.92` 与 `.bak-时间戳` 并存、每轮多搬一次目录就是这么来的）。现在比归档内 `package.json` 的 version 与已部署目录的 version，不同才算新版本；读不到版本时退回 mtime，并要求新 10 秒以上。
 ## 同步内容勾选（0.3.8 起）
 
 面板「同步内容」卡（挂在面板最下面）：把云端同步的十组内容逐组列出来，**默认全勾**；点一下某一行就展开该组明细，再点一下收起（没有单独的「明细」按钮）；组和单项都能取消勾选 —— 取消后**推送不再抓、拉取不再还原**，重新勾上就继续同步（推送和拉取共用同一份勾选）。
@@ -200,9 +217,6 @@ dsh plugin add https://raw.githubusercontent.com/QcWyGm/dsh-config-sync/main/rel
 - **进度窗口收尾**：拉取/推送跑完后窗口**不自动关闭**（原来停 3 秒自己消失，结果一闪就没了，看不到失败原因），改成把「同步已完成 / 日志路径」留在屏幕上，按任意键或点右上角 × 才退出。客户端是**在这之前**由 `explorer.exe` 代启的，跟这个窗口没有父子/作业关系，所以窗口留多久、还是被点 × 直接结束，都不会把客户端带走。`update`（退出后安装那一路）同样保留窗口，横幅写「插件更新已完成」；只有 `relaunch`（纯重启，窗口里没有可看的结果）仍旧停 3 秒自动关。
 - 退出码：`0` 完成、`2` 等待超时、`3` 缺 sync.ps1、`4` 重启失败、`5` 同步失败（pull 已尝试回滚）。
 - 「取消排队」只撤插件里的排队记录；已拉起的外部等待进程仍会等你退出，要停就手动结束它（`auto-sync-wait.log` / launch 日志有 pid）。
-
-- **历史安装包放 GitHub Releases**（2026-11-13 起）：仓库里 `releases/` **只保留当前版本**那一个 tgz（插件自更新按 `version.json` 里的相对路径从这里取包，所以当前版本必须在）；更早的版本已逐个上传为 `v<版本>` 的 Release asset 后从仓库移除，需要旧版就去 Releases 页下载。发版时要跟着做：打完新包 → 建 `v<新版本>` Release 并上传该 tgz → 再把上一个版本的 tgz 从 `releases/` 删掉。这样仓库体积不会随版本号线性膨胀（治理前 30 个包占 5.0 MB）。
-- **仓库设置（2026-11-13 调整）**：`main` 已加分支保护（禁止强推、禁止删除分支，不要求 PR、不要求状态检查，admin 仍可直推，所以单人维护不被绊住）；Dependabot alerts 已开启（公开库免费，无运行时依赖时基本不会响）。
 
 ## 插件自更新（0.2.0 起）
 
@@ -267,7 +281,7 @@ https://raw.githubusercontent.com/QcWyGm/dsh-config-sync/main/market-index.json
 | 新机器分支没有 upstream，`pull --ff-only` 报 *There is no tracking information…*，PS 5.1 包成 NativeCommandError 后脚本继续走 | `sync.ps1` 先探 upstream，没有就 `pull --ff-only origin <branch>` 再 `set-upstream-to`；push 带 `-u` |
 | `GIT_SSH_COMMAND` 少了 ssh.exe 本体 → `/usr/bin/sh: - : invalid option` | 四分支：有 `core.sshCommand` 照用；找到 `ssh.exe` 写完整命令；只有私钥没 ssh.exe 就**不设变量**；无私钥交给 `.ssh\config` |
 | 客户端 asar 打包时按路径找 AppRoot 全落空、bundle 全误报缺失 | `isAppRoot` 认 `app\package.json` **或** `app.asar`；版本与 bundle 存在性从 asar 里定向取（PS 5.1 `ConvertFrom-Json` 2 MB 上限，5.7 MB 头只能按 entry 偏移直读），判不了就当"不知道" |
-| 插件目录已存在就跳过部署，tgz 更新了本机还是旧代码 | `apply.ps1` 比较 tgz 与已部署目录最新文件时间，更新则改名 `.bak-<时间戳>` 备份后重新部署 |
+| 插件目录已存在就跳过部署，tgz 更新了本机还是旧代码 | `apply.ps1` 比归档内 `package.json` 的 version 与已部署目录的 version（0.3.29 起；之前比 mtime，被 git checkout 刷时间害得每轮误判），不同才改名 `.bak-<时间戳>` 备份后重新部署 |
 | 开了"退出时自动推送"却什么都不发生（无日志、无结果文件） | 两个叠因：①排队判据只看 `ahead > 0`，新会话还没 capture 时恒为 0 → 改成三个来源都算 + 每 2 分钟复查；②`spawn` 假成功（`detached` 起 powershell 当场退出 / `spawn` 失败只在 `error` 事件报）→ 改用 `Start-Process` 起独立进程 + 等 launcher 退出码 + 写 `auto-sync-launch.log` |
 | 空目录被当成"仓库坏了"，面板红字 + 推送按钮可点但必失败 | 0.3.26 起按 `repo.phase` 分四态：空目录只放行拉取，`prepare(push)` / `push-now` / `sync.ps1 push` 三层都拦住 |
 

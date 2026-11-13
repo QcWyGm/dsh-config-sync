@@ -156,6 +156,23 @@ The panel has a "Restore backup" card (placed after "After exit" and before "Syn
 - **Only this folder's snapshots are accepted**: the path from the panel must be a real snapshot under the backup root (escaping it, relative paths, quotes or newlines are rejected), so changing the folder never widens the scope to arbitrary directories.
 - **The old path still works**: "generate restore script only" in the "After exit" card still writes `<repo>\restore-<snapshot name>.cmd` (dry-run preview, `y` confirmation, `manual-<timestamp>` safety copy) for offline / remote / manual use; `restore.ps1 -BackupDir` is unchanged, and `-RollbackToPoint` is added automatically by the panel pipeline.
 
+## Uninstall leftovers cleaned automatically (since 0.3.29)
+
+Uninstalling a plugin is the host's job: it removes the install directory, the `package.json` dependency and the `cordis.patch.yml` block. It does **not** remove the junction under `profile\node_modules` - measured on `dsh-image-search`, whose target `D:\DeepSeekHarness\dsh-image-search-0.1.0` was gone while the link still pointed at it. Broken links like that are invisible to pnpm too (with a flat layout it only reinstalls from the lockfile, and the link was not created by pnpm), and syncing never cleaned them either, so they survive until the next reinstall.
+
+So `apply.ps1` sweeps them on every landing (section 9.6) and only removes links where **all three** hold:
+
+| Test | Meaning |
+|---|---|
+| it is a link | `LinkType` is Junction / SymbolicLink; plain directories are never touched |
+| none of its targets exist | if any target is still there, the link is treated as legitimate and kept |
+| it is absent from `package.json` dependencies | every `link:` plugin in use is skipped |
+
+Removal uses `Directory.Delete`, so only the link itself goes and nothing is deleted through it; the log prints one line per removal, `已清理孤儿链接（卸载残留）：xxx → 目标不存在 yyy`.
+
+**Plugin backups are tidied too**: every round of "rename the old directory into a backup first" piles up `<dir>.bak-<timestamp>`. A backup whose version equals the live one is pure waste (it is the copy that was just replaced), so it is deleted; different versions keep only the newest; if the live directory is gone the backup is kept as the only rollback point.
+
+**One misjudgement fixed as well**: before 0.3.29 the deploy test compared mtime, and `git checkout/fetch` stamps the archive with the current time, so every sync round concluded "new version" and renamed the directory into a backup and re-extracted it again (that is how `dsh-purge-1.1.92` and `.bak-timestamp` ended up side by side). It now compares the version inside the archive `package.json` against the deployed one; when the version cannot be read it falls back to mtime with a 10-second margin.
 ## Sync scope (per-group and per-item checkboxes, since 0.3.8)
 
 The panel has a "Sync content" card (placed at the very bottom of the page): the ten groups that sync to the cloud are listed individually and **checked by default**. Clicking a row expands that group's items and clicking it again collapses them (there is no separate "Details" button); both the group and each item can be unchecked — unchecked content is **no longer captured on push and no longer restored on pull**; tick it again and syncing resumes (push and pull share the same file).
@@ -200,9 +217,6 @@ The panel has a "Sync content" card (placed at the very bottom of the page): the
 - **How the progress window ends**: after a pull or push finishes the window **stays open** instead of closing itself 3 seconds later (that used to flash the result past you, failure reason included). It keeps "sync finished / log path" on screen and exits only when you press a key or click the ×. The client was already relaunched by `explorer.exe` **before** this, so it shares no parent/console job with the window — leaving the window open or closing it kills nothing. `update` (the install-after-exit path) keeps its window too, with a "plugin update finished" banner; only `relaunch` still closes itself after 3 s, since there is no result to read.
 - Exit codes: `0` done, `2` wait timeout, `3` sync.ps1 missing, `4` relaunch failed, `5` sync failed (pull already tried to roll back).
 - "Cancel queue" only drops the plugin's queue record; an already launched external waiter still waits for your exit — end it manually to stop it (the pid is in `auto-sync-wait.log` / the launch log).
-
-- **Older packages live in GitHub Releases** (since 2026-11-13): `releases/` in the repo keeps **only the current version's** tgz (self-update resolves the relative path in `version.json` against it, so the current one must stay). Earlier versions were each uploaded as a `v<version>` Release asset and then removed from the repo — grab an old build from the Releases page. Per release, do the same: pack the new tgz → create the `v<new version>` Release and upload it → delete the previous version's tgz from `releases/`. That stops the repo from growing linearly with every version (before the cleanup, 30 packages took 5.0 MB).
-- **Repository settings (adjusted 2026-11-13)**: `main` now has branch protection (force pushes and branch deletion blocked; no PR requirement, no status checks, and admins bypass, so solo maintenance is not slowed down); Dependabot alerts are enabled (free on public repos, and with no runtime dependencies it will rarely fire).
 
 ## Plugin update (since 0.2.0)
 
