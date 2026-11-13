@@ -1998,8 +1998,7 @@ window.__ModuleLoader__.load({
       const scopeCard = h(ScopeCard, {})
       // 「本机路径」与「问题反馈」自己持有数据（roots 文件是本机私有，feedback 在仓库里）
       // 这一区平时不进页面：只有标题行的按钮被点开才渲染。
-      // 按钮只在「根外绝对路径」「被覆盖的配置」这两类告警上变橙（localPaths.alert）；
-      // 待确认路径只是"还得填一次"，不点亮按钮，卡内也只给一行灰字。
+      // 三类都算告警（待确认路径 / 根外绝对路径 / 被覆盖的配置），数量挂在按钮上。
       const lpAlert = (data && data.localPaths && data.localPaths.alert) || 0
       const rootsCard = showRoots ? h(RootsCard, { onRootsSaved: refresh }) : null
       const feedbackCard = h(FeedbackCard, {})
@@ -2196,9 +2195,10 @@ window.__ModuleLoader__.load({
         h('div', { style: S.cardHead },
           h('div', { style: S.cardTitle }, M('本机路径', 'Local paths')),
           h('div', { style: { flex: 1 } }, null),
-          // 「待确认」不当告警：只给中性灰 chip（告警只有根外路径、被覆盖的配置两类）
+          // 待确认也算告警：chip 用橙色
           missing.length
-            ? h('span', { style: S.chip }, M(`${missing.length} 项待确认`, `${missing.length} to confirm`))
+            ? h('span', { style: { ...S.chip, color: 'var(--dsw-alias-state-warn-primary)' } },
+              M(`待确认 ${missing.length} 项`, `${missing.length} to confirm`))
             : (data
               ? h('span', { style: { ...S.chip, color: 'var(--dsw-alias-state-success-primary, #2e7d32)' } }, M('已确认', 'Confirmed'))
               : null),
@@ -2217,11 +2217,10 @@ window.__ModuleLoader__.load({
               busy ? M('读取中…', 'Loading…') : M('重新读取', 'Reload')),
           ),
         ),
-        // 待确认路径不是告警：用普通面板 + 明细列表（不染橙色，不抢注意力），
-        // 但明细要留着——0.3.30 起就是靠它告诉你到底缺哪个目录。
+        // 待确认路径也算告警，块标题随徽标一起用橙色（明细列表照旧）
         missing.length
           ? h('div', { style: { ...S.panel, gap: '4px' } },
-            h('div', { style: S.hint },
+            h('div', { style: { ...S.hint, color: 'var(--dsw-alias-state-warn-primary)' } },
               M(`上次拉取有 ${missing.length} 项配置没写进去（它们引用的目录这台机器还没确认）：填好下面的路径再保存，之后重新拉取一次即可。`,
                 `${missing.length} config(s) were skipped during the last pull (the folders they reference are not confirmed on this machine): fill in the paths below, save, then pull again.`)),
             missing.slice(0, 20).map((m, i) => h('div', { key: i, style: S.hint },

@@ -1266,7 +1266,8 @@ console.log('== 0.3.37：本机路径区默认不进页面 ==')
   const client37 = readFileSync(join(pluginRootSelf, 'client.js'), 'utf8')
   check('status 给出三个计数 + 告警数（面板据此决定按钮要不要变橙）',
     /localPaths: \(\(\) => \{/.test(index37)
-    && /return \{ pending, absolute, overwrite, alert: absolute \+ overwrite, total: pending \+ absolute \+ overwrite \}/.test(index37),
+    && /const total = pending \+ absolute \+ overwrite/.test(index37)
+    && /return \{ pending, absolute, overwrite, alert: total, total \}/.test(index37),
     'status 没给 localPaths 计数/告警数：面板只能把整张卡摊在页面上当提示')
   check('本机路径区只由标题行按钮控制（组件不再自己 return null）',
     /const rootsCard = showRoots \? h\(RootsCard, \{ onRootsSaved: refresh \}\) : null/.test(client37)

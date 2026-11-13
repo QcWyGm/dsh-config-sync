@@ -1,9 +1,9 @@
 {
-  "version": "0.3.39",
+  "version": "0.3.40",
   "releasedAt": "2026-11-14",
-  "notes": "0.3.39：本机路径这一区只把两类情况当告警——仓库里的「根外绝对路径」和「被覆盖的配置」。以前「待确认路径」也算一项、也会点亮标题行按钮，可它不是告警：它只是\"上次拉取时有配置没写进去，得把目录填一次\"，属于配置动作，放在告警里会让人以为出了错。现在 status 的 localPaths 多给一个 alert（= 根外 + 被覆盖），按钮只在这个 alert 上变橙、显示「本机路径 · N 项告警」；待确认路径退成卡内的中性提示，明细列表照旧保留。",
-  "notesEn": "0.3.39: the Local paths section treats exactly two situations as warnings - absolute paths in the repo outside every root, and configs the last pull overwrote. Paths still to confirm used to count as a third warning and lit up the title-row button, but they are not a warning: they just mean \"the last pull skipped some configs, fill the folder in once\", which is a configuration step and reads like an error when shown as a warning. status.localPaths now also reports alert (= outside-root + overwritten); the button turns amber and reads \"Local paths - N alert(s)\" only on that, while paths to confirm drop back to a neutral notice inside the card (the itemised list stays).",
-  "tgz": "releases/dsh-config-sync-0.3.39.tgz",
-  "sha256":"a80a57aad383c488632d3f991d9cf481b57ec2194613aec61af1961b23ae580d",
+  "notes": "0.3.40：待确认路径也算告警。0.3.39 只把「根外绝对路径」和「被覆盖的配置」算告警，待确认路径退成卡内中性提示；现在三类都算：status 的 localPaths.alert = 待确认 + 根外 + 被覆盖，按钮按它变橙并显示「本机路径 · N 项告警」，卡内待确认块与它的「待确认 N 项」徽标也恢复成橙色。",
+  "notesEn": "0.3.40: paths still to confirm count as warnings again. 0.3.39 treated only \"absolute paths outside every root\" and \"overwritten configs\" as warnings and demoted the pending ones to a neutral notice; now all three count - status.localPaths.alert = pending + outside-root + overwritten, the button turns amber reading \"Local paths - N alert(s)\", and the pending block plus its chip are amber again.",
+  "tgz": "releases/dsh-config-sync-0.3.40.tgz",
+  "sha256":"15ab2b4f62b6caf5cb90c751ebec3a2991bf64b26d9b54d3c5afb56e43fdab16",
   "minClient": "0.2.2-rc.2"
 }
