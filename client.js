@@ -2187,6 +2187,30 @@ window.__ModuleLoader__.load({
         } finally { setBusy(false) }
       }
 
+      /**
+       * 采纳一条推荐目录：记进本机自选目录（下次推送起这些路径变成占位符，对方机器拉取时换回自己的值）。
+       * 不需要先进编辑态——一次点一个，写完就重新读，面板上那一行立刻变成「已采纳」。
+       */
+      const adoptAbsolute = async (it) => {
+        if (!data || busy || !it || !it.suggest) return
+        setBusy(true); setErr(''); setMsg('')
+        try {
+          const rootsNow = data.roots || {}
+          const custom = { ...((rootsNow.custom) || {}) }
+          const base = String(it.suggestKey || 'dir')
+          let key = base
+          let n = 2
+          while (Object.keys(custom).some((k) => k.toLowerCase() === key.toLowerCase())) { key = `${base}${n}`; n += 1 }
+          custom[key] = it.suggest
+          const r = await callRoots({ roots: { appRoot: rootsNow.appRoot, dshHome: rootsNow.dshHome, workspaceHome: rootsNow.workspaceHome, custom } })
+          setMsg([r.note, ...((r.warns || []).map((w) => `⚠ ${w}`))].filter(Boolean).join(' '))
+          await load()
+          if (props && typeof props.onRootsSaved === 'function') props.onRootsSaved()
+        } catch (e) {
+          setErr(String((e && e.message) || e))
+        } finally { setBusy(false) }
+      }
+
       // 这一区显不显示由父层决定（标题行那个按钮），组件自己不吞自己：
       // 以前在这里 return null，Section 收到的仍是 React 元素、照样渲染分区标题，
       // 页面上就留下一个空标题——那正是 0.3.37 要修掉的显示问题。
@@ -2305,13 +2329,28 @@ window.__ModuleLoader__.load({
               `Detected: app root ${data.detected.appRoot || '(not found)'}; .dsh ${data.detected.dshHome || '?'}; workspace root ${data.detected.workspaceHome || '(could not infer from the workspace registry)'}`,
             ))
           : null,
-        data && data.absolutePaths && data.absolutePaths.total
-          ? h('div', { style: { ...S.panel, gap: '4px' } },
+        // 跨机路径提示（0.3.43）：只有这份配置确实是另一台机器推上来的才显示。
+        // 本机自己推出去的路径在本机当然都在，列出来只会让人以为出了问题。
+        data && data.absolutePaths && data.absolutePaths.total && data.absolutePaths.fromOtherMachine
+          ? h('div', { style: { ...S.panel, gap: '6px' } },
             h('div', { style: { ...S.hint, color: 'var(--dsw-alias-state-warn-primary)' } },
-              M(`仓库里有 ${data.absolutePaths.total} 处绝对路径不在任何已确认根下：换台机器拉取后会指向不存在的目录。把对应目录加成自选目录、再推送一次，它们就会被换成占位符。`,
-                `${data.absolutePaths.total} absolute path(s) in the repo fall outside every confirmed root: on another machine they point at folders that do not exist. Add that folder as a custom root and push once to turn them into placeholders.`)),
-            data.absolutePaths.items.slice(0, 6).map((it, i) => h('div', { key: `ap-${i}`, style: { ...S.hint, fontFamily: 'Consolas, ui-monospace, monospace' } },
-              `· ${it.path} — ${it.file}`)))
+              M(`这份配置是 ${data.absolutePaths.machine || '另一台机器'} 推送的：其中有 ${data.absolutePaths.total} 处绝对路径不属于本机任何已确认根。箭头右边是按本机情况推出来的目录，点「采纳」就记进本机自选目录——下次推送起它们变成占位符，哪台机器拉取都换回自己的路径。`,
+                `This config was pushed from ${data.absolutePaths.machine || 'another machine'}: ${data.absolutePaths.total} absolute path(s) in it belong to no root confirmed on this machine. The folder after the arrow is what this machine would use - Accept records it as a custom root, so from the next push on they become placeholders that each machine expands to its own path.`)),
+            data.absolutePaths.items.map((it, i) => h('div', { key: `ap-${i}`, style: { display: 'flex', gap: '8px', alignItems: 'baseline', flexWrap: 'wrap', paddingBottom: '2px' } },
+              h('div', { style: { ...S.hint, fontFamily: 'Consolas, ui-monospace, monospace', flex: '1 1 300px', wordBreak: 'break-all' } }, `· ${it.path}`),
+              it.suggest
+                ? h(react.Fragment, null,
+                  h('div', { style: S.hint }, '→'),
+                  h('div', { style: { ...S.hint, fontFamily: 'Consolas, ui-monospace, monospace', wordBreak: 'break-all' } }, it.suggest),
+                  h('div', { style: S.footnote }, it.suggestNote || ''),
+                  it.adopted
+                    ? h('span', { style: { ...S.chip, color: 'var(--dsw-alias-state-success-primary, #2e7d32)' } }, M('已采纳', 'Accepted'))
+                    : h('button', { type: 'button', style: S.btn, disabled: busy, onClick: () => adoptAbsolute(it) }, M('采纳', 'Accept')))
+                : h('div', { style: S.hint }, M('本机没有等价目录：这条可以不管，或者自己改掉文件里的路径', 'No equivalent folder on this machine: skip it, or edit that path by hand')),
+            )),
+            h('div', { style: S.footnote },
+              M(`${data.absolutePaths.suggested || 0} 条有推荐、${data.absolutePaths.adoptedCount || 0} 条已采纳。清单来自 ${data.absolutePaths.machine || '对方机器'} 的推送（${data.absolutePaths.at || '时间未记'}）。`,
+                `${data.absolutePaths.suggested || 0} with a suggestion, ${data.absolutePaths.adoptedCount || 0} already accepted. List produced by the push from ${data.absolutePaths.machine || 'the other machine'} (${data.absolutePaths.at || 'no timestamp'}).`)))
           : null,
         data && data.overwrite && data.overwrite.total
           ? h('div', { style: { ...S.panel, gap: '4px' } },

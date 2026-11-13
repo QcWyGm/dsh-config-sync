@@ -600,9 +600,9 @@ if (prevScope === null) { try { unlinkSync(scopeFile) } catch { } } else writeFi
     syncSrc.includes('$isSyncRepo') && syncSrc.includes("Join-Path $RepoRoot 'dsh-sync-common.ps1'"),
     'sync.ps1 的 stray 判据又只认空目录了')
   const captureScript42 = [join(pluginRoot, 'runtime', 'capture.ps1'), join(pluginRoot, 'capture.ps1'), join(repoRoot, 'capture.ps1')].find((p) => existsSync(p)) || ''
-  const captureSrc42 = captureScript42 ? readFileSync(captureScript42, 'utf8') : ''
+  const cap43 = captureScript42 ? readFileSync(captureScript42, 'utf8') : ''
   check('根外路径体检里没有漏写 $ 的变量（(v.Replace 会被当成命令执行）',
-    Boolean(captureSrc42) && !/\(\s*v\.Replace\(/.test(captureSrc42) && captureSrc42.includes('($v.Replace('),
+    Boolean(cap43) && !/\(\s*v\.Replace\(/.test(cap43) && cap43.includes('($v.Replace('),
     captureScript42 || 'capture.ps1')
   // 重启客户端必须脱离进度窗口的控制台/作业，否则手动关窗口会把刚重启的客户端一起带走。
   const postExit = [join(pluginRoot, 'runtime', 'post-exit.ps1'), join(pluginRoot, 'post-exit.ps1'), join(repoRoot, 'post-exit.ps1')].find((p) => existsSync(p)) || ''
@@ -1083,7 +1083,7 @@ console.log('== 0.3.36：空分支判据 / 根外路径清单 / 覆盖体检 =='
     'apply 整份覆盖前不比对：本机未推送的改动会被静默盖掉')
   check('roots 接口带回 absolutePaths 与 overwrite 两份报告',
     /absolutePathsPathOf/.test(idx) && /overwritePathOf/.test(idx)
-    && /absolutePaths: \{/.test(idx) && /overwrite: \{/.test(idx),
+    && /absolutePaths: \(/.test(idx) && /overwrite: \{/.test(idx),
     'GET /config-sync/roots 没带体检报告，面板无从提示')
   check('面板在本机路径卡下渲染两条告警，并给「用探测值」回填',
     /data\.absolutePaths && data\.absolutePaths\.total/.test(cli)
@@ -1276,7 +1276,7 @@ console.log('== 0.3.37：本机路径区默认不进页面 ==')
   check('status 给出三个计数 + 告警数（面板据此决定按钮要不要变橙）',
     /localPaths: \(\(\) => \{/.test(index37)
     && /const total = pending \+ absolute \+ overwrite/.test(index37)
-    && /return \{ pending, absolute, overwrite, alert: total, total \}/.test(index37),
+    && /alert: total, total/.test(index37),
     'status 没给 localPaths 计数/告警数：面板只能把整张卡摊在页面上当提示')
   check('本机路径区只由标题行按钮控制（组件不再自己 return null）',
     /const rootsCard = showRoots \? h\(RootsCard, \{ onRootsSaved: refresh \}\) : null/.test(client37)
@@ -1315,6 +1315,36 @@ console.log('== 0.3.41：status 提速（不再递归统计备份） ==')
     Boolean(st41.backup) && (st41.backup.count === 0 || (Array.isArray(st41.backup.snapshots)
       && st41.backup.snapshots.every((s) => s.files === null && s.bytes === null))),
     JSON.stringify(st41.backup && { count: st41.backup.count, first: st41.backup.snapshots && st41.backup.snapshots[0] }))
+}
+
+console.log('')
+console.log('== 0.3.43：根外路径清单只在「配置来自别的机器」时提示 ==')
+{
+  const src43 = readFileSync(join(pluginRootSelf, 'index.js'), 'utf8')
+  const client43 = readFileSync(join(pluginRootSelf, 'client.js'), 'utf8')
+  const cap43 = existsSync(join(pluginRootSelf, 'runtime', 'capture.ps1')) ? readFileSync(join(pluginRootSelf, 'runtime', 'capture.ps1'), 'utf8') : ''
+  check('报告归属判定：记录机器名 + 只在别的机器写的清单才算告警',
+    src43.includes('function localMachineName') && src43.includes('function sameMachine')
+    && src43.includes('absFromOtherMachine') && src43.includes('const absolute = absFromOther'), 'index.js 的 localPaths 计数')
+  check('推荐地址：先按对方根映射，再按同名目录兜底，都没有就说没有',
+    src43.includes('function suggestLocalPathFor') && src43.includes("kind: 'root'")
+    && src43.includes("kind: 'namesake'") && src43.includes("kind: 'none'")
+    && src43.includes('function candidateParentDirs'), 'index.js 的推荐算法')
+  check('清单只扫配置类文件（会话/工作区/记忆不参与）',
+    Boolean(cap43) && cap43.includes('$confTop')
+    && cap43.includes("'local-plugins'") && cap43.includes("$rel0 -notmatch 'node_modules'"),
+    'capture.ps1 的扫描范围')
+  check('报告带 machine 与当时的根值，供本机映射用',
+    Boolean(cap43) && cap43.includes('machine = $machine') && cap43.includes('roots = [ordered]@'),
+    'capture.ps1 的报告结构')
+  check('协议头误匹配被过滤（s://1v3... 不再当成盘符）',
+    Boolean(cap43) && cap43.includes("if ($p -match '://') { continue }"), 'capture.ps1')
+  const client43x = client43
+  check('面板：只在 fromOtherMachine 时渲染跨机清单，并给「采纳」按钮',
+    client43x.includes('data.absolutePaths.fromOtherMachine') && client43x.includes('adoptAbsolute')
+    && client43x.includes('adoptAbsolute(it)'), 'client.js')
+  check('面板不再用旧文案「仓库里有 N 处绝对路径不在任何已确认根下」',
+    !client43.includes('仓库里有 ${data.absolutePaths.total} 处绝对路径'), 'client.js')
 }
 
 console.log('')

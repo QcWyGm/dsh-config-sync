@@ -882,9 +882,16 @@ function Write-OutsideRootReport {
   }
   $seen = @{}
   $items = New-Object System.Collections.ArrayList
+  # 只统计「配置」：conversations / workspace / mnemon / storages-record 里的路径是会话与运行时数据，
+  # 换机器本来就不该一致。以前扫全仓库，本机自己推上去的会话缓存也被当成问题报出来
+  # （实测 50 条里 40 多条是 session_projcache 的噪音）。
+  $confTop = @('settings', 'profile', 'skills', 'presets', 'prompt', 'local-plugins', 'plugin')
   $files = @(Get-ChildItem -LiteralPath $RepoRoot -Recurse -File -Force -ErrorAction SilentlyContinue |
     Where-Object {
-      $_.FullName -notmatch '[\\/]\.git[\\/]' -and $_.Length -lt 4194304 -and
+      $rel0 = $_.FullName.Substring($RepoRoot.Length).TrimStart('\', '/').Replace('\', '/')
+      (($confTop -contains ($rel0 -split '/')[0]) -or ($rel0 -notmatch '/')) -and
+      $rel0 -notmatch 'node_modules' -and
+      $_.Length -lt 4194304 -and
       ($_.Extension -eq '.json' -or $_.Extension -eq '.jsonc' -or $_.Extension -eq '.yml' -or $_.Extension -eq '.yaml')
     })
   foreach ($f in $files) {
@@ -893,6 +900,7 @@ function Write-OutsideRootReport {
     foreach ($m in [regex]::Matches($txt, '[A-Za-z]:[\\/][^"\s,;:}{\[\]]+')) {
       $raw = $m.Value
       $p = $raw.Replace('\', '/')
+      if ($p -match '://') { continue }   # s://1v3.apiipu.com 这种是正则把协议头当成了盘符
       $pn = $p.ToLowerInvariant()
       $inside = $false
       foreach ($r in $norm) { if ($r -and ($pn -eq $r -or $pn.StartsWith($r + '/') -or $pn.StartsWith($r + '\'))) { $inside = $true; break } }
@@ -909,9 +917,32 @@ function Write-OutsideRootReport {
     if (Test-Path -LiteralPath $reportPath) { try { Remove-Item -LiteralPath $reportPath -Force } catch { } }
     return
   }
-  $obj = [ordered]@{ at = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'); total = $items.Count; items = @($items) }
+  # 记下「这份配置是哪台机器写的、写它时各根是什么值」：面板靠它判断这份清单该不该在本机显示，
+  # 也靠对方的根值把远端的绝对路径映射成本机路径（推荐地址就是这么算出来的）。
+  $machine = ''
+  try { $machine = [string]$env:COMPUTERNAME } catch { }
+  $customOut = [ordered]@{}
+  if ($rr.custom) {
+    if ($rr.custom -is [System.Collections.IDictionary]) {
+      foreach ($k in @($rr.custom.Keys)) { $customOut[[string]$k] = [string]$rr.custom[$k] }
+    } else {
+      foreach ($pp in @($rr.custom.PSObject.Properties)) { $customOut[[string]$pp.Name] = [string]$pp.Value }
+    }
+  }
+  $obj = [ordered]@{
+    at = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
+    machine = $machine
+    roots = [ordered]@{
+      appRoot = [string]$rr.appRoot
+      dshHome = [string]$rr.dshHome
+      workspaceHome = [string]$rr.workspaceHome
+      custom = $customOut
+    }
+    total = $items.Count
+    items = @($items)
+  }
   [IO.File]::WriteAllText($reportPath, ($obj | ConvertTo-Json -Depth 5), (New-Object Text.UTF8Encoding($false)))
-  Warn ("有 " + $items.Count + " 处绝对路径不在任何已确认根下：换机器拉取后会指向不存在的目录。")
+  Warn ("有 " + $items.Count + " 处配置里的绝对路径不在任何已确认根下：换机器拉取时面板会给出推荐目录。")
   Warn ("  清单：" + $reportPath + "（面板「本机路径」卡会列出来）")
   foreach ($it in @($items | Select-Object -First 5)) { Warn ("  - " + $it.file + " → " + $it.path) }
   if ($items.Count -gt 5) { Warn ("  …还有 " + ($items.Count - 5) + " 处") }

@@ -1008,12 +1008,16 @@ async function inspect(config) {
       const absDoc = readJson(absolutePathsPathOf(dshHome)) || {}
       const ovDoc = readJson(overwritePathOf(dshHome)) || {}
       const pending = countItems(pendingDoc, 'missing')
-      const absolute = countItems(absDoc, 'items')
+      // 根外路径清单是「推送时」capture 写下来的：本机自己推的，本机这些路径当然都在，
+      // 不该算告警。只有清单来自另一台机器（本机是接收方）时才是真问题，才计入告警数。
+      const absMachine = String(absDoc.machine || '')
+      const absFromOther = Boolean(absMachine) && Boolean(localMachineName()) && !sameMachine(absMachine, localMachineName())
+      const absolute = absFromOther ? countItems(absDoc, 'items') : 0
       const overwrite = countItems(ovDoc, 'items')
-      // 三类都算告警（0.3.40）：待确认路径、仓库里的根外绝对路径、被覆盖的本机配置。
+      // 三类都算告警（0.3.40）：待确认路径、仓库里的根外绝对路径（限别的机器写的）、被覆盖的本机配置。
       // alert 与 total 目前同值，字段分开留着：面板只看 alert，以后要拆开也不用改前端。
       const total = pending + absolute + overwrite
-      return { pending, absolute, overwrite, alert: total, total }
+      return { pending, absolute, overwrite, alert: total, total, absMachine, absFromOtherMachine: absFromOther }
     })(),
     auto: {
       pull: settings.autoPull === true,
@@ -3091,6 +3095,99 @@ function pendingPathOf(dshHome) { return join(dshHome, 'config-sync-pending-path
 function absolutePathsPathOf(dshHome) { return join(dshHome, 'config-sync-absolute-paths.json') }
 function overwritePathOf(dshHome) { return join(dshHome, 'config-sync-overwrite.json') }
 
+/**
+ * 本机机器名：和 capture.ps1 写报告时用的 $env:COMPUTERNAME 对得上。
+ * 报告里带着 machine，面板据此判断「这份配置是别的机器写的」——只有那种情况才该提示跨机路径。
+ */
+function localMachineName() {
+  try { return String(hostname() || '') } catch { return '' }
+}
+function sameMachine(a, b) {
+  const x = String(a || '').trim().toLowerCase()
+  const y = String(b || '').trim().toLowerCase()
+  return Boolean(x) && Boolean(y) && x === y
+}
+
+/** 路径比较用：统一斜杠、折叠重复斜杠、去尾斜杠、转小写（Windows 不区分大小写） */
+function pathKeyOf(p) {
+  return String(p == null ? '' : p).replace(/\\/g, '/').replace(/\/+/g, '/').replace(/\/$/, '').toLowerCase()
+}
+
+/**
+ * 给仓库里一条根外绝对路径，算「这台机器上应该在哪个目录」。
+ * 两种依据，从准到糙：
+ *   1) root  —— 报告里记着对方那台机器的根值，前缀命中就换成本机的同名根（精确映射）
+ *   2) namesake —— 没有根可换，就按最后一级目录名在本机常见位置找同名目录（启发式）
+ * 都不中就返回 kind='none'，面板只说「本机没有等价目录」，不乱指地方。
+ */
+function suggestLocalPathFor(remotePath, report, ctx) {
+  const rp = String(remotePath || '')
+  if (!rp) return { path: '', kind: 'none', note: '', remoteRoot: '', rest: '' }
+  // 分段保留原大小写（Windows 路径不敏感，但推荐结果要写成 D:\DSH\SquadLink 这种原样，
+  // 不能因为比较时转小写就把 SquadLink 推荐成 squadlink）
+  const segOrig = rp.replace(/\\/g, '/').replace(/\/+/g, '/').replace(/\/$/, '').split('/').filter(Boolean)
+  const remoteRoots = (report && report.roots && typeof report.roots === 'object') ? report.roots : {}
+  const pairs = []
+  const addPair = (remoteValue, localValue) => {
+    const rk = pathKeyOf(remoteValue)
+    if (rk && localValue) pairs.push({ rk: rk.split('/').filter(Boolean), local: String(localValue) })
+  }
+  addPair(remoteRoots.appRoot, ctx.appRoot)
+  addPair(remoteRoots.dshHome, ctx.dshHome)
+  addPair(remoteRoots.workspaceHome, ctx.workspaceHome)
+  const remoteCustom = (remoteRoots.custom && typeof remoteRoots.custom === 'object') ? remoteRoots.custom : {}
+  for (const [k, v] of Object.entries(remoteCustom)) addPair(v, (ctx.custom || {})[k] || '')
+  // 最长前缀优先：工作区根比客户端安装目录更具体
+  pairs.sort((a, b) => b.rk.length - a.rk.length)
+  for (const pair of pairs) {
+    if (pair.rk.length > segOrig.length) continue
+    if (!pair.rk.every((seg, i) => seg === segOrig[i].toLowerCase())) continue
+    const rest = segOrig.slice(pair.rk.length)
+    const target = rest.length ? join(pair.local, ...rest) : pair.local
+    return {
+      path: target,
+      kind: 'root',
+      remoteRoot: segOrig.slice(0, pair.rk.length).join('/'),
+      rest: rest.join('/'),
+      note: t('按对方机器的根映射到本机同名根', 'mapped onto this machine\'s same root'),
+    }
+  }
+  const leaf = segOrig[segOrig.length - 1] || ''
+  if (leaf && /^[A-Za-z0-9._-]+$/.test(leaf) && leaf.includes('.')) {
+    // 最后一段是文件名，不算目录名，不猜
+    return { path: '', kind: 'none', note: '', remoteRoot: '', rest: '', leaf }
+  }
+  if (leaf) {
+    for (const base of (ctx.candidates || [])) {
+      if (!base) continue
+      const cand = join(base, leaf)
+      try { if (existsSync(cand)) return { path: cand, kind: 'namesake', leaf, note: t('本机有同名目录', 'a same-named folder exists here'), remoteRoot: '', rest: '' } } catch { }
+    }
+  }
+  return { path: '', kind: 'none', note: '', remoteRoot: '', rest: '', leaf }
+}
+
+/** 猜同名目录时本机该去哪儿找：本机的几个根、用户主目录、桌面、各固定盘根、已确认的自选目录 */
+function candidateParentDirs(localRoots) {
+  const out = []
+  const push = (p) => {
+    const s = String(p == null ? '' : p).trim()
+    if (s && !out.some((x) => pathKeyOf(x) === pathKeyOf(s))) out.push(s)
+  }
+  const r = localRoots || {}
+  push(r.appRoot)
+  push(r.workspaceHome)
+  try { push(homedir()) } catch { }
+  try { push(join(homedir(), 'Desktop')) } catch { }
+  for (const letter of ['C', 'D', 'E', 'F', 'G']) {
+    const root = `${letter}:\\`
+    try { if (existsSync(root)) push(root) } catch { }
+  }
+  for (const v of Object.values(r.custom || {})) push(v)
+  return out
+}
+
+
 /** 工作区根：本机工作区一般建在同一层，取登记表里出现最多的那个父目录 */
 function guessWorkspaceHome(dshHome) {
   const list = workspaceRoots(dshHome)
@@ -3132,23 +3229,25 @@ async function handleRoots(req, res, config) {
       const absItems = Array.isArray(absReport.items) ? absReport.items : []
       const ovReport = readJson(overwritePathOf(dshHome)) || {}
       const ovItems = Array.isArray(ovReport.items) ? ovReport.items : []
+      // 本机这几个根：推荐路径就是拿它们跟报告里「对方机器的根」对出来的
+      const localRoots = {
+        appRoot: saved.appRoot || detected.appRoot,
+        dshHome: saved.dshHome || detected.dshHome,
+        workspaceHome: saved.workspaceHome || detected.workspaceHome,
+        custom: (() => {
+          // 用户主目录能自动探测，不用问人：工作区建在 Documents\deepseek-harness 下时靠它展开
+          const c = saved.custom && typeof saved.custom === 'object' ? { ...saved.custom } : {}
+          let home = ''
+          try { home = homedir() } catch { }
+          if (home && !c.userHome) c.userHome = home
+          return c
+        })(),
+      }
       sendJson(res, 200, {
         ok: true,
-        roots: {
-          appRoot: saved.appRoot || detected.appRoot,
-          dshHome: saved.dshHome || detected.dshHome,
-          workspaceHome: saved.workspaceHome || detected.workspaceHome,
-          custom: (() => {
-            // 用户主目录能自动探测，不用问人：工作区建在 Documents\deepseek-harness 下时靠它展开
-            const c = saved.custom && typeof saved.custom === 'object' ? { ...saved.custom } : {}
-            let home = ''
-            try { home = homedir() } catch { }
-            if (home && !c.userHome) c.userHome = home
-            return c
-          })(),
-          confirmed: Array.isArray(saved.confirmed) ? saved.confirmed : [],
-          updatedAt: saved.updatedAt || '',
-        },
+        roots: localRoots,
+        confirmed: Array.isArray(saved.confirmed) ? saved.confirmed : [],
+        updatedAt: saved.updatedAt || '',
         detected,
         missing: missing.map((m) => ({
           token: String(m.token || ''),
@@ -3156,12 +3255,42 @@ async function handleRoots(req, res, config) {
           label: String(m.label || ''),
           hint: String(m.hint || tokenHint(m.token)),
         })),
-        // 根外绝对路径：这些路径不在任何已确认根下，换机器拉取会指向不存在的目录
-        absolutePaths: {
-          at: String(absReport.at || ''),
-          total: absItems.length,
-          items: absItems.slice(0, 20).map((it) => ({ file: String(it.file || ''), path: String(it.path || '') })),
-        },
+        // 根外绝对路径：只有「这份配置是另一台机器写的」才是问题——本机推出去的路径在本机当然存在，
+        // 那条清单在本机显示只会误导（0.3.43 起按 machine 判断，并逐条给本机推荐目录）
+        absolutePaths: (() => {
+          const machine = String(absReport.machine || '')
+          const localMachine = localMachineName()
+          const fromOtherMachine = Boolean(machine) && Boolean(localMachine) && !sameMachine(machine, localMachine)
+          const candidates = candidateParentDirs(localRoots)
+          const adoptedKeys = new Set(Object.values(localRoots.custom || {}).map(pathKeyOf))
+          const items = absItems.slice(0, 20).map((it) => {
+            const remotePath = String(it.path || '')
+            const sug = suggestLocalPathFor(remotePath, absReport, { ...localRoots, candidates })
+            const suggestPath = sug.kind === 'none' ? '' : sug.path
+            return {
+              file: String(it.file || ''),
+              path: remotePath,
+              suggest: suggestPath,
+              suggestKind: sug.kind,
+              suggestNote: sug.note || '',
+              // 采纳时用的自选目录 key：目录名去扩展名；取不到就 dir
+              suggestKey: String(sug.leaf || (sug.rest || '').split('/').filter(Boolean).pop() || 'dir').replace(/\.[A-Za-z0-9]{1,8}$/, '').replace(/[^A-Za-z0-9_.-]/g, '') || 'dir',
+              adopted: Boolean(suggestPath) && adoptedKeys.has(pathKeyOf(suggestPath)),
+              remoteRoot: sug.remoteRoot || '',
+              rest: sug.rest || '',
+            }
+          })
+          return {
+            at: String(absReport.at || ''),
+            machine,
+            localMachine,
+            fromOtherMachine,
+            total: absItems.length,
+            items,
+            suggested: items.filter((x) => x.suggest).length,
+            adoptedCount: items.filter((x) => x.adopted).length,
+          }
+        })(),
         // 上次拉取覆盖了哪些本机配置（含备份路径）：本机有未推送改动时会出现
         overwrite: {
           at: String(ovReport.at || ''),
