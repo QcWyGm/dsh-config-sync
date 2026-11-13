@@ -56,7 +56,7 @@ The layout is "one status row + one metric strip + section cards", read top to b
 
 **Metric strip**: five cells at a glance — `App / contract` (turns orange when they disagree), `bundle` (red when something is unresolvable), `Dependencies` (red when something is missing), `Snapshots` (count) and `Last sync` (time, with `(+N)` for files written after it). A "to-do" card appears below only when there is something to fix.
 
-**Sections**: Overview (strip + to-do) → Local paths (since 0.3.30: cross-machine root confirmation and the pending list; since 0.3.34 a read-only view with an Edit button) → Sync conflicts (only when there really are some) → Sync targets (Local / Cloud repo) → Automation & plugin update → After exit → Restore backup → Sync content → Feedback (since 0.3.31). Two columns on wide screens, and each card keeps text to "one value line + one grey hint line" instead of long prose.
+**Sections**: Overview (strip + to-do) → Local paths (since 0.3.30: cross-machine root confirmation and the pending list; since 0.3.34 a read-only view with an Edit button; since 0.3.37 **the whole section stays hidden** unless something needs attention or you click the "Local paths" button in the title row) → Sync conflicts (only when there really are some) → Sync targets (Local / Cloud repo) → Automation & plugin update → After exit → Restore backup → Sync content → Feedback (since 0.3.31). Two columns on wide screens, and each card keeps text to "one value line + one grey hint line" instead of long prose.
 
 **Consistent interaction**: Local paths / Local repo / Cloud repo / Auto sync / Plugin update / Sync content all start **read-only** and unlock on Edit; Save commits, Cancel drops the draft. Only cards that were never configured (no repo, no remote) stay in edit mode with no Cancel - without those values nothing can be pushed, pulled or generated. The Local paths card is also forced into edit mode when no root was detected at all.
 
@@ -214,13 +214,15 @@ Two machines rarely share drive letters (one has `D:\DeepSeekHarness`, the other
 
 **Before a pull** (`apply.ps1`, ahead of writing settings): laying configs down is a whole-file `WriteAllText`, so editing a path and pulling before pushing silently overwrites your edit (the backup exists under `<dshHome>\backups\config-<stamp>\settings\`, but nobody digs through that). So the overwrite is now detected first: the local file is normalised the same way capture writes it (roots → placeholders, CRLF flattened to LF, and `catalogSyncedAt` / `reloadedAt` / `reloadCount` in `our-free-model.json` zeroed), compared against the repo copy, and every difference is recorded in `<dshHome>\config-sync-overwrite.json`. The panel then says "N config files were overwritten by the repo version (your local edits were backed up first)", with the backup path per item. To keep your edits: **push first, then pull** - never the other way round.
 
-### How the Local paths card works (since 0.3.34: read-only + Edit)
+### How the Local paths card works (since 0.3.34: read-only + Edit; since 0.3.37: hidden by default)
 
+- **It takes no room when there is nothing to say**: with no warnings the card (and the whole "Local paths" section title) is not rendered at all - on a normal machine the paths are not meant to be edited. It appears by itself in exactly three cases: configs skipped during the last pull (paths still to confirm), absolute paths in the repo that fall outside every root (dead on another machine), and configs the last pull overwrote locally. To edit paths deliberately (new machine, adding a custom root) use the **Local paths** button in the page title row to bring the card back, and the same button to hide it again.
 - **Read-only by default**: the three roots (`{{APP_ROOT}}` / `{{DSH_HOME}}` / `{{WORKSPACE_HOME}}`) show their current value in a monospace line with the placeholder as a grey hint underneath; custom folders (`{{ROOT:<key>}}`) render the same way.
 - Click **Edit** (top right) to turn them into inputs, which brings up Save and Cancel; a successful save returns to the read-only view - the same pattern as Local repo and Sync content.
-- In edit mode two extras appear: a **Remove** button next to each custom folder, and an **Add folder** row (key + path, key limited to letters, digits, `_ . -`) for roots that live elsewhere on this machine.
+- In edit mode three extras appear: a **Detected** button next to each root (fills in the auto-detected folder - this is how you undo a wrong value), a **Remove** button next to each custom folder, and an **Add folder** row (key + path, key limited to letters, digits, `_ . -`) for roots that live elsewhere on this machine.
 - The chip in the card head is orange "N to confirm" while something is pending, green "Confirmed" when everything resolves; **Reload** is always available and re-reading detected values never overwrites what you confirmed.
 - If not a single root was detected, the card stays in edit mode - fill them in before saving.
+- Values here **win over everything**: a saved root outranks the value the script detected on its command line (`Get-SyncRoots` prefers roots.json and only fills the gaps). A wrong value therefore does not "fail to apply" - it applies, expanding placeholders into a dead folder.
 
 ## Feedback goes to GitHub Issues (since 0.3.31, token-free reading since 0.3.32)
 

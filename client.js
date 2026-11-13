@@ -1545,6 +1545,9 @@ window.__ModuleLoader__.load({
       const [updToken, setUpdToken] = react.useState('')
       const [updMsg, setUpdMsg] = react.useState('')
       const [updErr, setUpdErr] = react.useState('')
+      // 「本机路径」平时不占版面：只在有待确认 / 根外路径 / 被覆盖这类事时才自己冒出来；
+      // 想主动改路径就点标题行的「本机路径」按钮强制展开。
+      const [showRoots, setShowRoots] = react.useState(false)
       // 定时器放 ref 里：数据每刷新一次 effect 就会重跑，若在 effect 里 return 清理函数，
       // 会把还没到点的"5 秒后消失"定时器一起清掉，提示就一直挂在屏幕上。
       const toastTimer = react.useRef(null)
@@ -1994,7 +1997,8 @@ window.__ModuleLoader__.load({
       // 「同步内容」卡自己拉 /config-sync/scope，不依赖 status（status 读的是仓库与本机，跟勾选无关）
       const scopeCard = h(ScopeCard, {})
       // 「本机路径」与「问题反馈」自己持有数据（roots 文件是本机私有，feedback 在仓库里）
-      const rootsCard = h(RootsCard, { onRootsSaved: refresh })
+      // 本机路径卡平时返回 null（没告警就不占版面），标题行按钮可强制展开
+      const rootsCard = h(RootsCard, { onRootsSaved: refresh, forceShow: showRoots })
       const feedbackCard = h(FeedbackCard, {})
       // 冲突卡只在真有清单时才出现：没冲突就不占版面
       const conflictCard = data && data.conflicts && data.conflicts.exists
@@ -2012,6 +2016,9 @@ window.__ModuleLoader__.load({
             h('span', { style: { ...S.footnote, marginLeft: '4px' } }, M('云端', 'cloud')),
             h('span', { style: chipStyle(cloudLine.kind) }, cloudLabel),
             h('div', { style: { flex: 1, minWidth: '8px' } }, null),
+            // 平时不显示的「本机路径」卡，从这里手动叫出来（换机器、要加自选目录时用）
+            h('button', { type: 'button', style: S.btn, onClick: () => setShowRoots((v) => !v) },
+              showRoots ? M('收起本机路径', 'Hide local paths') : M('本机路径', 'Local paths')),
             h('button', { type: 'button', style: S.btn, disabled: busy, onClick: refresh },
               busy ? M('检测中…', 'Checking…') : M('重新检测', 'Re-check')),
           ),
@@ -2132,7 +2139,13 @@ window.__ModuleLoader__.load({
         } finally { setBusy(false) }
       }
 
+      // 平时不露面：只有「有待确认路径 / 仓库里有根外绝对路径 / 上次拉取覆盖了本机配置」这三种事
+      // 才自己冒出来；用户点标题行的「本机路径」也可强制展开。没内容时 Section 会连标题一起消失。
       const missing = (data && data.missing) || []
+      const absTotal = (data && data.absolutePaths && data.absolutePaths.total) || 0
+      const ovTotal = (data && data.overwrite && data.overwrite.total) || 0
+      const hasProblem = !!data && (missing.length > 0 || absTotal > 0 || ovTotal > 0)
+      if (!data || !(hasProblem || isEditing || (props && props.forceShow))) return null
       const rootRows = [
         { key: 'appRoot', label: M('客户端安装目录', 'Client install root'), token: '{{APP_ROOT}}', ph: 'D:\\DeepSeekHarness' },
         { key: 'dshHome', label: M('.dsh 目录', '.dsh folder'), token: '{{DSH_HOME}}', ph: 'C:\\Users\\<user>\\.dsh' },
