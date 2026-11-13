@@ -1997,8 +1997,10 @@ window.__ModuleLoader__.load({
       // 「同步内容」卡自己拉 /config-sync/scope，不依赖 status（status 读的是仓库与本机，跟勾选无关）
       const scopeCard = h(ScopeCard, {})
       // 「本机路径」与「问题反馈」自己持有数据（roots 文件是本机私有，feedback 在仓库里）
-      // 本机路径卡平时返回 null（没告警就不占版面），标题行按钮可强制展开
-      const rootsCard = h(RootsCard, { onRootsSaved: refresh, forceShow: showRoots })
+      // 这一区平时不进页面：只有标题行的按钮被点开才渲染；有没有待处理项由 status.localPaths 给，
+      // 数量挂在那个按钮上（橙色 + 数字），不用把整张卡摊在页面上当提示。
+      const lpTotal = (data && data.localPaths && data.localPaths.total) || 0
+      const rootsCard = showRoots ? h(RootsCard, { onRootsSaved: refresh }) : null
       const feedbackCard = h(FeedbackCard, {})
       // 冲突卡只在真有清单时才出现：没冲突就不占版面
       const conflictCard = data && data.conflicts && data.conflicts.exists
@@ -2016,9 +2018,22 @@ window.__ModuleLoader__.load({
             h('span', { style: { ...S.footnote, marginLeft: '4px' } }, M('云端', 'cloud')),
             h('span', { style: chipStyle(cloudLine.kind) }, cloudLabel),
             h('div', { style: { flex: 1, minWidth: '8px' } }, null),
-            // 平时不显示的「本机路径」卡，从这里手动叫出来（换机器、要加自选目录时用）
-            h('button', { type: 'button', style: S.btn, onClick: () => setShowRoots((v) => !v) },
-              showRoots ? M('收起本机路径', 'Hide local paths') : M('本机路径', 'Local paths')),
+            // 「本机路径」区唯一的入口：平时只是个普通按钮，有待处理项时变橙色并带上数字
+            h('button', {
+              type: 'button',
+              style: (!showRoots && lpTotal > 0)
+                ? { ...S.btn, color: 'var(--dsw-alias-state-warn-primary)', borderColor: 'var(--dsw-alias-state-warn-primary)' }
+                : S.btn,
+              title: (!showRoots && lpTotal > 0)
+                ? M('本机路径有需要确认或处理的项目，点开查看', 'Some local paths need review - click to open')
+                : M('查看本机路径与占位符的对照', 'Show local paths and their placeholders'),
+              onClick: () => setShowRoots((v) => !v),
+            },
+              showRoots
+                ? M('收起本机路径', 'Hide local paths')
+                : (lpTotal > 0
+                  ? M(`本机路径 · ${lpTotal} 项待处理`, `Local paths · ${lpTotal} to review`)
+                  : M('本机路径', 'Local paths'))),
             h('button', { type: 'button', style: S.btn, disabled: busy, onClick: refresh },
               busy ? M('检测中…', 'Checking…') : M('重新检测', 'Re-check')),
           ),
@@ -2139,13 +2154,10 @@ window.__ModuleLoader__.load({
         } finally { setBusy(false) }
       }
 
-      // 平时不露面：只有「有待确认路径 / 仓库里有根外绝对路径 / 上次拉取覆盖了本机配置」这三种事
-      // 才自己冒出来；用户点标题行的「本机路径」也可强制展开。没内容时 Section 会连标题一起消失。
+      // 这一区显不显示由父层决定（标题行那个按钮），组件自己不吞自己：
+      // 以前在这里 return null，Section 收到的仍是 React 元素、照样渲染分区标题，
+      // 页面上就留下一个空标题——那正是 0.3.37 要修掉的显示问题。
       const missing = (data && data.missing) || []
-      const absTotal = (data && data.absolutePaths && data.absolutePaths.total) || 0
-      const ovTotal = (data && data.overwrite && data.overwrite.total) || 0
-      const hasProblem = !!data && (missing.length > 0 || absTotal > 0 || ovTotal > 0)
-      if (!data || !(hasProblem || isEditing || (props && props.forceShow))) return null
       const rootRows = [
         { key: 'appRoot', label: M('客户端安装目录', 'Client install root'), token: '{{APP_ROOT}}', ph: 'D:\\DeepSeekHarness' },
         { key: 'dshHome', label: M('.dsh 目录', '.dsh folder'), token: '{{DSH_HOME}}', ph: 'C:\\Users\\<user>\\.dsh' },

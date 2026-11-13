@@ -951,6 +951,21 @@ async function inspect(config) {
       settingsPath: settingsPath(dshHome),
     },
     paths: { appRoot, dshHome, profileDir },
+    // 「本机路径」区平时不在页面上出现（0.3.37）。面板靠这三个计数决定标题行按钮是不是该变橙色，
+    // 所以计数必须在 status 里给出——不能等用户把那一区点开才知道有没有事。
+    localPaths: (() => {
+      const countItems = (doc, key) => {
+        const list = doc && Array.isArray(doc[key]) ? doc[key] : []
+        return list.length
+      }
+      const pendingDoc = readJson(pendingPathOf(dshHome)) || {}
+      const absDoc = readJson(absolutePathsPathOf(dshHome)) || {}
+      const ovDoc = readJson(overwritePathOf(dshHome)) || {}
+      const pending = countItems(pendingDoc, 'missing')
+      const absolute = countItems(absDoc, 'items')
+      const overwrite = countItems(ovDoc, 'items')
+      return { pending, absolute, overwrite, total: pending + absolute + overwrite }
+    })(),
     auto: {
       pull: settings.autoPull === true,
       push: settings.autoPush === true,

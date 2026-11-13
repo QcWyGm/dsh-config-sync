@@ -1258,6 +1258,27 @@ console.log('== 跨机路径占位符与问题反馈 ==')
   })(), '没拦住')
 }
 
+// 0.3.37：本机路径区默认不进页面，入口只有一个标题行按钮
+console.log('')
+console.log('== 0.3.37：本机路径区默认不进页面 ==')
+{
+  const index37 = readFileSync(join(pluginRootSelf, 'index.js'), 'utf8')
+  const client37 = readFileSync(join(pluginRootSelf, 'client.js'), 'utf8')
+  check('status 给出三个待处理计数（面板据此决定按钮要不要变橙）',
+    /localPaths: \(\(\) => \{/.test(index37)
+    && /return \{ pending, absolute, overwrite, total: pending \+ absolute \+ overwrite \}/.test(index37),
+    'status 没给 localPaths 计数：面板只能把整张卡摊在页面上当提示')
+  check('本机路径区只由标题行按钮控制（组件不再自己 return null）',
+    /const rootsCard = showRoots \? h\(RootsCard, \{ onRootsSaved: refresh \}\) : null/.test(client37)
+    && !/props\.forceShow/.test(client37),
+    '显示条件不在父层：组件 return null 时 Section 仍会渲染空标题')
+  const st37 = JSON.parse((await call('/config-sync/status', { headers: { host: 'localhost:3080' } })).body || '{}')
+  check('status 运行时真的带 localPaths 计数（面板按钮靠它变橙）',
+    Boolean(st37.localPaths) && typeof st37.localPaths.total === 'number'
+    && typeof st37.localPaths.pending === 'number',
+    JSON.stringify(st37.localPaths))
+}
+
 console.log('')
 console.log(failures === 0 ? '结论：全部通过' : `结论：${failures} 项失败`)
 process.exit(failures === 0 ? 0 : 1)

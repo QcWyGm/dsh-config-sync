@@ -235,12 +235,12 @@ try {
   check('打开面板会自动检查云端（无手动点击也会跑 check）', /callAuto\(\{ action: 'check'/.test(source))
   check('云端状态在标题行右侧（自动检查，靠徽标红绿显示，无手动按钮）',
     source.includes('云端检查中') && source.includes('云端与本机不一致') && !source.includes('立即检查'))
-  check('本机路径卡平时不渲染（只在有告警或主动展开时出现）',
-    source.includes('const hasProblem = !!data && (missing.length > 0 || absTotal > 0 || ovTotal > 0)') &&
-    source.includes('if (!data || !(hasProblem || isEditing || (props && props.forceShow))) return null'),
-    '缺 hasProblem / 提前 return null')
-  check('标题行有「本机路径」按钮可强制展开',
-    source.includes("showRoots ? M('收起本机路径', 'Hide local paths') : M('本机路径', 'Local paths')"))
+  check('本机路径区默认不进页面（只有标题行按钮点开才渲染）',
+    source.includes('const rootsCard = showRoots ? h(RootsCard, { onRootsSaved: refresh }) : null') &&
+    !source.includes('props.forceShow'),
+    '缺 showRoots 三元 / 仍留着 forceShow')
+  check('标题行按钮把待处理数量挂在文案上',
+    source.includes('项待处理') && source.includes('data.localPaths && data.localPaths.total'))
 } catch (e) {
   check('体检数据字段齐全', false, String(e && e.message))
 }
