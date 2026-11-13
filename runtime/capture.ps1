@@ -871,7 +871,7 @@ function Write-OutsideRootReport {
     if ($rr.custom -is [System.Collections.IDictionary]) {
       foreach ($k in @($rr.custom.Keys)) {
         $v = [string]$rr.custom[$k]
-        if ($v) { [void]$norm.Add((v.Replace('\', '/').TrimEnd('/')).ToLowerInvariant()) }
+        if ($v) { [void]$norm.Add(($v.Replace('\', '/').TrimEnd('/')).ToLowerInvariant()) }
       }
     } else {
       foreach ($p in @($rr.custom.PSObject.Properties)) {

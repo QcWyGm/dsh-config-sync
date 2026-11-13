@@ -595,6 +595,15 @@ if (prevScope === null) { try { unlinkSync(scopeFile) } catch { } } else writeFi
     syncSrc.includes('说明-README.txt') && syncSrc.includes('清单-Conflicts.json'), 'sync.ps1')
   check('冲突备份：每项都记录两份副本是否备份成功（面板据此置灰按钮）',
     syncSrc.includes('localSaved') && syncSrc.includes('cloudSaved'), 'sync.ps1')
+  // 0.3.42：初始化推送的两个拦路虎（都是实测撞出来的，不能让它们再回来）
+  check('初始化推送不会被自己刚写进去的内容挡住（认识同步仓库的标志文件）',
+    syncSrc.includes('$isSyncRepo') && syncSrc.includes("Join-Path $RepoRoot 'dsh-sync-common.ps1'"),
+    'sync.ps1 的 stray 判据又只认空目录了')
+  const captureScript42 = [join(pluginRoot, 'runtime', 'capture.ps1'), join(pluginRoot, 'capture.ps1'), join(repoRoot, 'capture.ps1')].find((p) => existsSync(p)) || ''
+  const captureSrc42 = captureScript42 ? readFileSync(captureScript42, 'utf8') : ''
+  check('根外路径体检里没有漏写 $ 的变量（(v.Replace 会被当成命令执行）',
+    Boolean(captureSrc42) && !/\(\s*v\.Replace\(/.test(captureSrc42) && captureSrc42.includes('($v.Replace('),
+    captureScript42 || 'capture.ps1')
   // 重启客户端必须脱离进度窗口的控制台/作业，否则手动关窗口会把刚重启的客户端一起带走。
   const postExit = [join(pluginRoot, 'runtime', 'post-exit.ps1'), join(pluginRoot, 'post-exit.ps1'), join(repoRoot, 'post-exit.ps1')].find((p) => existsSync(p)) || ''
   const postExitSrc = postExit ? readFileSync(postExit, 'utf8') : ''

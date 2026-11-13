@@ -530,6 +530,15 @@ function Initialize-EmptyRepo([string]$RemoteUrl) {
     }
   }
   if ($copied -gt 0) { Ok "已写入仓库骨架：$copied 个执行体（apply / capture / sync / restore / post-exit / common）" }
+  # tools\fix-session-cwd.mjs 也随仓库同步（apply 在没有插件副本时会用它修会话工作目录），
+  # 初始化骨架漏掉它，配置仓库就永远缺这一份，自检的逐字节一致性断言也会一直红。
+  $toolSrc = Join-Path (Join-Path $PSScriptRoot 'tools') 'fix-session-cwd.mjs'
+  if (Test-Path -LiteralPath $toolSrc) {
+    $toolDst = Join-Path $RepoRoot 'tools'
+    if (-not (Test-Path -LiteralPath $toolDst)) { New-Item -ItemType Directory -Path $toolDst -Force | Out-Null }
+    Copy-Item -LiteralPath $toolSrc -Destination (Join-Path $toolDst 'fix-session-cwd.mjs') -Force
+    Ok "已写入仓库骨架：tools\fix-session-cwd.mjs"
+  }
 
   $contractPath = Join-Path $RepoRoot 'profile\host-contract.json'
   if (-not (Test-Path -LiteralPath $contractPath)) {
@@ -628,9 +637,17 @@ if ($Action -eq 'push') {
       $stray = @(Get-ChildItem -LiteralPath $RepoRoot -Force |
         Where-Object { -not $_.Name.StartsWith('.') -and $_.Name -notmatch '^同步-[\s\S]*\.cmd$' })
       if ($stray.Count -gt 0) {
-        Warn ("这个目录不是空的（{0} 项：{1}），也不像 dsh-config 仓库：{2}" -f `
-          $stray.Count, (($stray | Select-Object -First 3 | ForEach-Object { $_.Name }) -join '、'), $RepoRoot)
-        Die "已停止（未抓取、未提交、未推送）。请在面板「本机仓库」里重新设路径。"
+        # 例外：配置仓库本身就带本插件的脚本（clone 下来的仓库里一直有 sync.ps1 / capture.ps1 /
+        # dsh-sync-common.ps1）。初始化推送更常见——capture 刚把 16 项配置写进来，目录当然非空。
+        # 真填错路径（桌面、下载目录）不会有这些脚本，所以拿它们当「这是同步仓库」的凭据。
+        $isSyncRepo = (Test-Path -LiteralPath (Join-Path $RepoRoot 'dsh-sync-common.ps1')) -or
+                      (Test-Path -LiteralPath (Join-Path $RepoRoot 'sync.ps1')) -or
+                      (Test-Path -LiteralPath (Join-Path $RepoRoot 'capture.ps1'))
+        if (-not $isSyncRepo) {
+          Warn ("这个目录不是空的（{0} 项：{1}），也不像 dsh-config 仓库：{2}" -f `
+            $stray.Count, (($stray | Select-Object -First 3 | ForEach-Object { $_.Name }) -join '、'), $RepoRoot)
+          Die "已停止（未抓取、未提交、未推送）。请在面板「本机仓库」里重新设路径。"
+        }
       }
     }
     $headsForPush = Get-RemoteHeads $remoteUrlForPush

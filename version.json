@@ -1,9 +1,9 @@
 {
-  "version": "0.3.41",
+  "version": "0.3.42",
   "releasedAt": "2026-11-14",
-  "notes": "0.3.41：修「几率性读取失败」。真凶是面板每次刷新都在递归统计整个备份目录——92 份快照 / 4.8 万个文件逐个 stat，实测 7.7 秒，加上远端探测 2.5 秒，整次 /config-sync/status 要 11 秒，前端那一次 fetch 撑不住就报「读取失败」。现在：备份列表只给 名字/时间/插件数/能否还原（体积交给资源管理器）；远端探测缓存 5 分钟、每次最多等 2.5 秒、插件装载时预热；前端 status 带 15 秒超时 + 3 次自动重试。实测中位 0.35 秒（原 8.0 秒）。",
-  "notesEn": "0.3.41: fixes the intermittent \"read failed\". The culprit was the panel re-walking the whole backup folder on every refresh - 92 snapshots / 48k files, stat by stat, 7.7 s, plus a 2.5 s remote probe, pushing /config-sync/status to 11 s so a single front-end fetch did not survive it. Now: the snapshot list shows name / time / plugin count / restorability only (sizes belong in Explorer); the remote probe is cached for 5 minutes, capped at 2.5 s and warmed up when the plugin loads; the front-end status call has a 15 s timeout plus 3 automatic retries. Median measured: 0.35 s (was 8.0 s).",
-  "tgz": "releases/dsh-config-sync-0.3.41.tgz",
-  "sha256":"e56d1a31133f1580ac914fa5ccecdc5644643c2383ed5b21f383abaca5c56bd5",
+  "notes": "0.3.42：修「初始化推送推不完」。两个都是实测撞出来的坑：①capture.ps1 根外路径体检里漏写一个 $（`(v.Replace(...)` 被 PowerShell 当成命令 v.Replace 执行），只在配置里有自定义根时触发，日志里就是「无法将\"v.Replace\"项识别为 cmdlet」，整次 push 当场失败；②sync.ps1 把「仓库目录不是空的」当成「路径填错了」，可初始化推送时 capture 刚把 16 项配置写进仓库，它被自己的产物挡住直接退出。现在判据换成「仓库里有本插件的脚本（dsh-sync-common.ps1 / sync.ps1 / capture.ps1 任一）就算同步仓库」，只有真填错路径（桌面、下载目录）才拦。顺带把 tools\\fix-session-cwd.mjs 也写进初始化骨架，仓库副本与插件 runtime 从此逐字节一致。",
+  "notesEn": "0.3.42: fixes \"Initialize push never finishes\". Two traps found by actually running it: (1) capture.ps1's outside-root path report was missing a $ - `(v.Replace(...)` made PowerShell look for a command named v.Replace; it only fires when the config has a custom root, and it killed the push with `无法将\"v.Replace\"项识别为 cmdlet`; (2) sync.ps1 read \"the repo folder is not empty\" as \"wrong path\", but during an Initialize push capture has just written 16 config items in - it blocked itself with its own output and exited. The test is now \"the folder holds this plugin's own scripts (any of dsh-sync-common.ps1 / sync.ps1 / capture.ps1) -> it is a sync repo\"; only a genuinely wrong path (Desktop, Downloads) is rejected. The Initialize skeleton now also writes tools\\fix-session-cwd.mjs, so the repo copy and the plugin runtime stay byte-identical.",
+  "tgz": "releases/dsh-config-sync-0.3.42.tgz",
+  "sha256":"b682451fb94706e3be2c0afc82c49ff25477dc5df0e1546f1746cee6bc073d09",
   "minClient": "0.2.2-rc.2"
 }
