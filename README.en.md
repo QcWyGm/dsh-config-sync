@@ -89,6 +89,21 @@ The plugin does not pick a git host: the remote URL is only validated for its *f
 
 Two notes for private repos: ① SSH is the simplest; ② the plugin's **own update manifest** points at the author's public repo by default — if you repoint it at your own private repo, only Gitee raw links are currently rewritten to the API + token form, so anonymous raw reads of a private GitHub/GitLab repo will fail. That is a known limitation.
 
+## New sessions land in the default workspace (since 0.3.28)
+
+A finished sync brings DSH back up, and the client opens a fresh session on startup. Where that session lands is decided by `global.defaultWorkspaceId` in `<DshHome>\storages\workspace.json` — and DSH writes that value only during **first-time initialization**, so after a few syncs it can be left pointing at whatever workspace was used last.
+
+Since 0.3.28, `post-exit.ps1` corrects that value **after the client has fully exited and before it is relaunched**. The timing is not cosmetic: the client owns that registry and writes it back on exit, so anything written earlier is lost.
+
+| Item | Detail |
+|---|---|
+| Default behaviour | Auto-detect the workspace titled `default-workspace` (or whose path ends with `\deepseek-harness\default-workspace`) and point `defaultWorkspaceId` at it |
+| Targeting another one | Set `defaultWorkspace` in `~\.dsh\dsh-config-sync.json` to a workspace ID or an absolute path |
+| Turn it off | Set the same field to `off` (or `none`) |
+| Safety | Only written when the value actually differs; the original is backed up as `workspace.json.bak-<timestamp>` first; the result is read back and checked (value plus workspace count); a path matching no workspace is skipped, never guessed |
+| Side effect | A default workspace you switched by hand gets pulled back to `default-workspace` on the next sync — set `off` if you don't want that |
+| Undo | Copy `workspace.json.bak-<timestamp>` back over `workspace.json` |
+
 ## The scripts generated in one click
 
 "Generate push / pull / restore" can write all three at once, or one of them; when the local repo is still empty it generates pull + restore only. File names, buttons and the script text are Chinese by design.
@@ -185,6 +200,9 @@ The panel has a "Sync content" card (placed at the very bottom of the page): the
 - **How the progress window ends**: after a pull or push finishes the window **stays open** instead of closing itself 3 seconds later (that used to flash the result past you, failure reason included). It keeps "sync finished / log path" on screen and exits only when you press a key or click the ×. The client was already relaunched by `explorer.exe` **before** this, so it shares no parent/console job with the window — leaving the window open or closing it kills nothing. `update` (the install-after-exit path) keeps its window too, with a "plugin update finished" banner; only `relaunch` still closes itself after 3 s, since there is no result to read.
 - Exit codes: `0` done, `2` wait timeout, `3` sync.ps1 missing, `4` relaunch failed, `5` sync failed (pull already tried to roll back).
 - "Cancel queue" only drops the plugin's queue record; an already launched external waiter still waits for your exit — end it manually to stop it (the pid is in `auto-sync-wait.log` / the launch log).
+
+- **Older packages live in GitHub Releases** (since 2026-11-13): `releases/` in the repo keeps **only the current version's** tgz (self-update resolves the relative path in `version.json` against it, so the current one must stay). Earlier versions were each uploaded as a `v<version>` Release asset and then removed from the repo — grab an old build from the Releases page. Per release, do the same: pack the new tgz → create the `v<new version>` Release and upload it → delete the previous version's tgz from `releases/`. That stops the repo from growing linearly with every version (before the cleanup, 30 packages took 5.0 MB).
+- **Repository settings (adjusted 2026-11-13)**: `main` now has branch protection (force pushes and branch deletion blocked; no PR requirement, no status checks, and admins bypass, so solo maintenance is not slowed down); Dependabot alerts are enabled (free on public repos, and with no runtime dependencies it will rarely fire).
 
 ## Plugin update (since 0.2.0)
 

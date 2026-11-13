@@ -225,6 +225,9 @@ function readSettings(dshHome) {
     updateToken: typeof raw.updateToken === 'string' ? raw.updateToken : '',
     // 备份快照放哪：留空 = 默认 <DshHome>\backups（apply.ps1 每次跑之前都往那儿打一份）
     backupRoot: typeof raw.backupRoot === 'string' ? raw.backupRoot : '',
+    // 同步完成重启前把 DSH 的「默认工作区」校正到谁：
+    // 留空 = 自动找名字/路径是 default-workspace 的工作区；可填工作区路径或 ID；填 off 关闭。
+    defaultWorkspace: typeof raw.defaultWorkspace === 'string' ? raw.defaultWorkspace : '',
   }
 }
 
@@ -245,6 +248,7 @@ function writeSettings(dshHome, s) {
     updateManifestUrl: s.updateManifestUrl || '',
     updateToken: s.updateToken || '',
     backupRoot: s.backupRoot || '',
+    defaultWorkspace: s.defaultWorkspace || '',
   }, null, 2) + '\n'
   writeFileSync(settingsPath(dshHome), payload, 'utf8')
 }
@@ -1560,6 +1564,15 @@ async function handleSettings(req, res, config) {
       if (/["\r\n]/.test(backupRoot)) throw new Error(t('备份路径里不能含引号或换行', 'The backup path must not contain quotes or newlines'))
     }
 
+    // 默认工作区：留空 = 自动（找名字/路径是 default-workspace 的工作区）；off = 不干预；
+    // 其它值按工作区 ID 或绝对路径匹配，匹配不到时脚本会跳过并记日志，不会乱指。
+    let defaultWorkspace = before.defaultWorkspace
+    if (body.clearDefaultWorkspace === true) defaultWorkspace = ''
+    else if (has('defaultWorkspace')) {
+      defaultWorkspace = String(body.defaultWorkspace || '').trim()
+      if (/["\r\n]/.test(defaultWorkspace)) throw new Error(t('默认工作区里不能含引号或换行', 'The default workspace must not contain quotes or newlines'))
+    }
+
     // 两个自动化开关：只能布尔；字段没给就沿用原值（面板保存单个字段时不会把开关冲掉）
     const autoPull = has('autoPull') ? body.autoPull === true : before.autoPull
     const autoPush = has('autoPush') ? body.autoPush === true : before.autoPush
@@ -1567,17 +1580,17 @@ async function handleSettings(req, res, config) {
 
     if (!has('repoPath') && !has('remoteUrl') && !has('sshKey') &&
         !has('autoPull') && !has('autoPush') && !has('autoRestart') &&
-        !has('backupRoot') &&
-        !has('updateToken') && !has('updateManifestUrl') && body.clearUpdateToken !== true && body.clearUpdateManifestUrl !== true && body.clearBackupRoot !== true) {
+        !has('backupRoot') && !has('defaultWorkspace') &&
+        !has('updateToken') && !has('updateManifestUrl') && body.clearUpdateToken !== true && body.clearUpdateManifestUrl !== true && body.clearBackupRoot !== true && body.clearDefaultWorkspace !== true) {
       throw new Error(t(
-        '没有要保存的字段（repoPath / remoteUrl / sshKey / autoPull / autoPush / backupRoot / updateToken / updateManifestUrl 至少给一个）',
-        'Nothing to save (provide at least one of repoPath / remoteUrl / sshKey / autoPull / autoPush / backupRoot / updateToken / updateManifestUrl)',
+        '没有要保存的字段（repoPath / remoteUrl / sshKey / autoPull / autoPush / autoRestart / backupRoot / defaultWorkspace / updateToken / updateManifestUrl 至少给一个）',
+        'Nothing to save (provide at least one of repoPath / remoteUrl / sshKey / autoPull / autoPush / autoRestart / backupRoot / defaultWorkspace / updateToken / updateManifestUrl)',
       ))
     }
 
     // 新仓库路径一落盘，后面的 git remote 要对它做，别用改之前解析出来的旧仓库。
     const repo = repoPath || (resolveRepo(config?.repoPath, dshHome).repo || '')
-    writeSettings(dshHome, { repoPath, remoteUrl, sshKey, autoPull, autoPush, autoRestart, updateToken, updateManifestUrl, backupRoot })
+    writeSettings(dshHome, { repoPath, remoteUrl, sshKey, autoPull, autoPush, autoRestart, updateToken, updateManifestUrl, backupRoot, defaultWorkspace })
 
     const changed = {
       repoPath: before.repoPath !== repoPath,
@@ -1586,6 +1599,7 @@ async function handleSettings(req, res, config) {
       autoPull: before.autoPull !== autoPull,
       autoPush: before.autoPush !== autoPush,
       backupRoot: before.backupRoot !== backupRoot,
+      defaultWorkspace: before.defaultWorkspace !== defaultWorkspace,
     }
     let gitSet = null
     if (repo && isDir(join(repo, '.git')) && remoteUrl) {
@@ -1632,6 +1646,8 @@ async function handleSettings(req, res, config) {
         updateManifestUrl: updateManifestUrl || '',
         backupRoot: backupRoot || backupRootOf(dshHome, { backupRoot: '' }),
         backupRootCustom: Boolean(backupRoot),
+        defaultWorkspace: defaultWorkspace,
+        defaultWorkspaceAuto: !defaultWorkspace,
         settingsPath: file,
       },
     })

@@ -249,6 +249,86 @@ function Start-Detached([string]$exe) {
   }
 }
 
+# ---------- 默认工作区校正（0.3.28） ----------
+# 客户端重启后会自己开一个新会话，落点由 <DshHome>\storages\workspace.json 的
+# global.defaultWorkspaceId 决定。这个值只在本机首次初始化时被 DSH 写过一次，之后
+# 谁都不会自动改 —— 于是同步过几次之后它可能停在某个「上次用的工作区」上。
+#
+# 时机：必须在客户端**完全退出之后、重新拉起之前**写。客户端持有这份登记表并在退出时
+#      回写，早写会被盖回去（apply.ps1 也是同一个道理）。
+# 目标：默认取「标题或路径是 default-workspace 的那个工作区」；
+#      设置文件里的 defaultWorkspace 可以指定工作区路径或 ID，填 off/none 则不干预。
+# 安全：只在值真的不同时才动，动之前原样备份一份 workspace.json.bak-<时间>，写完回读校验。
+function Get-NormPath([string]$p) {
+  if (-not $p) { return '' }
+  return ($p.Replace('/', '\').TrimEnd('\')).ToLowerInvariant()
+}
+
+function Set-DefaultWorkspace {
+  if (-not $DshHome) { return }
+  $reg = Join-Path $DshHome 'storages/workspace.json'
+  if (-not (Test-Path -LiteralPath $reg)) { Log '没有 workspace.json，跳过默认工作区校正'; return }
+
+  $spec = ''
+  try {
+    $sf = Join-Path $DshHome 'dsh-config-sync.json'
+    if (Test-Path -LiteralPath $sf) {
+      $s = Get-Content -LiteralPath $sf -Raw -Encoding UTF8 | ConvertFrom-Json
+      if ($s -and $s.PSObject.Properties['defaultWorkspace']) { $spec = [string]$s.defaultWorkspace }
+    }
+  } catch { $spec = '' }
+  $spec = $spec.Trim()
+
+  if ($spec -match '^(off|none|false|0)$') { Log '默认工作区校正已关闭（defaultWorkspace=off）'; return }
+
+  try {
+    $obj = Get-Content -LiteralPath $reg -Raw -Encoding UTF8 | ConvertFrom-Json
+    $tables = $obj.tables.workspaces
+    if (-not $tables) { Log 'workspace.json 里没有 workspaces 表，跳过默认工作区校正'; return }
+
+    $cur = [string]$obj.global.defaultWorkspaceId
+    $target = ''
+    if ($spec) {
+      if (@($tables.PSObject.Properties.Name) -contains $spec) { $target = $spec }
+      else {
+        $want = Get-NormPath $spec
+        foreach ($p in $tables.PSObject.Properties) {
+          if ((Get-NormPath ([string]$p.Value.path)) -eq $want) { $target = $p.Name; break }
+        }
+      }
+      if (-not $target) { Log ("设置里的 defaultWorkspace 找不到对应工作区：{0}（跳过，不改）" -f $spec); return }
+    } else {
+      foreach ($p in $tables.PSObject.Properties) {
+        $path = Get-NormPath ([string]$p.Value.path)
+        $title = ([string]$p.Value.title).Trim().ToLowerInvariant()
+        if ($title -eq 'default-workspace' -or $path.EndsWith('\deepseek-harness\default-workspace')) { $target = $p.Name; break }
+      }
+      if (-not $target) { Log '本机没有名为 default-workspace 的工作区，跳过默认工作区校正'; return }
+    }
+
+    $targetEntry = $tables.PSObject.Properties[$target].Value
+    if ($cur -eq $target) { Log ("默认工作区已经是 {0}（{1}），不动" -f (Get-NormPath ([string]$targetEntry.path)), $target); return }
+
+    $stamp = (Get-Date).ToString('yyyyMMddHHmmss')
+    Copy-Item -LiteralPath $reg -Destination ($reg + '.bak-' + $stamp) -Force
+    $obj.global.defaultWorkspaceId = $target
+    $text = (($obj | ConvertTo-Json -Depth 12) -replace "`r`n", "`n") + "`n"
+    [IO.File]::WriteAllText($reg, $text, (New-Object Text.UTF8Encoding($false)))
+
+    # 回读校验：值改对了、工作区条数没变，才算成功；否则静默保持原样会让「新会话落在哪」继续不对。
+    $back = Get-Content -LiteralPath $reg -Raw -Encoding UTF8 | ConvertFrom-Json
+    $countBefore = @($tables.PSObject.Properties).Count
+    $countAfter = @($back.tables.workspaces.PSObject.Properties).Count
+    if ([string]$back.global.defaultWorkspaceId -ne $target -or $countAfter -ne $countBefore) {
+      Log ("默认工作区写入后校验不通过（{0} 个工作区，期望 {1} 个），已留备份 {2}" -f $countAfter, $countBefore, ($reg + '.bak-' + $stamp))
+      return
+    }
+    Log ("默认工作区：{0} → {1}（{2}），重启后新会话落在 {3}" -f $cur, $target, [string]$targetEntry.title, [string]$targetEntry.path)
+  } catch {
+    Log ("默认工作区校正失败（不影响重启）：{0}" -f $_.Exception.Message)
+  }
+}
+
 function RestartClient([switch]$SkipWatermark) {
   $exe = $null
   if ($AppRoot) { $candidate = Join-Path $AppRoot 'DeepSeek Harness.exe'; if (Test-Path -LiteralPath $candidate) { $exe = $candidate } }
@@ -263,6 +343,8 @@ function RestartClient([switch]$SkipWatermark) {
     } catch { }
   }
   if ($exe) {
+    # 先定好重启后要落在哪个工作区：客户端已经完全退出，此刻写 workspace.json 才不会被回写盖掉。
+    Set-DefaultWorkspace
     # 继承来的环境变量会让客户端「启动了但立刻退出、没有窗口」：
     #   ELECTRON_RUN_AS_NODE=1  → exe 以纯 node 模式跑，不建窗口，几秒后退出
     #   NODE_OPTIONS / NODE_PATH → 预加载或解析路径错乱

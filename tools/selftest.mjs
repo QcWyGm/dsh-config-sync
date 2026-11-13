@@ -923,6 +923,38 @@ console.log('== 任意 git 托管平台：提示不写死 gitee ==')
     '面板还只提 Gitee')
 }
 
+// 默认工作区校正（0.3.28）：重启客户端之前把 workspace.json 的 defaultWorkspaceId 校正到
+// default-workspace，否则重启后新开的那条会话会落在「上次用的工作区」上。
+// 断言只盯结构与时机，不真写用户的 workspace.json。
+console.log('')
+console.log('== 默认工作区校正 ==')
+{
+  const root = join(dirname(fileURLToPath(import.meta.url)), '..')
+  const post = readFileSync(join(root, 'runtime', 'post-exit.ps1'), 'utf8')
+  const host = readFileSync(join(root, 'index.js'), 'utf8')
+  check('post-exit 提供 Set-DefaultWorkspace',
+    post.includes('function Set-DefaultWorkspace'),
+    '没有默认工作区校正函数')
+  const callMatch = post.match(/^ {4}Set-DefaultWorkspace\r?\n/m)
+  check('校正发生在重启之前（RestartClient 里、启动之前调用）',
+    Boolean(callMatch) && callMatch.index < post.indexOf('$how = Start-Detached $exe'),
+    '调用点不在 Start-Detached 之前')
+  check('默认目标认 default-workspace（标题或路径）且可被设置覆盖或关闭',
+    post.includes("$title -eq 'default-workspace'")
+      && post.includes('deepseek-harness\\default-workspace')
+      && post.includes("defaultWorkspace")
+      && post.includes('off|none'),
+    '目标匹配或 off 开关缺失')
+  check('写前备份、写后回读校验（值 + 工作区条数）',
+    post.includes(".bak-' + $stamp") && post.includes('countAfter -ne $countBefore'),
+    '缺少备份或回读校验')
+  check('设置字段 defaultWorkspace 进 read/write 与保存白名单',
+    host.includes('defaultWorkspace: typeof raw.defaultWorkspace')
+      && host.includes('defaultWorkspace: s.defaultWorkspace ||')
+      && host.includes("has('defaultWorkspace')"),
+    'index.js 没带该字段')
+}
+
 console.log('')
 console.log(failures === 0 ? '结论：全部通过' : `结论：${failures} 项失败`)
 process.exit(failures === 0 ? 0 : 1)

@@ -89,6 +89,21 @@ dsh plugin add https://raw.githubusercontent.com/QcWyGm/dsh-config-sync/main/rel
 
 私有库要注意两点：①用 SSH 地址最省事；②插件**自身的更新清单**默认指向作者的公开仓库，如果你把它改成自己的私有库，目前只有 Gitee 的 raw 链接会自动换成 API + token，GitHub/GitLab 私有库的 raw 匿名读会失败——这是已知限制。
 
+## 同步后新会话落在默认工作区（0.3.28 起）
+
+同步完成会顺手把 DSH 拉回来，客户端起来后会自己开一个新会话。这个新会话落在哪个工作区，由 `<DshHome>\storages\workspace.json` 里的 `global.defaultWorkspaceId` 决定——而这个值 DSH 只在本机**首次初始化**时写过一次，之后同步几轮就可能停在某个「上次用的工作区」上。
+
+0.3.28 起，`post-exit.ps1` 在**客户端完全退出之后、重新拉起之前**把该值校正到默认工作区。写在此时机是必须的：客户端持有这份登记表并在退出时回写，早写会被盖掉。
+
+| 项 | 说明 |
+|---|---|
+| 默认行为 | 自动找标题为 `default-workspace`、或路径以 `\deepseek-harness\default-workspace` 结尾的工作区，把 `defaultWorkspaceId` 指过去 |
+| 指定别的 | 设置文件 `~\.dsh\dsh-config-sync.json` 的 `defaultWorkspace` 填工作区 ID 或绝对路径 |
+| 关掉 | 同一字段填 `off`（或 `none`） |
+| 安全阀 | 只在值真的不同时才写；写前原样备份为 `workspace.json.bak-<时间戳>`；写完回读校验 `defaultWorkspaceId` 与工作区条数；路径匹配不到工作区就跳过不动，不猜 |
+| 副作用 | 你在 DSH 里手动切换的「默认工作区」会被下一次同步覆盖回 `default-workspace`——不想要这个效果就把它设成 `off` |
+| 撤销 | 把 `workspace.json.bak-<时间戳>` 拷回 `workspace.json` 即可 |
+
 ## 一键生成的三份脚本
 
 「一键生成 推送 / 拉取 / 还原」可一次写出三份，也可只生成其中一份；仓库还是空目录时只生成「拉取 / 还原」。文件名、按钮、脚本内文字全中文。
@@ -185,6 +200,9 @@ dsh plugin add https://raw.githubusercontent.com/QcWyGm/dsh-config-sync/main/rel
 - **进度窗口收尾**：拉取/推送跑完后窗口**不自动关闭**（原来停 3 秒自己消失，结果一闪就没了，看不到失败原因），改成把「同步已完成 / 日志路径」留在屏幕上，按任意键或点右上角 × 才退出。客户端是**在这之前**由 `explorer.exe` 代启的，跟这个窗口没有父子/作业关系，所以窗口留多久、还是被点 × 直接结束，都不会把客户端带走。`update`（退出后安装那一路）同样保留窗口，横幅写「插件更新已完成」；只有 `relaunch`（纯重启，窗口里没有可看的结果）仍旧停 3 秒自动关。
 - 退出码：`0` 完成、`2` 等待超时、`3` 缺 sync.ps1、`4` 重启失败、`5` 同步失败（pull 已尝试回滚）。
 - 「取消排队」只撤插件里的排队记录；已拉起的外部等待进程仍会等你退出，要停就手动结束它（`auto-sync-wait.log` / launch 日志有 pid）。
+
+- **历史安装包放 GitHub Releases**（2026-11-13 起）：仓库里 `releases/` **只保留当前版本**那一个 tgz（插件自更新按 `version.json` 里的相对路径从这里取包，所以当前版本必须在）；更早的版本已逐个上传为 `v<版本>` 的 Release asset 后从仓库移除，需要旧版就去 Releases 页下载。发版时要跟着做：打完新包 → 建 `v<新版本>` Release 并上传该 tgz → 再把上一个版本的 tgz 从 `releases/` 删掉。这样仓库体积不会随版本号线性膨胀（治理前 30 个包占 5.0 MB）。
+- **仓库设置（2026-11-13 调整）**：`main` 已加分支保护（禁止强推、禁止删除分支，不要求 PR、不要求状态检查，admin 仍可直推，所以单人维护不被绊住）；Dependabot alerts 已开启（公开库免费，无运行时依赖时基本不会响）。
 
 ## 插件自更新（0.2.0 起）
 
