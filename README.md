@@ -200,14 +200,20 @@ dsh plugin add https://raw.githubusercontent.com/QcWyGm/dsh-config-sync/main/rel
 - 面板「本机路径」卡把这些项列出来，填好本机路径 → 保存 → 重新拉取一次就写进去。
 - 确认过的值优先于自动探测，之后不再问；根都对不上的情况下**宁可不写**——把 `{{ROOT:xxx}}` 字面量写进配置，插件读到会当真实路径，那种报错比「没写」难查得多。
 
-## 问题反馈：走 GitHub Issue（0.3.31 起）
+## 问题反馈：走 GitHub Issue（0.3.31 起，0.3.32 起免令牌读）
 
 面板最下面「问题反馈」卡。**GitHub Issue 是唯一真源**，不再往配置仓库里塞 json：
 
 1. 填标题 + 详情 → 直接 `POST /repos/QcWyGm/dsh-config-sync/issues`，label `feedback`，正文末尾自动附一段环境块（插件版本、机器名、时间、平台、安装目录、配置仓库路径），在 GitHub 上不用再追问；
 2. 列表直接读 Issue：`GET /issues?state=all&labels=feedback`，open / closed 都在，点标题就是 GitHub 网页；
 3. 点「已解决」→ `PATCH issue {state:'closed'}`，GitHub 上还是同一个线程，想继续讨论就在那边接着聊，想重开点一下又回来；
-4. 面板顶上一行是连接状态：`GitHub QcWyGm/dsh-config-sync · label feedback`，灰字是令牌文件的路径。
+4. 面板顶上一行是连接状态，三态：`已用 xxx 登录（可提交、可关单）` / `令牌不属于所有者（只能读和提交）` / `匿名读取（提交走浏览器）`。
+
+**读不需要令牌**（0.3.32 起）：这个仓库是公开的，Issue 列表匿名请求就能读（实测 HTTP 200，限额 60 次/小时·每 IP）。所以有令牌先带令牌读（自己的账号、5000 次/小时），令牌失效或压根没有就自动退回匿名读——新机器第一次打开面板就能看到已有反馈，不用先配令牌。
+
+**没令牌也能提交**（0.3.32 起）：面板会把标题、正文和环境块预填进 GitHub 的新建 Issue 页面（`https://github.com/<repo>/issues/new?title=&body=&labels=feedback`），浏览器里登录着 GitHub 的话点一下 Submit 就成了，全程不需要 token。这条路只在没有令牌时启用；有令牌仍走 API 直发，才能进队列、能补发。
+
+**关单只有仓库所有者能点**（0.3.32 起）：改状态前服务端先用 `GET /user` 认令牌归属，`login` 和仓库所有者不一致就直接 403，面板上那个按钮同步灰掉显示「仅所有者」。所以别人的令牌即使填进面板也关不掉单——这条限制在服务端，不只是界面。
 
 **令牌不用手填**：默认从本机 git 凭据取一次（`git credential fill`，平时 push 过就已经在里面），存进 `<dshHome>\config-sync-gh.json`（本机私有、**不进仓库**）。取不到（比如从没在这台机器 push 过）才需要粘一次，粘完立刻拿 `/repos/{repo}` 验一遍——验不过就不存。仓库和 label 也能改，跟令牌填在同一行。
 

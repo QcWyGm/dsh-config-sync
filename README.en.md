@@ -200,14 +200,20 @@ Two machines rarely share drive letters (one has `D:\DeepSeekHarness`, the other
 - The panel's "Local paths" card lists those items; fill in the paths, save, then pull once more.
 - Confirmed values win over detection and are not asked again. **Not writing beats writing garbage** — a literal `{{ROOT:xxx}}` inside a config is read by plugins as a real path, and that error is far harder to trace than a skipped file.
 
-## Feedback goes to GitHub Issues (since 0.3.31)
+## Feedback goes to GitHub Issues (since 0.3.31, token-free reading since 0.3.32)
 
 The Feedback card at the bottom of the panel. **GitHub Issues are the single source of truth** - no more json files in the config repo:
 
 1. Title + details → `POST /repos/QcWyGm/dsh-config-sync/issues` with label `feedback`; an environment block (plugin version, machine, time, platform, install root, config repo path) is appended to the body so nobody has to ask later;
 2. The list reads the Issues directly (`GET /issues?state=all&labels=feedback`): open and closed both show, and the title is a link to the GitHub page;
 3. Resolve → `PATCH issue {state:'closed'}`. It is still the same thread on GitHub, so the discussion can continue there, and reopening is one click;
-4. The top row of the card is the connection state: `GitHub QcWyGm/dsh-config-sync · label feedback`, with the token file path in grey.
+4. The top row of the card is the connection state, in one of three forms: `signed in as xxx (submit and close)` / `token is not the owner (read and submit only)` / `anonymous read (submit via browser)`.
+
+**Reading needs no token** (0.3.32): this repo is public and the Issue list is readable anonymously (verified HTTP 200, 60 requests/hour per IP). So it reads with the token when one exists (your account, 5000/hour) and falls back to an anonymous read when the token is expired or absent - a fresh machine shows existing feedback on the very first panel open, with no token setup first.
+
+**Submitting without a token** (0.3.32): the panel prefills title, body and environment block into GitHub's new-issue page (`https://github.com/<repo>/issues/new?title=&body=&labels=feedback`); if GitHub is signed in on your browser, one Submit button finishes it, no token involved. This path is only used when no token exists; with a token the API path still applies, which is what makes queueing and refushing possible.
+
+**Only the repo owner can close** (0.3.32): before changing state the server checks `GET /user`; a token whose `login` differs from the repo owner gets a 403, and the "Resolve" button is disabled and reads "Owner only". So a foreign token cannot close issues even if it is pasted into the panel - the restriction lives on the server, not just in the UI.
 
 **No token typing needed**: by default it is taken once from the local git credential (`git credential fill` - it is already there if you have pushed from this machine) and stored in `<dshHome>\config-sync-gh.json` (local only, **never committed**). Only when that fails do you paste one, which is verified against `/repos/{repo}` immediately and not saved if it fails. Repo and label can be changed in the same row.
 

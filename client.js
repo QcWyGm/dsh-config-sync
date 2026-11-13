@@ -2139,7 +2139,7 @@ window.__ModuleLoader__.load({
      */
     /** 问题反馈：提交即建 GitHub Issue（label feedback），列表读 Issue，点「已解决」就关单。 */
     function FeedbackCard() {
-      const empty = { connected: false, repo: '', label: 'feedback', items: [], outbox: [], error: '', ghFile: '', version: '' }
+      const empty = { connected: false, repo: '', label: 'feedback', items: [], outbox: [], error: '', ghFile: '', version: '', owner: '', login: '', canClose: false, readAnon: false, note: '' }
       const [st, setSt] = react.useState(empty)
       const [title, setTitle] = react.useState('')
       const [text, setText] = react.useState('')
@@ -2164,7 +2164,11 @@ window.__ModuleLoader__.load({
         setBusy(true); setErr(''); setMsg('')
         try {
           const r = await callFeedback({ title, body: text })
-          if (r && r.number) {
+          if (r && r.needToken && r.fallbackUrl) {
+            // 没有令牌：把这单交给浏览器——预填好标题/正文/环境块，登录状态下点一下就建好了
+            try { window.open(r.fallbackUrl, '_blank', 'noopener') } catch { }
+            setMsg(M('没有令牌，已打开浏览器里的新建 issue 页面（标题和正文都填好了），点一下提交即可。', 'No token: opened the prefilled new-issue page in the browser - press submit there.'))
+          } else if (r && r.number) {
             setMsg(M(`已建 Issue #${r.number}，列表里能看到，网页上也点得开。`, `Issue #${r.number} created; it shows in the list and opens in the browser.`))
             setTitle('')
             setText('')
@@ -2235,13 +2239,17 @@ window.__ModuleLoader__.load({
           h('div', { style: S.kvKey }, M('连接', 'Connect')),
           h('div', { style: S.kvVal },
             h('div', null,
-              dot(st.connected ? 'var(--dsw-alias-state-success-primary, #35a854)' : 'var(--dsw-alias-state-warning-primary, #d97706)'),
-              st.connected
-                ? `GitHub ${st.repo || '?'} · label ${st.label || 'feedback'}`
-                : M('还没连上 GitHub（令牌没取到或网络不通）', 'Not connected to GitHub (no token or no network)'),
+              dot(st.canClose ? 'var(--dsw-alias-state-success-primary, #35a854)' : (st.items.length ? 'var(--dsw-alias-state-warning-primary, #d97706)' : 'var(--dsw-alias-state-error-primary)')),
+              st.canClose
+                ? M(`GitHub ${st.repo} · 已用 ${st.login} 登录（可提交、可关单）`, `GitHub ${st.repo} · signed in as ${st.login} (can submit and close)`)
+                : st.connected
+                  ? M(`GitHub ${st.repo} · 令牌属于 ${st.login || '?'}，不是仓库所有者，只能读和提交`, `GitHub ${st.repo} · token belongs to ${st.login || '?'}, not the repo owner: read and submit only`)
+                  : st.readAnon
+                    ? M(`GitHub ${st.repo} · 匿名读取（公开仓库，不需要令牌；提交走浏览器）`, `GitHub ${st.repo} · anonymous read (public repo, no token; submit via browser)`)
+                    : M('还没连上 GitHub（令牌没取到或网络不通）', 'Not connected to GitHub (no token or no network)'),
             ),
             h('div', { style: S.footnote },
-              st.ghFile ? M(`令牌/仓库记在 ${st.ghFile}（本机私有，不进仓库）`, `Token and repo live in ${st.ghFile} (local only, never committed)`) : null),
+              st.note || (st.ghFile ? M(`令牌/仓库记在 ${st.ghFile}（本机私有，不进仓库）`, `Token and repo live in ${st.ghFile} (local only, never committed)`) : null)),
           ),
         ),
         (askToken || !st.connected)
@@ -2301,14 +2309,17 @@ window.__ModuleLoader__.load({
                 h('div', { style: S.footnote },
                   `${it.state}${closed && it.state === 'closed' ? '' : ''} · ${fmt(it.createdAt)}${it.user ? ` · ${it.user}` : ''}${it.comments ? ` · ${it.comments} 条评论` : ''}`)),
               h('button', {
-                type: 'button', style: S.btn, disabled: busy,
+                type: 'button',
+                style: S.btn,
+                disabled: busy || !st.canClose,
+                title: st.canClose ? '' : M('只有仓库所有者能关单', 'Only the repo owner can close issues'),
                 onClick: () => setState(it.number, it.state === 'closed' ? 'open' : 'closed'),
-              }, it.state === 'closed' ? M('重开', 'Reopen') : M('已解决', 'Resolve')),
+              }, !st.canClose ? M('仅所有者', 'Owner only') : (it.state === 'closed' ? M('重开', 'Reopen') : M('已解决', 'Resolve'))),
             )))
           : h('div', { style: S.footnote }, M('还没有反馈记录。', 'No feedback yet.')),
         h('div', { style: S.footnote },
-          M('提交后直接建 Issue（label=feedback，正文末尾自动附版本/机器/时间）；关掉就关单，GitHub 上是同一个线程。离线时先进本机队列，联网点「补发」。',
-            'Submit creates an Issue directly (label=feedback, with version/machine/time appended); resolving closes it on GitHub. Offline reports queue locally; flush when back online.')),
+          M('读列表不需要令牌（公开仓库，匿名 60 次/小时）；提交和关单要令牌，且只有仓库所有者能关单。没有令牌时提交会打开浏览器里预填好的新建 issue 页面。',
+            'Reading needs no token (public repo, 60 anonymous requests/hour); submitting and closing do, and only the repo owner can close. Without a token, submitting opens a prefilled new-issue page in the browser.')),
       )
     }
 

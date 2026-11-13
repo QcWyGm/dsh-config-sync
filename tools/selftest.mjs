@@ -1020,6 +1020,19 @@ console.log('== 跨机路径占位符与问题反馈 ==')
   check('反馈正文自动附环境块（版本/机器/时间）',
     host.includes('### 环境 / Environment') && host.includes('issueBodyOf'),
     '没附环境信息')
+  check('读不需要令牌：带令牌失败自动退回匿名',
+    host.includes("const attempts = g.token ? [g.token, ''] : ['']") && host.includes('readAnon'),
+    '没有匿名降级')
+  check('关单只有仓库所有者能点（服务端挡别人的令牌）',
+    host.includes('ownerOf') && host.includes('onlyCloseByOwner'.replace('onlyCloseByOwner', 'canClose'))
+      && host.includes("login.toLowerCase() !== owner.toLowerCase()"),
+    '服务端没校验所有者')
+  check('无令牌时提交不失败，给浏览器预填链接',
+    host.includes('newIssueUrl') && host.includes('issues/new?') && host.includes('needToken'),
+    '没有无令牌降级')
+  check('面板按权限置灰关单按钮',
+    cli.includes('!st.canClose') && cli.includes("M('仅所有者', 'Owner only')") && cli.includes('fallbackUrl'),
+    '面板没做权限态')
 
   const rootsGet = await call('/config-sync/roots', { headers: { host: 'localhost:3080' } })
   const rootsBody = JSON.parse(rootsGet.body || '{}')
@@ -1035,7 +1048,8 @@ console.log('== 跨机路径占位符与问题反馈 ==')
   const fbBody = JSON.parse(fbGet.body || '{}')
   check('GET /config-sync/feedback 返回连接状态 + Issue 列表 + 待发队列',
     fbBody.ok === true && Array.isArray(fbBody.items) && typeof fbBody.connected === 'boolean'
-      && typeof fbBody.repo === 'string' && Array.isArray(fbBody.outbox) && typeof fbBody.ghFile === 'string',
+      && typeof fbBody.repo === 'string' && Array.isArray(fbBody.outbox) && typeof fbBody.ghFile === 'string'
+      && typeof fbBody.canClose === 'boolean' && typeof fbBody.owner === 'string',
     JSON.stringify(fbBody).slice(0, 400))
   check('跨站请求被拒（roots）', await (async () => {
     const r = await call('/config-sync/roots', {

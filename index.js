@@ -3015,6 +3015,7 @@ function readGh(dshHome) {
   return {
     token: String(j.token || ''),
     repo: String(j.repo || GH_DEFAULT_REPO),
+    login: String(j.login || ''),
     updatedAt: String(j.updatedAt || ''),
   }
 }
@@ -3022,9 +3023,12 @@ function readGh(dshHome) {
 function writeGh(dshHome, o) {
   const f = ghPathOf(dshHome)
   try { mkdirSync(dirname(f), { recursive: true }) } catch { }
+  const prev = readGh(dshHome)
   const body = {
     token: String(o.token || ''),
     repo: String(o.repo || GH_DEFAULT_REPO),
+    // 令牌没换就沿用之前认出来的账号，免得每轮都调 /user
+    login: String(o.login || prev.login || ''),
     updatedAt: new Date().toISOString(),
   }
   writeFileSync(f, `${JSON.stringify(body, null, 2)}\n`, 'utf8')
@@ -3077,11 +3081,12 @@ async function ghApi(pathname, options = {}) {
   const { method = 'GET', token, body } = options
   const url = pathname.startsWith('http') ? pathname : `https://api.github.com${pathname}`
   const headers = {
-    Authorization: `Bearer ${token}`,
     Accept: 'application/vnd.github+json',
     'X-GitHub-Api-Version': '2022-11-28',
     'User-Agent': PACKAGE_ID,
   }
+  // 公开仓库的读接口可以匿名调（60 次/小时/IP），所以 token 允许为空
+  if (token) headers.Authorization = `Bearer ${token}`
   const init = { method, headers }
   if (body !== undefined) {
     headers['Content-Type'] = 'application/json; charset=utf-8'
@@ -3138,6 +3143,37 @@ async function createIssue(repo, token, title, text, config) {
   })
 }
 
+/** 仓库所有者（第一个 / 前面那段）：判断「谁能关单」就看它。 */
+function ownerOf(repo) {
+  return String(repo || '').split('/')[0] || ''
+}
+
+/** 令牌属于谁（GET /user）。结果缓存在 gh.json 里，不每轮都问。 */
+async function ghIdentity(token, dshHome, known) {
+  if (known) return known
+  const r = await ghApi('/user', { token })
+  const login = r.ok && r.json ? String(r.json.login || '') : ''
+  if (login) {
+    const g = readGh(dshHome)
+    writeGh(dshHome, { ...g, login })
+  }
+  return login
+}
+
+/**
+ * 无令牌时的提交入口：把标题/正文/环境块塞进 GitHub 的新建 issue 页面。
+ * 浏览器里已登录 GitHub 就能直接点 Submit——这条路不需要 token，代价是要人工点一次。
+ */
+function newIssueUrl(repo, title, text, config) {
+  const q = [
+    `title=${encodeURIComponent(title)}`,
+    `body=${encodeURIComponent(issueBodyOf(text, config))}`,
+    `labels=${encodeURIComponent(GH_FEEDBACK_LABEL)}`,
+  ].join('&')
+  return `https://github.com/${repo}/issues/new?${q}`
+}
+
+
 async function handleFeedback(req, res, config) {
   const dshHome = config?.dshHome || process.env.DSH_HOME || join(homedir(), '.dsh')
   const url = new URL(req.url || '/', 'http://127.0.0.1')
@@ -3148,27 +3184,45 @@ async function handleFeedback(req, res, config) {
     try {
       const g = await ghToken(config, dshHome)
       const outbox = readOutbox(dshHome)
+      const owner = ownerOf(g.repo)
+      const login = g.token ? await ghIdentity(g.token, dshHome, g.login) : ''
       const base = {
         ok: true,
         repo: g.repo,
         label: GH_FEEDBACK_LABEL,
+        owner,
+        login,
+        // 有关闭权限 = 令牌属于仓库所有者；别人的令牌也能改 issue 状态，所以在服务端挡住
+        canClose: !!(login && owner && login.toLowerCase() === owner.toLowerCase()),
         connected: false,
+        readAnon: false,
         tokenSaved: !!g.token,
         items: [],
         outbox: outbox.map((x) => ({ title: String(x.title || ''), createdAt: String(x.createdAt || '') })),
         version: pluginVersion(),
         ghFile: ghPathOf(dshHome),
       }
-      if (!g.token) {
-        sendJson(res, 200, { ...base, error: t('没有 GitHub 令牌：本机 git 凭据里也没取到，面板里填一次就会存下来', 'No GitHub token: not found in the local git credential either. Paste one here once and it is stored.') })
-        return
+      // 读：有令牌先带令牌（自己的账号、限额 5000/小时），失败或没令牌就退回匿名（公开仓库 60 次/小时）
+      const attempts = g.token ? [g.token, ''] : ['']
+      let lastError = ''
+      for (const tok of attempts) {
+        try {
+          const items = await listIssues(g.repo, tok, 'all')
+          sendJson(res, 200, {
+            ...base,
+            connected: !!tok,
+            readAnon: !tok,
+            items,
+            note: !tok
+              ? t('匿名读取（公开仓库，不限令牌；上限 60 次/小时），提交和关单需要令牌', 'Anonymous read (public repo, no token needed; 60 requests/hour). Submitting and closing need a token.')
+              : '',
+          })
+          return
+        } catch (error) {
+          lastError = String((error && error.message) || error)
+        }
       }
-      try {
-        const items = await listIssues(g.repo, g.token, 'all')
-        sendJson(res, 200, { ...base, connected: true, items })
-      } catch (error) {
-        sendJson(res, 200, { ...base, error: String((error && error.message) || error) })
-      }
+      sendJson(res, 200, { ...base, error: lastError || t('读不到 issue 列表', 'Cannot read the issue list') })
     } catch (error) {
       sendJson(res, 500, { ok: false, error: String((error && error.message) || error) })
     }
@@ -3190,8 +3244,18 @@ async function handleFeedback(req, res, config) {
       if (!token) throw new Error(t('令牌是空的', 'The token is empty'))
       const probe = await ghApi(`/repos/${repo}`, { token })
       if (!probe.ok) throw new Error(`${probe.status} ${String((probe.json && probe.json.message) || '').slice(0, 160) || '令牌或仓库不对'}`)
-      writeGh(dshHome, { token, repo })
-      sendJson(res, 200, { ok: true, connected: true, repo, saved: ghPathOf(dshHome) })
+      const me = await ghIdentity(token, dshHome)
+      writeGh(dshHome, { token, repo, login: me })
+      const owner = ownerOf(repo)
+      sendJson(res, 200, {
+        ok: true,
+        connected: true,
+        repo,
+        saved: ghPathOf(dshHome),
+        login: me,
+        owner,
+        canClose: !!(me && owner && me.toLowerCase() === owner.toLowerCase()),
+      })
       return
     }
 
@@ -3211,9 +3275,19 @@ async function handleFeedback(req, res, config) {
       return
     }
 
-    // 3) 把某条 issue 标记成已解决 / 重新打开
+    // 3) 把某条 issue 标记成已解决 / 重新打开 —— 只有仓库所有者本人的令牌可以
     if (req.method === 'PATCH' || action === 'state') {
       if (!number) throw new Error(t('缺 issue 编号', 'Missing issue number'))
+      if (!g.token) throw new Error(t('没有令牌：改状态需要令牌', 'No token: changing state needs one'))
+      const login = await ghIdentity(g.token, dshHome, g.login)
+      const owner = ownerOf(g.repo)
+      if (!login || login.toLowerCase() !== owner.toLowerCase()) {
+        sendJson(res, 403, {
+          ok: false,
+          error: t(`只有仓库所有者（${owner}）能关单；当前令牌属于 ${login || '未知账号'}`, `Only the repo owner (${owner}) can close issues; this token belongs to ${login || 'unknown'}`),
+        })
+        return
+      }
       const state = String(payload.state || 'closed') === 'closed' ? 'closed' : 'open'
       const r = await ghApi(`/repos/${g.repo}/issues/${number}`, { method: 'PATCH', token: g.token, body: { state } })
       if (!r.ok) throw new Error(`${r.status} ${String((r.json && r.json.message) || '').slice(0, 160)}`)
@@ -3225,6 +3299,18 @@ async function handleFeedback(req, res, config) {
     const title = String(payload.title || '').trim().slice(0, 200)
     const text = String(payload.body || payload.detail || '').trim().slice(0, 6000)
     if (!title) throw new Error(t('先写个标题，方便以后对上号', 'Give it a title so it can be found later'))
+
+    // 没令牌：不硬失败，给一条浏览器预填链接（浏览器登录了 GitHub 就能点提交）
+    if (!g.token) {
+      sendJson(res, 200, {
+        ok: true,
+        needToken: true,
+        submitted: false,
+        fallbackUrl: newIssueUrl(g.repo, title, text, config),
+        error: t('没有令牌：可以打开预填好的新建 issue 页面，在浏览器里点一下提交', 'No token: open the prefilled new-issue page and press submit in the browser'),
+      })
+      return
+    }
 
     const r = await createIssue(g.repo, g.token, title, text, config)
     if (r.ok && r.json) {
