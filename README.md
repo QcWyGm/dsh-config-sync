@@ -219,6 +219,8 @@ dsh plugin add https://raw.githubusercontent.com/QcWyGm/dsh-config-sync/main/rel
 
 **断网不丢**：建 Issue 失败时这条会进 `<dshHome>\config-sync-feedback-outbox.json`，面板显示「本机还有 N 条没发出去」，联网后点「补发」逐条建 Issue，成功的自动出队。这不是"另存一份"，只是待发队列——发出去了队列就空。
 
+**筛选与查询**（0.3.33 起）：列表头上是 `未解决 / 已解决 / 全部` 三个按钮（各带实时条数，服务端一次拉全量后算 open/closed/total），右边一个搜索框，打字即筛——编号、标题、作者、正文都参与匹配，正文里那行环境块（机器名、版本）也能搜到。筛选全在本地做，切状态、敲键盘都不打接口，不占匿名限额。灰字实时回显「显示 N / 共 M 条（关键词 xxx）」，当前筛选下没匹配就给提示而不是空白。
+
 ## 卸载残留自动清理（0.3.29 起）
 
 卸载插件是宿主做的：删安装目录、删 `package.json` 里的依赖、删 `cordis.patch.yml` 里的模块段。但它**不删 `profile\node_modules` 里那条 junction**——实测 `dsh-image-search` 卸载后目标目录 `D:\DeepSeekHarness\dsh-image-search-0.1.0` 已经没了、链接还指着它。这类断链 pnpm 也不管（平铺布局下它只按 lockfile 重装，而链接不是它建的），同步同样从不清，于是一直挂到下次重装。

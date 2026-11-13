@@ -219,6 +219,8 @@ The Feedback card at the bottom of the panel. **GitHub Issues are the single sou
 
 **Offline reports are not lost**: when creating an Issue fails, the report goes into `<dshHome>\config-sync-feedback-outbox.json`; the panel shows how many are pending and Flush creates them one by one when the network returns, dropping each one that succeeds. It is a sending queue, not a second copy - once sent, the queue empties.
 
+**Filter and search** (0.3.33): a row above the list with `Open / Closed / All` (each carrying a live count - the server fetches everything once and derives open/closed/total), plus a search box that filters as you type. It matches issue number, title, author and body, including the machine/version inside the environment block. All filtering is local: switching state or typing never calls the API, so it does not consume the anonymous quota. A grey line reports "N of M shown (keyword x)" live, and an empty result under the current filter says so instead of going blank.
+
 ## Uninstall leftovers cleaned automatically (since 0.3.29)
 
 Uninstalling a plugin is the host's job: it removes the install directory, the `package.json` dependency and the `cordis.patch.yml` block. It does **not** remove the junction under `profile\node_modules` - measured on `dsh-image-search`, whose target `D:\DeepSeekHarness\dsh-image-search-0.1.0` was gone while the link still pointed at it. Broken links like that are invisible to pnpm too (with a flat layout it only reinstalls from the lockfile, and the link was not created by pnpm), and syncing never cleaned them either, so they survive until the next reinstall.

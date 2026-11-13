@@ -2139,7 +2139,7 @@ window.__ModuleLoader__.load({
      */
     /** 问题反馈：提交即建 GitHub Issue（label feedback），列表读 Issue，点「已解决」就关单。 */
     function FeedbackCard() {
-      const empty = { connected: false, repo: '', label: 'feedback', items: [], outbox: [], error: '', ghFile: '', version: '', owner: '', login: '', canClose: false, readAnon: false, note: '' }
+      const empty = { connected: false, repo: '', label: 'feedback', items: [], counts: { open: 0, closed: 0, total: 0 }, outbox: [], error: '', ghFile: '', version: '', owner: '', login: '', canClose: false, readAnon: false, note: '' }
       const [st, setSt] = react.useState(empty)
       const [title, setTitle] = react.useState('')
       const [text, setText] = react.useState('')
@@ -2148,6 +2148,9 @@ window.__ModuleLoader__.load({
       const [busy, setBusy] = react.useState(false)
       const [msg, setMsg] = react.useState('')
       const [err, setErr] = react.useState('')
+      // 筛选：状态走本地过滤（一次拉全量、计数才准），关键词也本地过，输入即筛，不打接口
+      const [filter, setFilter] = react.useState('open')
+      const [kw, setKw] = react.useState('')
 
       const load = async () => {
         try {
@@ -2225,14 +2228,32 @@ window.__ModuleLoader__.load({
         style: { display: 'inline-block', width: '7px', height: '7px', borderRadius: '50%', background: color, marginRight: '6px', verticalAlign: 'middle' },
       }, null)
 
-      const open = st.items.filter((x) => x.state === 'open').length
-      const closed = st.items.length - open
+      const open = st.counts.open
+      const closed = st.counts.closed
+      const total = st.counts.total || st.items.length
+
+      // 关键词：编号、标题、作者、正文都算（正文是 Issue 的 body，含环境块）
+      const shown = st.items.filter((it) => {
+        if (filter === 'open' && it.state !== 'open') return false
+        if (filter === 'closed' && it.state !== 'closed') return false
+        const q = kw.trim().toLowerCase()
+        if (!q) return true
+        const hay = `${it.number} ${it.title || ''} ${it.user || ''} ${it.body || ''}`.toLowerCase()
+        return hay.includes(q)
+      })
+
+      const seg = (key, label) => h('button', {
+        key,
+        type: 'button',
+        style: filter === key ? S.btnPrimary : S.btn,
+        onClick: () => setFilter(key),
+      }, label)
 
       return h('div', { style: S.card },
         h('div', { style: S.cardHead },
           h('div', { style: S.cardTitle }, M('问题反馈', 'Feedback')),
           h('div', { style: { flex: 1 } }, null),
-          h('span', { style: S.chip }, M(`${open} 待处理 / 共 ${st.items.length}`, `${open} open / ${st.items.length} total`)),
+          h('span', { style: S.chip }, M(`${open} 待处理 / 共 ${total}`, `${open} open / ${total} total`)),
           h('button', { type: 'button', style: S.btn, disabled: busy, onClick: load }, M('刷新', 'Refresh')),
         ),
         h('div', { style: S.kvRow },
@@ -2298,24 +2319,42 @@ window.__ModuleLoader__.load({
           ? h('div', { style: S.hint }, M(`本机还有 ${st.outbox.length} 条没发出去（网络恢复后点「补发」）`, `${st.outbox.length} item(s) still queued locally (press Flush when the network is back)`))
           : null,
         st.items.length
-          ? h('div', { style: { ...S.panel, gap: '4px' } },
-            st.items.slice(0, 20).map((it) => h('div', { key: it.number, style: S.kvRow },
-              h('div', { style: { ...S.kvKey, width: '42px', minWidth: '42px' } }, `#${it.number}`),
-              h('div', { style: S.kvVal },
-                h('a', {
-                  href: it.url, target: '_blank', rel: 'noreferrer',
-                  style: { color: 'inherit', textDecoration: 'none', cursor: 'pointer' },
-                }, it.title || '(无标题)'),
-                h('div', { style: S.footnote },
-                  `${it.state}${closed && it.state === 'closed' ? '' : ''} · ${fmt(it.createdAt)}${it.user ? ` · ${it.user}` : ''}${it.comments ? ` · ${it.comments} 条评论` : ''}`)),
-              h('button', {
-                type: 'button',
-                style: S.btn,
-                disabled: busy || !st.canClose,
-                title: st.canClose ? '' : M('只有仓库所有者能关单', 'Only the repo owner can close issues'),
-                onClick: () => setState(it.number, it.state === 'closed' ? 'open' : 'closed'),
-              }, !st.canClose ? M('仅所有者', 'Owner only') : (it.state === 'closed' ? M('重开', 'Reopen') : M('已解决', 'Resolve'))),
-            )))
+          ? h('div', { style: { ...S.panel, gap: '8px' } },
+            h('div', { style: { display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' } },
+              seg('open', M(`未解决 ${open}`, `Open ${open}`)),
+              seg('closed', M(`已解决 ${closed}`, `Closed ${closed}`)),
+              seg('all', M(`全部 ${total}`, `All ${total}`)),
+              h('div', { style: { flex: 1 } }, null),
+              h('input', {
+                type: 'text', style: { ...S.input, maxWidth: '260px' }, value: kw, spellCheck: false,
+                placeholder: M('搜索：编号 / 标题 / 内容', 'Search: number / title / body'),
+                onChange: (e) => setKw(e.target.value),
+              }),
+              kw ? h('button', { type: 'button', style: S.btn, onClick: () => setKw('') }, M('清空', 'Clear')) : null,
+            ),
+            h('div', { style: S.footnote },
+              M(`显示 ${shown.length} / ${filter === 'all' ? total : (filter === 'open' ? open : closed)} 条${kw ? `（关键词「${kw}」）` : ''}；列表最多读 50 条，更早的请点 GitHub 页`,
+                `${shown.length} of ${filter === 'all' ? total : (filter === 'open' ? open : closed)} shown${kw ? ` (keyword "${kw}")` : ''}; at most 50 read, older ones on the GitHub page`)),
+            shown.length
+              ? shown.slice(0, 20).map((it) => h('div', { key: it.number, style: S.kvRow },
+                h('div', { style: { ...S.kvKey, width: '42px', minWidth: '42px' } }, `#${it.number}`),
+                h('div', { style: S.kvVal },
+                  h('a', {
+                    href: it.url, target: '_blank', rel: 'noreferrer',
+                    style: { color: 'inherit', textDecoration: 'none', cursor: 'pointer' },
+                  }, it.title || '(无标题)'),
+                  h('div', { style: S.footnote },
+                    `${it.state} · ${fmt(it.createdAt)}${it.user ? ` · ${it.user}` : ''}${it.comments ? ` · ${it.comments} 条评论` : ''}`)),
+                h('button', {
+                  type: 'button',
+                  style: S.btn,
+                  disabled: busy || !st.canClose,
+                  title: st.canClose ? '' : M('只有仓库所有者能关单', 'Only the repo owner can close issues'),
+                  onClick: () => setState(it.number, it.state === 'closed' ? 'open' : 'closed'),
+                }, !st.canClose ? M('仅所有者', 'Owner only') : (it.state === 'closed' ? M('重开', 'Reopen') : M('已解决', 'Resolve'))),
+              ))
+              : h('div', { style: S.footnote }, kw ? M('没有匹配的反馈，换个关键词或清空搜索。', 'Nothing matches; try another keyword or clear the search.') : M('这个状态下没有反馈。', 'No feedback in this state.')),
+          )
           : h('div', { style: S.footnote }, M('还没有反馈记录。', 'No feedback yet.')),
         h('div', { style: S.footnote },
           M('读列表不需要令牌（公开仓库，匿名 60 次/小时）；提交和关单要令牌，且只有仓库所有者能关单。没有令牌时提交会打开浏览器里预填好的新建 issue 页面。',

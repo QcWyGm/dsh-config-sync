@@ -3208,11 +3208,17 @@ async function handleFeedback(req, res, config) {
       for (const tok of attempts) {
         try {
           const items = await listIssues(g.repo, tok, 'all')
+          const counts = {
+            open: items.filter((x) => x.state === 'open').length,
+            closed: items.filter((x) => x.state === 'closed').length,
+            total: items.length,
+          }
           sendJson(res, 200, {
             ...base,
             connected: !!tok,
             readAnon: !tok,
             items,
+            counts,
             note: !tok
               ? t('匿名读取（公开仓库，不限令牌；上限 60 次/小时），提交和关单需要令牌', 'Anonymous read (public repo, no token needed; 60 requests/hour). Submitting and closing need a token.')
               : '',

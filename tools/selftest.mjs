@@ -1033,6 +1033,10 @@ console.log('== 跨机路径占位符与问题反馈 ==')
   check('面板按权限置灰关单按钮',
     cli.includes('!st.canClose') && cli.includes("M('仅所有者', 'Owner only')") && cli.includes('fallbackUrl'),
     '面板没做权限态')
+  check('反馈列表可按状态筛选 + 关键词搜索',
+    cli.includes("seg('open'") && cli.includes("seg('closed'") && cli.includes("seg('all'")
+      && cli.includes('setKw') && cli.includes('st.counts'),
+    '没有筛选/查询')
 
   const rootsGet = await call('/config-sync/roots', { headers: { host: 'localhost:3080' } })
   const rootsBody = JSON.parse(rootsGet.body || '{}')
@@ -1051,6 +1055,10 @@ console.log('== 跨机路径占位符与问题反馈 ==')
       && typeof fbBody.repo === 'string' && Array.isArray(fbBody.outbox) && typeof fbBody.ghFile === 'string'
       && typeof fbBody.canClose === 'boolean' && typeof fbBody.owner === 'string',
     JSON.stringify(fbBody).slice(0, 400))
+  check('GET /config-sync/feedback 同时给出 open/closed/total 计数',
+    fbBody.counts && typeof fbBody.counts.open === 'number' && typeof fbBody.counts.closed === 'number'
+      && typeof fbBody.counts.total === 'number',
+    JSON.stringify(fbBody.counts))
   check('跨站请求被拒（roots）', await (async () => {
     const r = await call('/config-sync/roots', {
       method: 'POST',
