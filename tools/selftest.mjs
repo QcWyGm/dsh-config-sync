@@ -898,6 +898,31 @@ console.log('== 空白本机仓库：只允许拉取 ==')
     '面板的推送按钮没有单独门禁')
 }
 
+// 任意 git 托管平台（0.3.27）：远端地址只校验写法，认证自检提示按 origin 的真实主机名现算，
+// 不再写死 git@gitee.com —— 否则用 GitHub/GitLab 的人照着提示敲会连到错的主机。
+console.log('')
+console.log('== 任意 git 托管平台：提示不写死 gitee ==')
+{
+  const root = join(dirname(fileURLToPath(import.meta.url)), '..')
+  const commonNew = readFileSync(join(root, 'runtime', 'dsh-sync-common.ps1'), 'utf8')
+  const syncNew = readFileSync(join(root, 'runtime', 'sync.ps1'), 'utf8')
+  const clientNew = readFileSync(join(root, 'client.js'), 'utf8')
+  check('common 提供 Get-RemoteHost（认 git@host / ssh:// / https://）',
+    commonNew.includes('function Get-RemoteHost') && commonNew.includes('^ssh://(?:[^@/]+@)?([^/:]+)'),
+    'common 里没有主机名解析')
+  check('common 提供 Get-RemoteAuthHint（https 给 ls-remote，ssh 给 ssh -T）',
+    commonNew.includes('function Get-RemoteAuthHint') && commonNew.includes('ls-remote --heads origin') && commonNew.includes('ssh -T git@'),
+    'https 与 ssh 两种认证没有分开提示')
+  check('sync.ps1 的自检提示不再写死 git@gitee.com',
+    !syncNew.includes('ssh -T git@gitee.com') && (syncNew.match(/Get-RemoteAuthHint/g) || []).length >= 3,
+    '仍有 gitee 硬编码或提示没接上')
+  check('面板占位与说明不再只暗示 Gitee',
+    clientNew.includes('git@<host>:you/dsh-config.git')
+      && clientNew.includes('git@github.com:you/dsh-config.git')
+      && clientNew.includes('自建 Gitea'),
+    '面板还只提 Gitee')
+}
+
 console.log('')
 console.log(failures === 0 ? '结论：全部通过' : `结论：${failures} 项失败`)
 process.exit(failures === 0 ? 0 : 1)

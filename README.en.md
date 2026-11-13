@@ -75,6 +75,20 @@ The layout is "one status row + one metric strip + section cards", read top to b
 - A configured path that later goes away (moved/renamed): `status` returns `repo.exists=false` with `phase='missing'`, and the panel returns to "must be set again" — it will **not** silently switch to another detected repo.
 - Stored in `~\.dsh\dsh-config-sync.json`: per machine, never in the repo.
 
+## Supported cloud hosts (spelled out since 0.3.27)
+
+The plugin does not pick a git host: the remote URL is only validated for its *form*, and `fetch` / `push` / `pull` / `ls-remote` are handed straight to git. Gitee, GitHub, GitLab and self-hosted Gitea/Forgejo all take the same path.
+
+| Item | Detail |
+|---|---|
+| URL forms | `git@host:owner/repo.git`, `ssh://git@host:port/owner/repo.git`, `https://host/owner/repo.git` |
+| Default branch | `main` is tried first; if the remote has no `main`, the first remote branch is used (`master` on older repos), and tracking is set up after the pull |
+| Auth | SSH: fill in the key path (empty lets `.ssh\config` or Git defaults decide), and generated scripts use `GIT_SSH_COMMAND` with `StrictHostKeyChecking=accept-new`; HTTPS: use the account/token in Git Credential Manager — the plugin stores no passwords |
+| Failure hint | On a failed fetch/pull the self-check host is read from the real `origin` URL (since 0.3.27) instead of a hard-coded `git@gitee.com`; an https URL gets the `ls-remote` check, not `ssh -T` |
+| File size cap | 100MB (Gitee free tier, GitHub and GitLab all default to roughly this), and larger files are left out of the repo |
+
+Two notes for private repos: ① SSH is the simplest; ② the plugin's **own update manifest** points at the author's public repo by default — if you repoint it at your own private repo, only Gitee raw links are currently rewritten to the API + token form, so anonymous raw reads of a private GitHub/GitLab repo will fail. That is a known limitation.
+
 ## The scripts generated in one click
 
 "Generate push / pull / restore" can write all three at once, or one of them; when the local repo is still empty it generates pull + restore only. File names, buttons and the script text are Chinese by design.

@@ -541,3 +541,34 @@ function Repair-PrimaryRuntimeLink([string]$appRoot, [string]$dshHome) {
   }
 }
 
+# ---------- 远端地址 → 主机名 / 认证自检提示（0.3.27）----------
+<#
+  插件不挑平台：远端地址只校验「写法」（git@host:path / ssh:// / https://），
+  Gitee、GitHub、GitLab、自建 Gitea 走的是同一套 fetch/push/pull。
+  这两个函数只解决「报错文案」：以前自检提示写死 ssh -T git@gitee.com，
+  用 GitHub/GitLab 的人照着敲会连到错的主机；现在按 origin 的真实主机名现算。
+#>
+function Get-RemoteHost([string]$Url) {
+  if ([string]::IsNullOrWhiteSpace($Url)) { return '' }
+  $u = $Url.Trim()
+  if ($u -match '^ssh://(?:[^@/]+@)?([^/:]+)') { return $Matches[1] }   # ssh://git@host:22/owner/repo.git
+  if ($u -match '^[^@/\s]+@([^:/\s]+):')        { return $Matches[1] }   # git@host:owner/repo.git
+  if ($u -match '^https?://([^/]+)')            { return $Matches[1] }   # https://host/owner/repo.git
+  return ''
+}
+
+<#
+  HTTPS 地址没有 SSH 自检这一说：凭据走 Git 凭据管理器（GCM）或 URL 里的 token；
+  只有 SSH 地址才给 ssh -T git@<host>。
+#>
+function Get-RemoteAuthHint([string]$Url) {
+  $hostName = Get-RemoteHost $Url
+  if ($Url -match '^https?://') {
+    if ($hostName) { return ("先确认 " + $hostName + " 的 HTTPS 凭据（Git 凭据管理器里的账号/私人令牌）：git ls-remote --heads origin") }
+    return '先确认 HTTPS 凭据（Git 凭据管理器里的账号/私人令牌）：git ls-remote --heads origin'
+  }
+  if ($hostName) { return ("先自检 SSH：ssh -T git@" + $hostName) }
+  return '先自检 SSH：用 origin 里的真实主机名（ssh -T git@<host>）'
+}
+
+

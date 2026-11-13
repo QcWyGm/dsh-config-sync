@@ -75,6 +75,20 @@ dsh plugin add https://raw.githubusercontent.com/QcWyGm/dsh-config-sync/main/rel
 - 设置里的路径后来失效（被移走/改名）：`status` 给 `repo.exists=false`、`phase='missing'`，面板回到"必须重设"，**不会**悄悄换成探测到的另一个仓库。
 - 落在 `~\.dsh\dsh-config-sync.json`，跟本机走、不进仓库。
 
+## 支持的云端平台（0.3.27 起写明）
+
+插件本身不挑 git 托管平台：远端地址只校验「写法」，之后的 `fetch` / `push` / `pull` / `ls-remote` 全部交给 git。Gitee、GitHub、GitLab、自建 Gitea/Forgejo 走的是同一条路。
+
+| 项 | 说明 |
+|---|---|
+| 地址写法 | `git@host:owner/repo.git`、`ssh://git@host:port/owner/repo.git`、`https://host/owner/repo.git` 三种 |
+| 默认分支 | 先试 `main`，云端没有就取远端第一个分支（老仓库的 `master` 也行），拉取后自动建立 tracking |
+| 认证 | SSH：填私钥路径（留空则交给 `.ssh\config` 或 Git 默认选择），生成的脚本用 `GIT_SSH_COMMAND` + `StrictHostKeyChecking=accept-new`；HTTPS：用 Git 凭据管理器里的账号/令牌，插件不保存任何密码 |
+| 报错自检 | fetch/pull 失败时，提示里的主机名取自 `origin` 的真实地址（0.3.27 起），不再固定写 `git@gitee.com`；https 地址给的是 `ls-remote` 检查，不是 `ssh -T` |
+| 单文件上限 | 100MB（Gitee 免费版、GitHub、GitLab 的默认硬限制都在这个量级），超过的文件不进仓库 |
+
+私有库要注意两点：①用 SSH 地址最省事；②插件**自身的更新清单**默认指向作者的公开仓库，如果你把它改成自己的私有库，目前只有 Gitee 的 raw 链接会自动换成 API + token，GitHub/GitLab 私有库的 raw 匿名读会失败——这是已知限制。
+
 ## 一键生成的三份脚本
 
 「一键生成 推送 / 拉取 / 还原」可一次写出三份，也可只生成其中一份；仓库还是空目录时只生成「拉取 / 还原」。文件名、按钮、脚本内文字全中文。

@@ -476,7 +476,7 @@ function Initialize-RepoIfNeeded {
   Say ""
   Say "== 从云端拉取仓库内容 =="
   & "$env:ComSpec" /c ('"' + $git + '" -C "' + $RepoRoot + '" fetch origin 2>&1') | Write-Host
-  if ($LASTEXITCODE -ne 0) { Die "git fetch 失败：连不上远端或认证有问题（先 ssh -T git@gitee.com 自检，再重跑）。" }
+  if ($LASTEXITCODE -ne 0) { Die ("git fetch 失败：连不上远端或认证有问题（" + (Get-RemoteAuthHint $remote) + "，再重跑）。") }
   $branchName = 'main'
   $heads = (@(& "$env:ComSpec" /c ('"' + $git + '" -C "' + $RepoRoot + '" ls-remote --heads origin 2>nul')) -join "`n")
   if ($heads -notmatch 'refs/heads/main') {
@@ -587,7 +587,7 @@ if ($report) {
   $fetchOut = (& "$env:ComSpec" /c ('"' + $git + '" -C "' + $RepoRoot + '" fetch origin --prune 2>&1') 2>&1 | Out-String)
   if ($LASTEXITCODE -ne 0) {
     Say $fetchOut.TrimEnd()
-    Die "git fetch 失败：连不上远端或认证有问题（先 ssh -T git@gitee.com 自检，再重跑）。"
+    Die ("git fetch 失败：连不上远端或认证有问题（" + (Get-RemoteAuthHint (Get-GitText 'remote get-url origin').Text) + "，再重跑）。")
   }
   $anc = (Get-GitText ('merge-base --is-ancestor HEAD ' + $remoteRef))
   if ($anc.Code -eq 0) {
@@ -625,7 +625,7 @@ if ($LASTEXITCODE -ne 0) {
   if ($pullOut -match 'Could not read from remote|Permission denied|invalid option|Host key verification|publickey|Bad owner or permissions') {
     Die ("git pull 失败：连不上远端 / SSH 认证或命令有问题（不是本地改动）。先自检：" +
          "①GIT_SSH_COMMAND 第一个词必须是 ssh.exe 本体，可先 set GIT_SSH_COMMAND 什么都不设改用 .ssh\\config；" +
-         "②私钥路径存在且无口令：ssh -T git@gitee.com；③再跑 git -C `"$RepoRoot`" ls-remote --heads origin 看退出码。")
+         "②" + (Get-RemoteAuthHint (Get-GitText 'remote get-url origin').Text) + "；③再跑 git -C `"$RepoRoot`" ls-remote --heads origin 看退出码。")
   } elseif ($pullOut -match 'CONFLICT|not possible to fast-forward|Your local changes|overwritten by merge|would be overwritten') {
     Die ("git pull 失败：本地有未提交改动或与远端冲突。先处理（git -C `"$RepoRoot`" status / stash / 解决冲突）再重跑；" +
          "本脚本不会替你合并。")

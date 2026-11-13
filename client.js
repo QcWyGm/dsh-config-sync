@@ -656,8 +656,8 @@ window.__ModuleLoader__.load({
               h('button', { type: 'button', style: S.btn, disabled: !props.data, onClick: startEdit }, M('修改', 'Edit')),
             ),
         ),
-        field(M('远端地址', 'Remote URL'), isEditing ? url : (remote.url || ''), setUrl, 'git@gitee.com:account/dsh-config.git'),
-        field(M('SSH 私钥', 'SSH key'), isEditing ? key : (remote.sshKey || ''), setKey, M('C:\\Users\\你\\.ssh\\id_ed25519_gitee', 'C:\\Users\\you\\.ssh\\id_ed25519_gitee')),
+        field(M('远端地址', 'Remote URL'), isEditing ? url : (remote.url || ''), setUrl, 'git@<host>:you/dsh-config.git'),
+        field(M('SSH 私钥', 'SSH key'), isEditing ? key : (remote.sshKey || ''), setKey, M('C:\\Users\\你\\.ssh\\id_ed25519', 'C:\\Users\\you\\.ssh\\id_ed25519')),
         h(Kv, {
           k: M('私钥来源', 'Key source'),
           v: `${sourceLabel(remote.sshKeyFrom)}${remote.sshKeyExists ? '' : M('（文件不存在）', ' (file missing)')}`,
@@ -672,6 +672,16 @@ window.__ModuleLoader__.load({
           : null,
         err ? h('div', { style: { ...S.footnote, color: 'var(--dsw-alias-state-error-primary)' } }, M(`保存失败：${err}`, `Save failed: ${err}`)) : null,
         msg ? h('div', { style: { ...S.footnote, color: 'var(--dsw-alias-state-success-primary)' } }, msg) : null,
+        h('div', { style: S.footnote }, M(
+          '远端地址支持任意 git 托管平台（Gitee / GitHub / GitLab / 自建 Gitea）：'
+          + 'git@host:owner/repo.git、ssh://、https:// 三种写法都行；'
+          + '例：git@gitee.com:you/dsh-config.git、git@github.com:you/dsh-config.git、https://gitlab.com/you/dsh-config.git。'
+          + 'SSH 地址用下面的私钥/ssh config 走认证，https 地址用 Git 凭据管理器里的账号或令牌。',
+          'Any git host works (Gitee / GitHub / GitLab / self-hosted Gitea): '
+          + 'git@host:owner/repo.git, ssh:// and https:// are all accepted; '
+          + 'e.g. git@gitee.com:you/dsh-config.git, git@github.com:you/dsh-config.git, https://gitlab.com/you/dsh-config.git. '
+          + 'SSH URLs authenticate with the key or ssh config below; https URLs use the account or token in Git Credential Manager.',
+        )),
         h('div', { style: S.footnote }, M(
           '只存私钥路径不存内容；保存远端地址会同步更新本机 git origin，git 失败则整套回滚。',
           'Only the key path is stored; saving also updates the local git origin, rolling everything back if git fails.',
