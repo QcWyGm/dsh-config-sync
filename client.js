@@ -1545,8 +1545,8 @@ window.__ModuleLoader__.load({
       const [updToken, setUpdToken] = react.useState('')
       const [updMsg, setUpdMsg] = react.useState('')
       const [updErr, setUpdErr] = react.useState('')
-      // 「本机路径」平时不占版面：只在有待确认 / 根外路径 / 被覆盖这类事时才自己冒出来；
-      // 想主动改路径就点标题行的「本机路径」按钮强制展开。
+      // 「本机路径」平时不占版面：只在标题行按钮被点开时才渲染；按钮本身在
+      // 「根外路径 / 被覆盖的配置」两类告警下变橙并带数字（待确认路径不算告警）。
       const [showRoots, setShowRoots] = react.useState(false)
       // 定时器放 ref 里：数据每刷新一次 effect 就会重跑，若在 effect 里 return 清理函数，
       // 会把还没到点的"5 秒后消失"定时器一起清掉，提示就一直挂在屏幕上。
@@ -1997,9 +1997,10 @@ window.__ModuleLoader__.load({
       // 「同步内容」卡自己拉 /config-sync/scope，不依赖 status（status 读的是仓库与本机，跟勾选无关）
       const scopeCard = h(ScopeCard, {})
       // 「本机路径」与「问题反馈」自己持有数据（roots 文件是本机私有，feedback 在仓库里）
-      // 这一区平时不进页面：只有标题行的按钮被点开才渲染；有没有待处理项由 status.localPaths 给，
-      // 数量挂在那个按钮上（橙色 + 数字），不用把整张卡摊在页面上当提示。
-      const lpTotal = (data && data.localPaths && data.localPaths.total) || 0
+      // 这一区平时不进页面：只有标题行的按钮被点开才渲染。
+      // 按钮只在「根外绝对路径」「被覆盖的配置」这两类告警上变橙（localPaths.alert）；
+      // 待确认路径只是"还得填一次"，不点亮按钮，卡内也只给一行灰字。
+      const lpAlert = (data && data.localPaths && data.localPaths.alert) || 0
       const rootsCard = showRoots ? h(RootsCard, { onRootsSaved: refresh }) : null
       const feedbackCard = h(FeedbackCard, {})
       // 冲突卡只在真有清单时才出现：没冲突就不占版面
@@ -2018,21 +2019,21 @@ window.__ModuleLoader__.load({
             h('span', { style: { ...S.footnote, marginLeft: '4px' } }, M('云端', 'cloud')),
             h('span', { style: chipStyle(cloudLine.kind) }, cloudLabel),
             h('div', { style: { flex: 1, minWidth: '8px' } }, null),
-            // 「本机路径」区唯一的入口：平时只是个普通按钮，有待处理项时变橙色并带上数字
+            // 「本机路径」区唯一的入口：平时普通按钮，只有根外路径/被覆盖这两类告警才变橙并带数字
             h('button', {
               type: 'button',
-              style: (!showRoots && lpTotal > 0)
+              style: (!showRoots && lpAlert > 0)
                 ? { ...S.btn, color: 'var(--dsw-alias-state-warn-primary)', borderColor: 'var(--dsw-alias-state-warn-primary)' }
                 : S.btn,
-              title: (!showRoots && lpTotal > 0)
-                ? M('本机路径有需要确认或处理的项目，点开查看', 'Some local paths need review - click to open')
+              title: (!showRoots && lpAlert > 0)
+                ? M('本机路径有需要处理的告警（根外路径 / 被覆盖的配置），点开查看', 'Local paths need attention (outside-root paths / overwritten configs) - click to open')
                 : M('查看本机路径与占位符的对照', 'Show local paths and their placeholders'),
               onClick: () => setShowRoots((v) => !v),
             },
               showRoots
                 ? M('收起本机路径', 'Hide local paths')
-                : (lpTotal > 0
-                  ? M(`本机路径 · ${lpTotal} 项待处理`, `Local paths · ${lpTotal} to review`)
+                : (lpAlert > 0
+                  ? M(`本机路径 · ${lpAlert} 项告警`, `Local paths · ${lpAlert} alert(s)`)
                   : M('本机路径', 'Local paths'))),
             h('button', { type: 'button', style: S.btn, disabled: busy, onClick: refresh },
               busy ? M('检测中…', 'Checking…') : M('重新检测', 'Re-check')),
@@ -2195,9 +2196,9 @@ window.__ModuleLoader__.load({
         h('div', { style: S.cardHead },
           h('div', { style: S.cardTitle }, M('本机路径', 'Local paths')),
           h('div', { style: { flex: 1 } }, null),
+          // 「待确认」不当告警：只给中性灰 chip（告警只有根外路径、被覆盖的配置两类）
           missing.length
-            ? h('span', { style: { ...S.chip, color: 'var(--dsw-alias-state-warn-primary)' } },
-              M(`待确认 ${missing.length} 项`, `${missing.length} to confirm`))
+            ? h('span', { style: S.chip }, M(`${missing.length} 项待确认`, `${missing.length} to confirm`))
             : (data
               ? h('span', { style: { ...S.chip, color: 'var(--dsw-alias-state-success-primary, #2e7d32)' } }, M('已确认', 'Confirmed'))
               : null),
@@ -2216,11 +2217,13 @@ window.__ModuleLoader__.load({
               busy ? M('读取中…', 'Loading…') : M('重新读取', 'Reload')),
           ),
         ),
+        // 待确认路径不是告警：用普通面板 + 明细列表（不染橙色，不抢注意力），
+        // 但明细要留着——0.3.30 起就是靠它告诉你到底缺哪个目录。
         missing.length
           ? h('div', { style: { ...S.panel, gap: '4px' } },
-            h('div', { style: { ...S.hint, color: 'var(--dsw-alias-state-warn-primary)' } },
-              M('上次拉取时有配置没写进去：它们引用的目录这台机器还没确认。填好下面的路径再保存，之后重新拉取一次即可。',
-                'Some configs were skipped during the last pull: the folders they reference are not confirmed on this machine. Fill in the paths below, save, then pull again.')),
+            h('div', { style: S.hint },
+              M(`上次拉取有 ${missing.length} 项配置没写进去（它们引用的目录这台机器还没确认）：填好下面的路径再保存，之后重新拉取一次即可。`,
+                `${missing.length} config(s) were skipped during the last pull (the folders they reference are not confirmed on this machine): fill in the paths below, save, then pull again.`)),
             missing.slice(0, 20).map((m, i) => h('div', { key: i, style: S.hint },
               `· ${m.token || '?'} — ${m.label || m.file || ''}${m.hint ? `：${m.hint}` : ''}`)))
           : null,

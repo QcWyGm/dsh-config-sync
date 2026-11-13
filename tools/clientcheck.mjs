@@ -239,8 +239,9 @@ try {
     source.includes('const rootsCard = showRoots ? h(RootsCard, { onRootsSaved: refresh }) : null') &&
     !source.includes('props.forceShow'),
     '缺 showRoots 三元 / 仍留着 forceShow')
-  check('标题行按钮把待处理数量挂在文案上',
-    source.includes('项待处理') && source.includes('data.localPaths && data.localPaths.total'))
+  check('标题行按钮把告警数量挂在文案上（只算根外路径与被覆盖）',
+    source.includes('项告警') && source.includes('data.localPaths && data.localPaths.alert')
+    && !source.includes('localPaths.total'))
 } catch (e) {
   check('体检数据字段齐全', false, String(e && e.message))
 }

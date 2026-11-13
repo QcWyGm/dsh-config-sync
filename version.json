@@ -1,9 +1,9 @@
 {
-  "version": "0.3.38",
+  "version": "0.3.39",
   "releasedAt": "2026-11-14",
-  "notes": "0.3.38：修 0.3.37 的两个显示问题。一、空标题：0.3.37 让「本机路径」卡在组件里 return null 表示不显示，可它所在的分区拿到的是 React 元素本身（truthy），于是标题「本机路径 · 每台机器只确认一次…」还留在页面上，下面却是空的。现在显示条件移到父层：不展开就不渲染这一区，标题随内容一起消失。二、按钮点了没反应：以前「有告警自动出现」和「手动展开」两条通路并存，卡片已经自己冒出来时按钮点一下毫无变化。现在卡片只由按钮控制，告警不再自动把卡摊开，而是挂在按钮上——status 新增 localPaths（待确认 / 根外绝对路径 / 被覆盖 三项计数），有待处理项时按钮变橙色并显示「本机路径 · N 项待处理」，点开才看明细。三、README 中英同步改口径，服务端自检新增两条断言（status 给计数、显示条件在父层）。",
-  "notesEn": "0.3.38: fixes two display problems introduced in 0.3.37. 1) Empty heading: 0.3.37 hid the Local paths card by returning null inside the component, but its section only received the React element (truthy), so the heading \"Local paths - confirm once per machine\" stayed on the page with nothing under it. The visibility condition now lives in the parent: the section is not rendered unless expanded, so the heading goes with the content. 2) Button did nothing: \"appears automatically when something is wrong\" and \"expand manually\" coexisted, so clicking the button changed nothing while the card was already shown. The card is now controlled by the button alone, and the warnings ride on the button instead of unfolding the card: status gains localPaths (pending / outside-root absolute / overwritten counts), and when anything is pending the button turns amber and reads \"Local paths - N to review\"; clicking it shows the details. 3) README updated in both languages, two new server assertions (counts in status, visibility decided in the parent).",
-  "tgz": "releases/dsh-config-sync-0.3.38.tgz",
-  "sha256":"80a603d16286c1247e03f1c996986c951416a68ea3bc167332f0d570cc11ae68",
+  "notes": "0.3.39：本机路径这一区只把两类情况当告警——仓库里的「根外绝对路径」和「被覆盖的配置」。以前「待确认路径」也算一项、也会点亮标题行按钮，可它不是告警：它只是\"上次拉取时有配置没写进去，得把目录填一次\"，属于配置动作，放在告警里会让人以为出了错。现在 status 的 localPaths 多给一个 alert（= 根外 + 被覆盖），按钮只在这个 alert 上变橙、显示「本机路径 · N 项告警」；待确认路径退成卡内的中性提示，明细列表照旧保留。",
+  "notesEn": "0.3.39: the Local paths section treats exactly two situations as warnings - absolute paths in the repo outside every root, and configs the last pull overwrote. Paths still to confirm used to count as a third warning and lit up the title-row button, but they are not a warning: they just mean \"the last pull skipped some configs, fill the folder in once\", which is a configuration step and reads like an error when shown as a warning. status.localPaths now also reports alert (= outside-root + overwritten); the button turns amber and reads \"Local paths - N alert(s)\" only on that, while paths to confirm drop back to a neutral notice inside the card (the itemised list stays).",
+  "tgz": "releases/dsh-config-sync-0.3.39.tgz",
+  "sha256":"a80a57aad383c488632d3f991d9cf481b57ec2194613aec61af1961b23ae580d",
   "minClient": "0.2.2-rc.2"
 }

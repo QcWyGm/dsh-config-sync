@@ -964,7 +964,9 @@ async function inspect(config) {
       const pending = countItems(pendingDoc, 'missing')
       const absolute = countItems(absDoc, 'items')
       const overwrite = countItems(ovDoc, 'items')
-      return { pending, absolute, overwrite, total: pending + absolute + overwrite }
+      // 面板只把「根外绝对路径」与「被覆盖的配置」两类算作告警（0.3.39）。
+      // 待确认路径是"还得你填一次"的配置动作，不是告警：计数照给，但不进 alert、不点亮按钮。
+      return { pending, absolute, overwrite, alert: absolute + overwrite, total: pending + absolute + overwrite }
     })(),
     auto: {
       pull: settings.autoPull === true,
