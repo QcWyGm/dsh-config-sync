@@ -399,17 +399,17 @@ window.__ModuleLoader__.load({
       return body
     }
 
-    /** 问题反馈：GET 列仓库 feedback\ 里的记录，POST 新增一条并推到云端。 */
-    async function callFeedback(payload) {
-      const res = await fetch('/config-sync/feedback', payload
-        ? {
-          method: 'POST',
-          cache: 'no-store',
-          credentials: 'same-origin',
-          headers: jsonHeaders,
-          body: JSON.stringify(payload),
-        }
-        : { cache: 'no-store', credentials: 'same-origin', headers: langHeaders() })
+    /** 问题反馈：GET 读 GitHub Issue 列表，POST 建 issue / 存令牌 / 补发队列，PATCH 改状态。 */
+    async function callFeedback(payload, opts = {}) {
+      const query = opts.query ? `?${new URLSearchParams(opts.query).toString()}` : ''
+      const method = opts.method || (payload ? 'POST' : 'GET')
+      const res = await fetch(`/config-sync/feedback${query}`, {
+        method,
+        cache: 'no-store',
+        credentials: 'same-origin',
+        headers: payload ? jsonHeaders : langHeaders(),
+        body: payload ? JSON.stringify(payload) : undefined,
+      })
       const text = await res.text()
       let body
       try { body = text ? JSON.parse(text) : null } catch { throw badJson(res) }
@@ -2014,7 +2014,7 @@ window.__ModuleLoader__.load({
           // 「同步内容」放在整页最下面：它是"细项配置"，看清前面的状态与动作后才会来调整
           Section(M('同步内容', 'Sync content'), M('十组内容，默认全勾；必需组锁定', 'Ten groups, all checked; required groups are locked'), [scopeCard]),
           // 反馈放在最后一区：查完状态、调完配置，才轮到「有问题要报」
-          Section(M('问题反馈', 'Feedback'), M('提交的问题会存进仓库 feedback\\ 并推送到云端，两台机器都能看到', 'Reports are stored in the repo feedback\\ folder and pushed to the cloud, visible on both machines'), [feedbackCard]),
+          Section(M('问题反馈', 'Feedback'), M('提交即建 GitHub Issue（label feedback），跨机器共用同一份；离线先进本机队列', 'Each report becomes a GitHub Issue (label feedback), shared across machines; offline ones queue locally first'), [feedbackCard]),
         ),
       )
     }
@@ -2137,20 +2137,23 @@ window.__ModuleLoader__.load({
      * 问题反馈卡：写进仓库的 feedback\ 目录并推到云端，另一台机器拉取后同样能看到。
      * 推送失败不算失败：文件已经留在本机仓库里，下次推送会一起上去。
      */
+    /** 问题反馈：提交即建 GitHub Issue（label feedback），列表读 Issue，点「已解决」就关单。 */
     function FeedbackCard() {
-      const [items, setItems] = react.useState([])
-      const [ready, setReady] = react.useState(false)
+      const empty = { connected: false, repo: '', label: 'feedback', items: [], outbox: [], error: '', ghFile: '', version: '' }
+      const [st, setSt] = react.useState(empty)
       const [title, setTitle] = react.useState('')
       const [text, setText] = react.useState('')
+      const [token, setToken] = react.useState('')
+      const [askToken, setAskToken] = react.useState(false)
       const [busy, setBusy] = react.useState(false)
       const [msg, setMsg] = react.useState('')
       const [err, setErr] = react.useState('')
 
       const load = async () => {
         try {
-          const r = await callFeedback()
-          setItems(r.items || [])
-          setReady(Boolean(r.repoReady))
+          const r = await callFeedback(null)
+          setSt({ ...empty, ...r })
+          setErr(String(r.error || ''))
         } catch (e) {
           setErr(String((e && e.message) || e))
         }
@@ -2161,11 +2164,48 @@ window.__ModuleLoader__.load({
         setBusy(true); setErr(''); setMsg('')
         try {
           const r = await callFeedback({ title, body: text })
-          setMsg(r.pushed
-            ? M('已提交并推送到云端仓库，另一台机器拉取后就能看到。', 'Submitted and pushed to the cloud repo; the other machine sees it after pulling.')
-            : M(`已存进本机仓库（${r.error || '还没推送上去'}）`, `Saved to the local repo (${r.error || 'not pushed yet'})`))
-          setTitle('')
-          setText('')
+          if (r && r.number) {
+            setMsg(M(`已建 Issue #${r.number}，列表里能看到，网页上也点得开。`, `Issue #${r.number} created; it shows in the list and opens in the browser.`))
+            setTitle('')
+            setText('')
+          } else {
+            setMsg(M(`没连上 GitHub（${(r && r.error) || '网络不通'}），已存进本机待发队列（${r ? r.remaining : 0} 条），联网后点「补发」。`,
+              `Could not reach GitHub (${(r && r.error) || 'network'}). Saved to the local queue (${r ? r.remaining : 0} item(s)); press Flush when online.`))
+          }
+          await load()
+        } catch (e) {
+          setErr(String((e && e.message) || e))
+        } finally { setBusy(false) }
+      }
+
+      const saveToken = async () => {
+        setBusy(true); setErr(''); setMsg('')
+        try {
+          await callFeedback({ token }, { query: { action: 'token' } })
+          setToken('')
+          setAskToken(false)
+          setMsg(M('令牌已存到本机（不进仓库），连接正常。', 'Token saved locally (never committed); connection works.'))
+          await load()
+        } catch (e) {
+          setErr(String((e && e.message) || e))
+        } finally { setBusy(false) }
+      }
+
+      const flush = async () => {
+        setBusy(true); setErr(''); setMsg('')
+        try {
+          const r = await callFeedback({}, { query: { action: 'flush' } })
+          setMsg(M(`补发 ${(r.sent || []).length} 条，还剩 ${r.remaining || 0} 条。`, `Flushed ${(r.sent || []).length}, ${r.remaining || 0} left.`))
+          await load()
+        } catch (e) {
+          setErr(String((e && e.message) || e))
+        } finally { setBusy(false) }
+      }
+
+      const setState = async (number, next) => {
+        setBusy(true); setErr('')
+        try {
+          await callFeedback({ state: next }, { query: { number }, method: 'PATCH' })
           await load()
         } catch (e) {
           setErr(String((e && e.message) || e))
@@ -2177,13 +2217,46 @@ window.__ModuleLoader__.load({
         try { return new Date(s).toLocaleString(localeNow(), { hour12: false }) } catch { return s }
       }
 
+      const dot = (color) => h('span', {
+        style: { display: 'inline-block', width: '7px', height: '7px', borderRadius: '50%', background: color, marginRight: '6px', verticalAlign: 'middle' },
+      }, null)
+
+      const open = st.items.filter((x) => x.state === 'open').length
+      const closed = st.items.length - open
+
       return h('div', { style: S.card },
         h('div', { style: S.cardHead },
           h('div', { style: S.cardTitle }, M('问题反馈', 'Feedback')),
           h('div', { style: { flex: 1 } }, null),
-          h('span', { style: S.chip }, M(`${items.length} 条`, `${items.length} item(s)`)),
+          h('span', { style: S.chip }, M(`${open} 待处理 / 共 ${st.items.length}`, `${open} open / ${st.items.length} total`)),
           h('button', { type: 'button', style: S.btn, disabled: busy, onClick: load }, M('刷新', 'Refresh')),
         ),
+        h('div', { style: S.kvRow },
+          h('div', { style: S.kvKey }, M('连接', 'Connect')),
+          h('div', { style: S.kvVal },
+            h('div', null,
+              dot(st.connected ? 'var(--dsw-alias-state-success-primary, #35a854)' : 'var(--dsw-alias-state-warning-primary, #d97706)'),
+              st.connected
+                ? `GitHub ${st.repo || '?'} · label ${st.label || 'feedback'}`
+                : M('还没连上 GitHub（令牌没取到或网络不通）', 'Not connected to GitHub (no token or no network)'),
+            ),
+            h('div', { style: S.footnote },
+              st.ghFile ? M(`令牌/仓库记在 ${st.ghFile}（本机私有，不进仓库）`, `Token and repo live in ${st.ghFile} (local only, never committed)`) : null),
+          ),
+        ),
+        (askToken || !st.connected)
+          ? h('div', { style: S.kvRow },
+            h('div', { style: S.kvKey }, M('令牌', 'Token')),
+            h('div', { style: { ...S.kvVal, display: 'flex', gap: '8px' } },
+              h('input', {
+                type: 'password', style: S.input, value: token, spellCheck: false, autoComplete: 'off',
+                placeholder: M('粘贴 GitHub 令牌（只需一次；留空则自动读本机 git 凭据）', 'Paste a GitHub token (once); leave empty to reuse the local git credential'),
+                onChange: (e) => setToken(e.target.value),
+              }),
+              h('button', { type: 'button', style: S.btnPrimary, disabled: busy || !token.trim(), onClick: saveToken }, M('保存', 'Save')),
+            ),
+          )
+          : null,
         h('div', { style: S.kvRow },
           h('div', { style: S.kvKey }, M('标题', 'Title')),
           h('input', {
@@ -2197,30 +2270,45 @@ window.__ModuleLoader__.load({
           h('textarea', {
             style: { ...S.input, minHeight: '64px', resize: 'vertical', fontFamily: 'inherit' },
             value: text, spellCheck: false, rows: 3,
-            placeholder: M('现象、期望、版本与机器（可选）', 'What happened, what you expected, version and machine (optional)'),
+            placeholder: M('现象、期望、怎么复现（版本、机器、时间会自动附在末尾）', 'What happened, what you expected, how to reproduce (version, machine and time are appended automatically)'),
             onChange: (e) => setText(e.target.value),
           }),
         ),
         h('div', { style: S.actions },
-          h('button', { type: 'button', style: S.btnPrimary, disabled: busy || !title.trim() || !ready, onClick: submit },
-            busy ? M('提交中…', 'Submitting…') : M('提交并推送', 'Submit & push')),
-          ready ? null : h('div', { style: S.hint }, M('仓库没配好，暂时存不了反馈', 'The repo is not ready, so feedback cannot be stored yet')),
+          h('button', { type: 'button', style: S.btnPrimary, disabled: busy || !title.trim(), onClick: submit },
+            busy ? M('提交中…', 'Submitting…') : M('提交到 GitHub', 'Submit to GitHub')),
+          h('button', { type: 'button', style: S.btn, disabled: busy, onClick: () => setAskToken(!askToken) },
+            M(askToken ? '收起令牌' : '换令牌', askToken ? 'Hide token' : 'Change token')),
+          st.outbox.length
+            ? h('button', { type: 'button', style: S.btn, disabled: busy, onClick: flush }, M(`补发 ${st.outbox.length} 条`, `Flush ${st.outbox.length}`))
+            : null,
+          h('div', { style: S.footnote }, M('反馈是 GitHub Issue，另一台机器打开面板看到的是同一份', 'Each report is a GitHub Issue; the other machine sees the same list')),
         ),
         msg ? h('div', { style: S.hint }, msg) : null,
         err ? h('div', { style: { ...S.hint, color: 'var(--dsw-alias-state-error-primary)' } }, M(`失败：${err}`, `Failed: ${err}`)) : null,
-        items.length
+        st.outbox.length
+          ? h('div', { style: S.hint }, M(`本机还有 ${st.outbox.length} 条没发出去（网络恢复后点「补发」）`, `${st.outbox.length} item(s) still queued locally (press Flush when the network is back)`))
+          : null,
+        st.items.length
           ? h('div', { style: { ...S.panel, gap: '4px' } },
-            items.slice(0, 30).map((it, i) => h('div', { key: it.id || i, style: S.kvRow },
-              h('div', { style: { ...S.kvKey, width: '74px', minWidth: '74px' } }, fmt(it.createdAt)),
+            st.items.slice(0, 20).map((it) => h('div', { key: it.number, style: S.kvRow },
+              h('div', { style: { ...S.kvKey, width: '42px', minWidth: '42px' } }, `#${it.number}`),
               h('div', { style: S.kvVal },
-                `${it.title || ''}${it.body ? ` — ${String(it.body).slice(0, 120)}` : ''}`,
+                h('a', {
+                  href: it.url, target: '_blank', rel: 'noreferrer',
+                  style: { color: 'inherit', textDecoration: 'none', cursor: 'pointer' },
+                }, it.title || '(无标题)'),
                 h('div', { style: S.footnote },
-                  `${it.machine || '?'}${it.pluginVersion ? ` · v${it.pluginVersion}` : ''}${it.status ? ` · ${it.status}` : ''}`)),
+                  `${it.state}${closed && it.state === 'closed' ? '' : ''} · ${fmt(it.createdAt)}${it.user ? ` · ${it.user}` : ''}${it.comments ? ` · ${it.comments} 条评论` : ''}`)),
+              h('button', {
+                type: 'button', style: S.btn, disabled: busy,
+                onClick: () => setState(it.number, it.state === 'closed' ? 'open' : 'closed'),
+              }, it.state === 'closed' ? M('重开', 'Reopen') : M('已解决', 'Resolve')),
             )))
           : h('div', { style: S.footnote }, M('还没有反馈记录。', 'No feedback yet.')),
         h('div', { style: S.footnote },
-          M('反馈存在仓库 feedback\\ 目录（一条一个 json），提交时会 git commit + push 到云端。',
-            'Feedback lives in the repo feedback\\ folder (one json per item); submit commits and pushes it to the cloud.')),
+          M('提交后直接建 Issue（label=feedback，正文末尾自动附版本/机器/时间）；关掉就关单，GitHub 上是同一个线程。离线时先进本机队列，联网点「补发」。',
+            'Submit creates an Issue directly (label=feedback, with version/machine/time appended); resolving closes it on GitHub. Offline reports queue locally; flush when back online.')),
       )
     }
 

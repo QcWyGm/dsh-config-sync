@@ -2992,8 +2992,14 @@ async function handleRoots(req, res, config) {
  * 为什么用文件而不是 Issue：不依赖 API 令牌，另一台机器拉取后同样能在面板里看到；
  * 推送失败也不回滚本地文件（先把反馈留住，等网络好了下次推送会带上）。
  */
-function feedbackDirOf(repo) { return join(repo, 'feedback') }
+// ---------- 问题反馈：GitHub Issue 是唯一真源（0.3.31） ----------
+// 面板里提交 → 直接建 issue（label=feedback，正文附环境块）；列表读 issue（含 open/closed）；
+// 点「已解决」就 PATCH 成 closed。网络不通时先进本机待发队列，下次点「补发」再建 issue。
 
+const GH_DEFAULT_REPO = 'QcWyGm/dsh-config-sync'
+const GH_FEEDBACK_LABEL = 'feedback'
+
+/** 当前插件版本（读自己的 package.json；读不到就空串，不抛）。 */
 function pluginVersion() {
   try {
     const pkg = JSON.parse(readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'package.json'), 'utf8'))
@@ -3001,89 +3007,245 @@ function pluginVersion() {
   } catch { return '' }
 }
 
-function stampNow(date) {
-  const pad = (n) => String(n).padStart(2, '0')
-  return `${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}${pad(date.getHours())}${pad(date.getMinutes())}${pad(date.getSeconds())}`
+function ghPathOf(dshHome) { return join(dshHome, 'config-sync-gh.json') }
+function outboxPathOf(dshHome) { return join(dshHome, 'config-sync-feedback-outbox.json') }
+
+function readGh(dshHome) {
+  const j = readJson(ghPathOf(dshHome)) || {}
+  return {
+    token: String(j.token || ''),
+    repo: String(j.repo || GH_DEFAULT_REPO),
+    updatedAt: String(j.updatedAt || ''),
+  }
+}
+
+function writeGh(dshHome, o) {
+  const f = ghPathOf(dshHome)
+  try { mkdirSync(dirname(f), { recursive: true }) } catch { }
+  const body = {
+    token: String(o.token || ''),
+    repo: String(o.repo || GH_DEFAULT_REPO),
+    updatedAt: new Date().toISOString(),
+  }
+  writeFileSync(f, `${JSON.stringify(body, null, 2)}\n`, 'utf8')
+  return f
+}
+
+function readOutbox(dshHome) {
+  const j = readJson(outboxPathOf(dshHome))
+  return Array.isArray(j?.items) ? j.items : []
+}
+
+function writeOutbox(dshHome, items) {
+  const f = outboxPathOf(dshHome)
+  try { mkdirSync(dirname(f), { recursive: true }) } catch { }
+  writeFileSync(f, `${JSON.stringify({ items }, null, 2)}\n`, 'utf8')
+  return f
+}
+
+/** 从本机 git 凭据里取一次 GitHub 令牌：用户平时 push 过，这里就不用再填。 */
+function tokenFromGitCredential() {
+  return new Promise((resolve) => {
+    let p = null
+    try {
+      p = spawn(resolveGitExe(), ['credential', 'fill'], { windowsHide: true })
+    } catch { resolve(''); return }
+    let out = ''
+    const timer = setTimeout(() => { try { p.kill() } catch { } resolve('') }, 8000)
+    p.stdout.on('data', (d) => { out += String(d) })
+    p.on('error', () => { clearTimeout(timer); resolve('') })
+    p.on('close', () => {
+      clearTimeout(timer)
+      const m = out.match(/password=([^\r\n]+)/)
+      resolve(m ? m[1].trim() : '')
+    })
+    try { p.stdin.write('protocol=https\nhost=github.com\n\n'); p.stdin.end() } catch { }
+  })
+}
+
+/** 有存下来的令牌就用它，没有就向 git 凭据要一次并落盘（本机私有、不进仓库）。 */
+async function ghToken(config, dshHome) {
+  const g = readGh(dshHome)
+  if (g.token) return g
+  const auto = await tokenFromGitCredential()
+  if (!auto) return g
+  writeGh(dshHome, { ...g, token: auto })
+  return { ...g, token: auto }
+}
+
+async function ghApi(pathname, options = {}) {
+  const { method = 'GET', token, body } = options
+  const url = pathname.startsWith('http') ? pathname : `https://api.github.com${pathname}`
+  const headers = {
+    Authorization: `Bearer ${token}`,
+    Accept: 'application/vnd.github+json',
+    'X-GitHub-Api-Version': '2022-11-28',
+    'User-Agent': PACKAGE_ID,
+  }
+  const init = { method, headers }
+  if (body !== undefined) {
+    headers['Content-Type'] = 'application/json; charset=utf-8'
+    init.body = JSON.stringify(body)
+  }
+  const res = await fetch(url, init)
+  const raw = await res.text()
+  let json = null
+  try { json = raw ? JSON.parse(raw) : null } catch { json = null }
+  return { ok: res.ok, status: res.status, json, text: raw }
+}
+
+function issueToItem(it) {
+  return {
+    number: Number(it.number || 0),
+    title: String(it.title || ''),
+    body: String(it.body || ''),
+    state: String(it.state || ''),
+    url: String(it.html_url || ''),
+    createdAt: String(it.created_at || ''),
+    updatedAt: String(it.updated_at || ''),
+    user: String((it.user && it.user.login) || ''),
+    comments: Number(it.comments || 0),
+    labels: (Array.isArray(it.labels) ? it.labels : []).map((l) => String((l && l.name) || '')),
+  }
+}
+
+async function listIssues(repo, token, state) {
+  const q = `state=${state}&labels=${GH_FEEDBACK_LABEL}&per_page=50&sort=created&direction=desc`
+  const r = await ghApi(`/repos/${repo}/issues?${q}`, { token })
+  if (!r.ok) throw new Error(`${r.status} ${String((r.json && r.json.message) || '').slice(0, 200) || '调用 GitHub 失败'}`)
+  const arr = Array.isArray(r.json) ? r.json : []
+  return arr.filter((x) => !x.pull_request).map(issueToItem)
+}
+
+/** 正文末尾附一段环境块：在 GitHub 上看反馈时不用再问"你哪个版本、哪台机器"。 */
+function issueBodyOf(text, config) {
+  const env = [
+    `- 插件版本 / plugin: ${pluginVersion() || '?'}`,
+    `- 机器 / machine: ${(() => { try { return hostname() } catch { return '?' } })()}`,
+    `- 时间 / at: ${new Date().toISOString()}`,
+    `- 平台 / platform: ${process.platform}`,
+    `- 安装目录 / appRoot: ${(config && config.appRoot) || '?'}`,
+    `- 配置仓库 / repo: ${(config && config.repoPath) || '?'}`,
+  ].join('\n')
+  return `${String(text || '').trim()}\n\n---\n### 环境 / Environment\n${env}\n`
+}
+
+async function createIssue(repo, token, title, text, config) {
+  return ghApi(`/repos/${repo}/issues`, {
+    method: 'POST',
+    token,
+    body: { title, body: issueBodyOf(text, config), labels: [GH_FEEDBACK_LABEL] },
+  })
 }
 
 async function handleFeedback(req, res, config) {
   const dshHome = config?.dshHome || process.env.DSH_HOME || join(homedir(), '.dsh')
-  const repo = resolveRepo(config?.repoPath, dshHome).repo || ''
-  const dir = repo ? feedbackDirOf(repo) : ''
+  const url = new URL(req.url || '/', 'http://127.0.0.1')
+  const action = String(url.searchParams.get('action') || '').trim()
+  const number = Number(url.searchParams.get('number') || 0)
 
   if (req.method === 'GET') {
     try {
-      const items = []
-      if (dir && existsSync(dir)) {
-        for (const f of readdirSync(dir)) {
-          if (!f.toLowerCase().endsWith('.json')) continue
-          const j = readJson(join(dir, f))
-          if (j && (j.id || j.title)) items.push({ ...j, id: String(j.id || f.replace(/\.json$/i, '')) })
-        }
-      }
-      items.sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')))
-      sendJson(res, 200, {
+      const g = await ghToken(config, dshHome)
+      const outbox = readOutbox(dshHome)
+      const base = {
         ok: true,
-        items: items.slice(0, 300),
-        repoReady: !!(repo && existsSync(repo)),
-        dir,
+        repo: g.repo,
+        label: GH_FEEDBACK_LABEL,
+        connected: false,
+        tokenSaved: !!g.token,
+        items: [],
+        outbox: outbox.map((x) => ({ title: String(x.title || ''), createdAt: String(x.createdAt || '') })),
         version: pluginVersion(),
-      })
+        ghFile: ghPathOf(dshHome),
+      }
+      if (!g.token) {
+        sendJson(res, 200, { ...base, error: t('没有 GitHub 令牌：本机 git 凭据里也没取到，面板里填一次就会存下来', 'No GitHub token: not found in the local git credential either. Paste one here once and it is stored.') })
+        return
+      }
+      try {
+        const items = await listIssues(g.repo, g.token, 'all')
+        sendJson(res, 200, { ...base, connected: true, items })
+      } catch (error) {
+        sendJson(res, 200, { ...base, error: String((error && error.message) || error) })
+      }
     } catch (error) {
       sendJson(res, 500, { ok: false, error: String((error && error.message) || error) })
     }
     return
   }
-  if (req.method !== 'POST') { sendJson(res, 405, { ok: false, error: 'POST only' }); return }
+
+  if (req.method !== 'POST' && req.method !== 'PATCH') { sendJson(res, 405, { ok: false, error: 'GET / POST / PATCH only' }); return }
   if (!originAllowed(req)) { sendJson(res, 403, { ok: false, error: 'cross-origin request rejected' }); return }
+
   try {
     const raw = await readBody(req)
-    const body = raw.trim() ? JSON.parse(raw) : {}
-    const title = String(body.title || '').trim().slice(0, 200)
-    const text = String(body.body || body.detail || '').trim().slice(0, 4000)
-    if (!title) throw new Error(t('先写个标题，方便以后对上号', 'Give it a title so it can be found later'))
-    if (!repo) throw new Error(t('还没有配置仓库目录，反馈没地方存', 'The repo directory is not configured, so there is nowhere to store feedback'))
-    if (!existsSync(repo)) throw new Error(t(`仓库目录不存在：${repo}`, `Repo directory does not exist: ${repo}`))
+    const payload = raw.trim() ? JSON.parse(raw) : {}
+    const g = await ghToken(config, dshHome)
 
-    const now = new Date()
-    const stamp = stampNow(now)
-    const id = `${stamp}-${createHash('sha1').update(`${title}\n${text}\n${now.getTime()}`).digest('hex').slice(0, 8)}`
-    const record = {
-      id,
-      title,
-      body: text,
-      pluginVersion: pluginVersion(),
-      machine: (() => { try { return hostname() } catch { return '' } })(),
-      createdAt: now.toISOString(),
-      status: 'open',
+    // 1) 存令牌（填一次就够了；顺手用一次只读接口验证）
+    if (action === 'token') {
+      const token = String(payload.token || '').trim()
+      const repo = String(payload.repo || g.repo || GH_DEFAULT_REPO).trim() || GH_DEFAULT_REPO
+      if (!token) throw new Error(t('令牌是空的', 'The token is empty'))
+      const probe = await ghApi(`/repos/${repo}`, { token })
+      if (!probe.ok) throw new Error(`${probe.status} ${String((probe.json && probe.json.message) || '').slice(0, 160) || '令牌或仓库不对'}`)
+      writeGh(dshHome, { token, repo })
+      sendJson(res, 200, { ok: true, connected: true, repo, saved: ghPathOf(dshHome) })
+      return
     }
-    mkdirSync(dir, { recursive: true })
-    writeFileSync(join(dir, `${id}.json`), `${JSON.stringify(record, null, 2)}\n`, 'utf8')
 
-    // 只提交 feedback 目录：别人的改动不碰，也不掺进这次提交
-    let pushed = false
-    let pushError = ''
-    const rel = 'feedback'
-    const added = await git(repo, ['add', '--', rel])
-    if (added === null) {
-      pushError = t('git add 失败（本地文件已保留）', 'git add failed (the local file is kept)')
-    } else {
-      const statusLine = await git(repo, ['status', '--porcelain', '--', rel])
-      if (statusLine && statusLine.trim()) {
-        const commit = await git(repo, ['commit', '-m', `feedback: ${title.slice(0, 60)}`, '--', rel])
-        if (commit === null) pushError = t('git commit 失败（本地文件已保留）', 'git commit failed (the local file is kept)')
+    // 2) 补发本机队列里的反馈
+    if (action === 'flush') {
+      const pending = readOutbox(dshHome)
+      if (!g.token) throw new Error(t('没有 GitHub 令牌，补发不了', 'No GitHub token, cannot flush'))
+      const sent = []
+      const failed = []
+      for (const item of pending) {
+        const r = await createIssue(g.repo, g.token, String(item.title || ''), String(item.body || ''), config)
+        if (r.ok && r.json) sent.push({ number: r.json.number, url: r.json.html_url })
+        else failed.push(item)
       }
-      const push = await git(repo, ['push', 'origin', 'HEAD'])
-      if (push === null) {
-        if (!pushError) pushError = t('git push 失败：反馈已存在本地仓库，下次推送会一起上去', 'git push failed: the feedback is in the local repo and will go up with the next push')
-      } else pushed = true
+      writeOutbox(dshHome, failed)
+      sendJson(res, 200, { ok: true, sent, remaining: failed.length })
+      return
     }
 
-    sendJson(res, 200, { ok: true, id, pushed, error: pushError, item: record })
+    // 3) 把某条 issue 标记成已解决 / 重新打开
+    if (req.method === 'PATCH' || action === 'state') {
+      if (!number) throw new Error(t('缺 issue 编号', 'Missing issue number'))
+      const state = String(payload.state || 'closed') === 'closed' ? 'closed' : 'open'
+      const r = await ghApi(`/repos/${g.repo}/issues/${number}`, { method: 'PATCH', token: g.token, body: { state } })
+      if (!r.ok) throw new Error(`${r.status} ${String((r.json && r.json.message) || '').slice(0, 160)}`)
+      sendJson(res, 200, { ok: true, number, state })
+      return
+    }
+
+    // 4) 提交一条新反馈
+    const title = String(payload.title || '').trim().slice(0, 200)
+    const text = String(payload.body || payload.detail || '').trim().slice(0, 6000)
+    if (!title) throw new Error(t('先写个标题，方便以后对上号', 'Give it a title so it can be found later'))
+
+    const r = await createIssue(g.repo, g.token, title, text, config)
+    if (r.ok && r.json) {
+      sendJson(res, 200, { ok: true, number: r.json.number, url: r.json.html_url, item: issueToItem(r.json) })
+      return
+    }
+    // 建 issue 失败：进本机队列，网络好了点「补发」
+    const items = readOutbox(dshHome)
+    items.push({ title, body: text, createdAt: new Date().toISOString(), error: `${r.status} ${String((r.json && r.json.message) || '').slice(0, 160)}` })
+    writeOutbox(dshHome, items)
+    sendJson(res, 200, {
+      ok: true,
+      queued: true,
+      remaining: items.length,
+      error: `${r.status} ${String((r.json && r.json.message) || '').slice(0, 160)}`,
+    })
   } catch (error) {
     sendJson(res, 400, { ok: false, error: String((error && error.message) || error) })
   }
 }
+
 export function apply(ctx, config) {
   try {
     ctx.inject(['webServer'], (scoped) => {

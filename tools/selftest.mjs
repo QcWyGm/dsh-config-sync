@@ -1002,13 +1002,24 @@ console.log('== 跨机路径占位符与问题反馈 ==')
   check('面板会列出待确认项（token + 文件 + 说明）',
     cli.includes('data.missing') && cli.includes('m.token'),
     '待确认清单没渲染')
-  check('面板有「问题反馈」卡：提交 + 列表 + 推送状态',
+  check('面板有「问题反馈」卡：提交 + 列表 + 连接状态 + 令牌入口',
     cli.includes("M('问题反馈', 'Feedback')") && cli.includes('callFeedback')
-      && cli.includes('r.pushed'),
+      && cli.includes('st.connected') && cli.includes("query: { action: 'token' }")
+      && cli.includes("query: { action: 'flush' }"),
     'client.js 缺反馈卡')
-  check('反馈落仓库 feedback 目录并 commit+push',
-    host.includes('feedbackDirOf') && host.includes("'feedback'") && host.includes("'push', 'origin', 'HEAD'"),
-    'index.js 没落盘/推送')
+  check('反馈走 GitHub Issue：建 issue + 列表 + 关单 + 离线队列',
+    host.includes('GH_FEEDBACK_LABEL') && host.includes('/repos/${repo}/issues')
+      && host.includes('labels: [GH_FEEDBACK_LABEL]')
+      && host.includes('config-sync-feedback-outbox.json') && host.includes("action === 'flush'")
+      && host.includes("method: 'PATCH'"),
+    'index.js 没走 Issue')
+  check('令牌自动从本机 git 凭据取，落到本机私有文件',
+    host.includes('tokenFromGitCredential') && host.includes('config-sync-gh.json')
+      && host.includes('credential') && host.includes('fill'),
+    '缺自动取令牌')
+  check('反馈正文自动附环境块（版本/机器/时间）',
+    host.includes('### 环境 / Environment') && host.includes('issueBodyOf'),
+    '没附环境信息')
 
   const rootsGet = await call('/config-sync/roots', { headers: { host: 'localhost:3080' } })
   const rootsBody = JSON.parse(rootsGet.body || '{}')
@@ -1022,9 +1033,10 @@ console.log('== 跨机路径占位符与问题反馈 ==')
 
   const fbGet = await call('/config-sync/feedback', { headers: { host: 'localhost:3080' } })
   const fbBody = JSON.parse(fbGet.body || '{}')
-  check('GET /config-sync/feedback 返回列表且标明仓库是否可用',
-    fbBody.ok === true && Array.isArray(fbBody.items) && typeof fbBody.repoReady === 'boolean',
-    '结构不全')
+  check('GET /config-sync/feedback 返回连接状态 + Issue 列表 + 待发队列',
+    fbBody.ok === true && Array.isArray(fbBody.items) && typeof fbBody.connected === 'boolean'
+      && typeof fbBody.repo === 'string' && Array.isArray(fbBody.outbox) && typeof fbBody.ghFile === 'string',
+    JSON.stringify(fbBody).slice(0, 400))
   check('跨站请求被拒（roots）', await (async () => {
     const r = await call('/config-sync/roots', {
       method: 'POST',

@@ -200,15 +200,19 @@ Two machines rarely share drive letters (one has `D:\DeepSeekHarness`, the other
 - The panel's "Local paths" card lists those items; fill in the paths, save, then pull once more.
 - Confirmed values win over detection and are not asked again. **Not writing beats writing garbage** — a literal `{{ROOT:xxx}}` inside a config is read by plugins as a real path, and that error is far harder to trace than a skipped file.
 
-## Feedback (since 0.3.30)
+## Feedback goes to GitHub Issues (since 0.3.31)
 
-A new Feedback card at the bottom of the panel. Submit a title and details and it will:
+The Feedback card at the bottom of the panel. **GitHub Issues are the single source of truth** - no more json files in the config repo:
 
-1. Be stored as `feedback\<yyyyMMddHHmmss>-<8 hex>.json` in the repo: `{id,title,body,pluginVersion,machine,createdAt,status:'open'}`;
-2. Be `git add -- feedback` → `git commit` → `git push origin HEAD` (only the feedback folder, never someone else's changes);
-3. Appear in a newest-first list, **with the submitting machine name** — the other machine sees the same list after pulling.
+1. Title + details → `POST /repos/QcWyGm/dsh-config-sync/issues` with label `feedback`; an environment block (plugin version, machine, time, platform, install root, config repo path) is appended to the body so nobody has to ask later;
+2. The list reads the Issues directly (`GET /issues?state=all&labels=feedback`): open and closed both show, and the title is a link to the GitHub page;
+3. Resolve → `PATCH issue {state:'closed'}`. It is still the same thread on GitHub, so the discussion can continue there, and reopening is one click;
+4. The top row of the card is the connection state: `GitHub QcWyGm/dsh-config-sync · label feedback`, with the token file path in grey.
 
-A failed push is not a failed report: the file stays in the local repo and goes up with the next push, and the card says so explicitly.
+**No token typing needed**: by default it is taken once from the local git credential (`git credential fill` - it is already there if you have pushed from this machine) and stored in `<dshHome>\config-sync-gh.json` (local only, **never committed**). Only when that fails do you paste one, which is verified against `/repos/{repo}` immediately and not saved if it fails. Repo and label can be changed in the same row.
+
+**Offline reports are not lost**: when creating an Issue fails, the report goes into `<dshHome>\config-sync-feedback-outbox.json`; the panel shows how many are pending and Flush creates them one by one when the network returns, dropping each one that succeeds. It is a sending queue, not a second copy - once sent, the queue empties.
+
 ## Uninstall leftovers cleaned automatically (since 0.3.29)
 
 Uninstalling a plugin is the host's job: it removes the install directory, the `package.json` dependency and the `cordis.patch.yml` block. It does **not** remove the junction under `profile\node_modules` - measured on `dsh-image-search`, whose target `D:\DeepSeekHarness\dsh-image-search-0.1.0` was gone while the link still pointed at it. Broken links like that are invisible to pnpm too (with a flat layout it only reinstalls from the lockfile, and the link was not created by pnpm), and syncing never cleaned them either, so they survive until the next reinstall.

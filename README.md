@@ -200,15 +200,19 @@ dsh plugin add https://raw.githubusercontent.com/QcWyGm/dsh-config-sync/main/rel
 - 面板「本机路径」卡把这些项列出来，填好本机路径 → 保存 → 重新拉取一次就写进去。
 - 确认过的值优先于自动探测，之后不再问；根都对不上的情况下**宁可不写**——把 `{{ROOT:xxx}}` 字面量写进配置，插件读到会当真实路径，那种报错比「没写」难查得多。
 
-## 问题反馈（0.3.30 起）
+## 问题反馈：走 GitHub Issue（0.3.31 起）
 
-面板最下面新增「问题反馈」卡：填标题 + 详情，提交后：
+面板最下面「问题反馈」卡。**GitHub Issue 是唯一真源**，不再往配置仓库里塞 json：
 
-1. 落成仓库里的 `feedback\<yyyyMMddHHmmss>-<8位id>.json`，内容 `{id,title,body,pluginVersion,machine,createdAt,status:'open'}`；
-2. `git add -- feedback` → `git commit` → `git push origin HEAD`（只提交 feedback 目录，不掺别人的改动）；
-3. 列表按时间倒序显示提交过的反馈（**带机器名**，另一台机器拉取后同样能看到）。
+1. 填标题 + 详情 → 直接 `POST /repos/QcWyGm/dsh-config-sync/issues`，label `feedback`，正文末尾自动附一段环境块（插件版本、机器名、时间、平台、安装目录、配置仓库路径），在 GitHub 上不用再追问；
+2. 列表直接读 Issue：`GET /issues?state=all&labels=feedback`，open / closed 都在，点标题就是 GitHub 网页；
+3. 点「已解决」→ `PATCH issue {state:'closed'}`，GitHub 上还是同一个线程，想继续讨论就在那边接着聊，想重开点一下又回来；
+4. 面板顶上一行是连接状态：`GitHub QcWyGm/dsh-config-sync · label feedback`，灰字是令牌文件的路径。
 
-推送失败不算失败：文件已经留在本机仓库，等网络好了下次推送会一起上去；面板会明确写「已存进本机仓库（还没推送上去）」。
+**令牌不用手填**：默认从本机 git 凭据取一次（`git credential fill`，平时 push 过就已经在里面），存进 `<dshHome>\config-sync-gh.json`（本机私有、**不进仓库**）。取不到（比如从没在这台机器 push 过）才需要粘一次，粘完立刻拿 `/repos/{repo}` 验一遍——验不过就不存。仓库和 label 也能改，跟令牌填在同一行。
+
+**断网不丢**：建 Issue 失败时这条会进 `<dshHome>\config-sync-feedback-outbox.json`，面板显示「本机还有 N 条没发出去」，联网后点「补发」逐条建 Issue，成功的自动出队。这不是"另存一份"，只是待发队列——发出去了队列就空。
+
 ## 卸载残留自动清理（0.3.29 起）
 
 卸载插件是宿主做的：删安装目录、删 `package.json` 里的依赖、删 `cordis.patch.yml` 里的模块段。但它**不删 `profile\node_modules` 里那条 junction**——实测 `dsh-image-search` 卸载后目标目录 `D:\DeepSeekHarness\dsh-image-search-0.1.0` 已经没了、链接还指着它。这类断链 pnpm 也不管（平铺布局下它只按 lockfile 重装，而链接不是它建的），同步同样从不清，于是一直挂到下次重装。
