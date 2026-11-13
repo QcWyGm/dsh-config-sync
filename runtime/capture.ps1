@@ -710,29 +710,50 @@ foreach ($pair in @(@('installed.json', 'skill-market-installed.json'), @('panel
 }
 } else { Skip-SyncGroup $Scope $RepoRoot 'storages-record' }
 
-# 5.5) 插件设置与工作流（跨机需要一致的那几个小文件）
+# 5.5) 插件设置与工作流（跨机需要一致的那些小配置）
+# 0.3.30 起：① 覆盖到各插件自己的配置（以前只同步 4 个）；② 写进仓库前把本机根路径换成
+# {{APP_ROOT}} / {{DSH_HOME}} / {{WORKSPACE_HOME}} / {{ROOT:<key>}} 占位符，
+# 换机器落地时由 apply 展开成本机路径，不会把老机器的盘符带过去。
 if (Test-SyncGroupEnabled $Scope 'settings') {
-$settingsMap = @(
-  @{ Repo = 'settings\our-free-model.json';        Src = (Join-Path $DshHome 'our-free-model\settings.json');                          Label = 'our-free-model 插件设置' },
-  @{ Repo = 'settings\comfyui-workflows.json';     Src = (Join-Path $DshHome 'data\dsh-comfyui\workflows.json');                    Label = 'ComfyUI 工作流库' },
-  @{ Repo = 'settings\dsh-pet-main-config.jsonc';  Src = (Join-Path $DshHome 'dsh-pet\main-config.jsonc');                          Label = '桌宠配置' },
-  @{ Repo = 'settings\dsh-market-state.json';      Src = (Join-Path $DshHome ("profiles\" + $ProfileName + '\.dsh-market\state.json')); Label = '插件市场状态' }
-)
-foreach ($m in $settingsMap) {
-  if (-not (Test-SyncItemEnabled $Scope 'settings' ($m.Repo -replace '^settings\\', ''))) {
-    Skip-SyncItem $Scope $RepoRoot 'settings' $m.Repo $m.Repo
-    continue
-  }
-  if (-not (Test-Path -LiteralPath $m.Src)) {
-    Warn ("本机没有 " + $m.Label + " 的源文件，跳过：" + $m.Src)
-    continue
-  }
-  if ($m.Repo -eq 'settings\our-free-model.json') {
-    # 这个文件里有插件自己每秒/每轮刷新的运行时字段，原样入库会导致每次 capture 都"有改动"
-    $txt = [IO.File]::ReadAllText($m.Src)
-    foreach ($k in @('catalogSyncedAt', 'reloadedAt', 'reloadCount')) {
-      $txt = $txt -replace ('("' + $k + '"\s*:\s*)[0-9]+'), '${1}0'
+  # 路径根：第一次跑就落一份（供稳定不变），之后沿用用户确认过的值
+  $roots = Get-SyncRoots $DshHome $AppRoot $WorkspaceHome
+  # 每次 capture 都把根写回一份：userHome 是自动探测的，写盘后面板才看得到、也才能被用户改掉
+  Save-SyncRoots $DshHome $roots | Out-Null
+  Ok ('路径根：appRoot=' + $roots.appRoot + '；dshHome=' + $roots.dshHome + '；workspaceHome=' + $roots.workspaceHome + '（已写入 config-sync-roots.json）')
+
+  $settingsMap = @(
+    @{ Repo = 'settings\our-free-model.json';        Src = (Join-Path $DshHome 'our-free-model\settings.json');                          Label = 'our-free-model 插件设置' },
+    @{ Repo = 'settings\comfyui-workflows.json';     Src = (Join-Path $DshHome 'data\dsh-comfyui\workflows.json');                    Label = 'ComfyUI 工作流库' },
+    @{ Repo = 'settings\dsh-pet-main-config.jsonc';  Src = (Join-Path $DshHome 'dsh-pet\main-config.jsonc');                          Label = '桌宠配置' },
+    @{ Repo = 'settings\dsh-market-state.json';      Src = (Join-Path $DshHome ("profiles\" + $ProfileName + '\.dsh-market\state.json')); Label = '插件市场状态' },
+    @{ Repo = 'settings\dsh-pet-memory.json';        Src = (Join-Path $DshHome 'dsh-pet\memory.json');                                Label = '桌宠记忆' },
+    @{ Repo = 'settings\our-free-model-picks.json';  Src = (Join-Path $DshHome 'our-free-model\picks.json');                          Label = 'our-free-model 收藏' },
+    @{ Repo = 'settings\dsh-im-interface-language.json'; Src = (Join-Path $DshHome 'integrations\dsh-im\interface-language.json');   Label = 'dsh-im 界面语言' },
+    @{ Repo = 'settings\dsh-qq-config.json';         Src = (Join-Path $DshHome 'integrations\dsh-qq\config.json');                    Label = 'QQ 集成配置' },
+    @{ Repo = 'settings\dsh-qq-workspaces.json';     Src = (Join-Path $DshHome 'integrations\dsh-qq\workspaces.json');                Label = 'QQ 集成工作区' },
+    @{ Repo = 'settings\redteam-preset-declare.json'; Src = (Join-Path $DshHome 'redteam\preset-declare.json');                        Label = '红队预设声明' },
+    @{ Repo = 'settings\task-board-ledger.json';     Src = (Join-Path $DshHome 'task-board\ledger-v2.json');                          Label = '任务板台账' },
+    @{ Repo = 'settings\task-board-scheduler.json';  Src = (Join-Path $DshHome 'task-board\scheduler-v2.json');                       Label = '任务板调度' },
+    @{ Repo = 'settings\dsh-workspaces.json';        Src = (Join-Path $DshHome 'storages\workspace.json');                            Label = 'DSH 工作区登记' }
+  )
+  foreach ($m in $settingsMap) {
+    if (-not (Test-SyncItemEnabled $Scope 'settings' ($m.Repo -replace '^settings\\', ''))) {
+      Skip-SyncItem $Scope $RepoRoot 'settings' $m.Repo $m.Repo
+      continue
     }
+    if (-not (Test-Path -LiteralPath $m.Src)) {
+      Warn ("本机没有 " + $m.Label + " 的源文件，跳过：" + $m.Src)
+      continue
+    }
+    $txt = [IO.File]::ReadAllText($m.Src)
+    if ($m.Repo -eq 'settings\our-free-model.json') {
+      # 这个文件里有插件自己每秒/每轮刷新的运行时字段，原样入库会导致每次 capture 都"有改动"
+      foreach ($k in @('catalogSyncedAt', 'reloadedAt', 'reloadCount')) {
+        $txt = $txt -replace ('("' + $k + '"\s*:\s*)[0-9]+'), '${1}0'
+      }
+    }
+    # 本机根路径 → 占位符（换机器后由 apply 展开）
+    $txt = ConvertTo-TokenText $txt $roots
     $norm = $txt -replace "`r`n", "`n"
     $dstFile = Join-Path $RepoRoot $m.Repo
     $existing = $null
@@ -740,14 +761,13 @@ foreach ($m in $settingsMap) {
     if ($null -ne $existing -and $existing -eq $norm) {
       Say ("  =  " + $m.Repo + "（无变化）")
     } else {
+      $dstDir = Split-Path -Parent $dstFile
+      if (-not (Test-Path -LiteralPath $dstDir)) { New-Item -ItemType Directory -Path $dstDir -Force | Out-Null }
       [IO.File]::WriteAllText($dstFile, $norm, (New-Object Text.UTF8Encoding($false, $false)))
       $changed.Add($m.Repo) | Out-Null
       Ok ("更新 " + $m.Repo)
     }
-  } else {
-    CopyTracked $m.Src (Join-Path $RepoRoot $m.Repo) $m.Repo
   }
-}
 
 } else { Skip-SyncGroup $Scope $RepoRoot 'settings' }
 

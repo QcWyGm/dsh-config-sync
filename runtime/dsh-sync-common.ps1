@@ -571,4 +571,165 @@ function Get-RemoteAuthHint([string]$Url) {
   return '先自检 SSH：用 origin 里的真实主机名（ssh -T git@<host>）'
 }
 
+# ---------- 跨机路径根（0.3.30 起） ----------
+# 两台机器的客户端装在哪、.dsh 在哪、工作区根在哪，通常都不一样。仓库里凡是这些根下面的
+# 绝对路径一律存成占位符，落地时再展开成本机值：
+#   {{APP_ROOT}}       客户端安装目录
+#   {{DSH_HOME}}       ~\.dsh
+#   {{WORKSPACE_HOME}} 工作区根
+#   {{ROOT:<key>}}     用户自选目录（ComfyUI 模型目录、mihomo 之类），键值由用户在面板里确认一次
+# 仓库里一律用正斜杠（{{APP_ROOT}}/xxx），JSON 里不会出现 \ 转义问题，PowerShell / Node 也都认。
+function Get-SyncRootsPath([string]$DshHome) { return (Join-Path $DshHome 'config-sync-roots.json') }
+function Get-PendingPathsPath([string]$DshHome) { return (Join-Path $DshHome 'config-sync-pending-paths.json') }
 
+function ConvertTo-FwdPath([string]$p) {
+  if (-not $p) { return '' }
+  return $p.Replace('\', '/')
+}
+
+# 同一个路径在文本里可能出现成 4 种写法（原样 / JSON 双反斜杠 / 正斜杠 / JSON 转义斜杠）
+function Get-PathVariants([string]$p) {
+  if (-not $p) { return @() }
+  $bs = [string][char]92
+  $out = New-Object System.Collections.ArrayList
+  [void]$out.Add($p)
+  [void]$out.Add($p.Replace($bs, $bs + $bs))
+  [void]$out.Add($p.Replace($bs, '/'))
+  [void]$out.Add($p.Replace($bs, $bs + '/'))
+  return @($out | Where-Object { $_ })
+}
+
+function Get-SyncRoots([string]$DshHome, [string]$AppRoot = '', [string]$WorkspaceHome = '') {
+  $o = [ordered]@{
+    version       = 1
+    appRoot       = ''
+    dshHome       = $DshHome
+    workspaceHome = ''
+    custom        = [ordered]@{}
+    confirmed     = @()
+    updatedAt     = ''
+  }
+  $f = Get-SyncRootsPath $DshHome
+  if (Test-Path -LiteralPath $f) {
+    try {
+      $j = Get-Content -LiteralPath $f -Raw -Encoding utf8 | ConvertFrom-Json
+      if ($j.appRoot) { $o.appRoot = [string]$j.appRoot }
+      if ($j.dshHome) { $o.dshHome = [string]$j.dshHome }
+      if ($j.workspaceHome) { $o.workspaceHome = [string]$j.workspaceHome }
+      if ($j.custom) { foreach ($k in @($j.custom.PSObject.Properties.Name | Where-Object { $_ })) { $o.custom[$k] = [string]$j.custom.$k } }
+      if ($j.confirmed) { $o.confirmed = @($j.confirmed) }
+      $o.updatedAt = [string]$j.updatedAt
+    } catch { }
+  }
+  # roots.json 是用户确认过的值，优先；没有才用本次探测/传参
+  if (-not $o.appRoot -and $AppRoot) { $o.appRoot = $AppRoot }
+  if (-not $o.workspaceHome -and $WorkspaceHome) { $o.workspaceHome = $WorkspaceHome }
+  # 用户主目录也能自动探测，不用问人：有些配置把工作区建在 Documents\deepseek-harness 下，
+  # 那个路径既不在安装目录也不在 .dsh / 工作区根里，不归一就会把老机器的用户名带过去。
+  if (-not $o.custom.Contains('userHome')) { $o.custom['userHome'] = [string]$env:USERPROFILE }
+  return [pscustomobject]$o
+}
+
+function Save-SyncRoots([string]$DshHome, $roots) {
+  $roots.updatedAt = (Get-Date).ToString('s')
+  $f = Get-SyncRootsPath $DshHome
+  $j = [ordered]@{
+    version       = 1
+    appRoot       = [string]$roots.appRoot
+    dshHome       = [string]$roots.dshHome
+    workspaceHome = [string]$roots.workspaceHome
+    custom        = $(if ($roots.custom) { $roots.custom } else { [ordered]@{} })
+    confirmed     = @($roots.confirmed)
+    updatedAt     = $roots.updatedAt
+  }
+  [IO.File]::WriteAllText($f, ($j | ConvertTo-Json -Depth 6), (New-Object Text.UTF8Encoding($false)))
+  return $f
+}
+
+# 本机路径 → 占位符（capture 用）。长根先替换，避免根互相包含时替换错位。
+function ConvertTo-TokenText([string]$text, $roots) {
+  if (-not $text) { return $text }
+  $items = New-Object System.Collections.ArrayList
+  if ($roots.appRoot -and $roots.appRoot.Length -ge 3) { [void]$items.Add(@{ Token = '{{APP_ROOT}}'; Value = [string]$roots.appRoot }) }
+  if ($roots.workspaceHome -and $roots.workspaceHome.Length -ge 5) { [void]$items.Add(@{ Token = '{{WORKSPACE_HOME}}'; Value = [string]$roots.workspaceHome }) }
+  if ($roots.dshHome -and $roots.dshHome.Length -ge 5) { [void]$items.Add(@{ Token = '{{DSH_HOME}}'; Value = [string]$roots.dshHome }) }
+  if ($roots.custom) {
+    if ($roots.custom -is [System.Collections.IDictionary]) {
+      # capture 传进来的 custom 是有序字典（键就是真实的 userHome 之类），不能走 PSObject.Properties
+      foreach ($k in @($roots.custom.Keys)) {
+        $v = [string]($roots.custom[$k])
+        if ($k -and $v -and $v.Length -ge 3) { [void]$items.Add(@{ Token = ('{{ROOT:' + $k + '}}'); Value = $v }) }
+      }
+    } else {
+      foreach ($k in @($roots.custom.PSObject.Properties.Name | Where-Object { $_ })) {
+        $v = [string]($roots.custom.PSObject.Properties[$k].Value)
+        if ($v -and $v.Length -ge 3) { [void]$items.Add(@{ Token = ('{{ROOT:' + $k + '}}'); Value = $v }) }
+      }
+    }
+  }
+  $sorted = @($items | Sort-Object { $_.Value.Length } -Descending)
+  foreach ($r in $sorted) {
+    foreach ($v in (Get-PathVariants $r.Value)) { $text = $text.Replace($v, $r.Token) }
+  }
+  # 占位符后面那一段路径的分隔符统一成正斜杠：{{APP_ROOT}}\x、{{APP_ROOT}}\\x\\y 都变成 {{APP_ROOT}}/x、/y。
+  # 只动紧跟在占位符后面的那一段（到引号/逗号/空白为止），不碰 JSON 里别的字符串。
+  $text = [regex]::Replace($text, '(\{\{(?:APP_ROOT|DSH_HOME|WORKSPACE_HOME|ROOT:[A-Za-z0-9_.\-]+)\}\})((?:\\\\|\\|/)[^"\s,;:}{\[\]]*)', { param($m) $m.Groups[1].Value + ($m.Groups[2].Value.Replace('\\', '/').Replace('\', '/')) })
+  # 自选目录的占位符没配值时会原样留着，交给 apply 报 pending
+  return $text
+}
+
+# 占位符 → 本机路径（apply 用）。值统一用正斜杠展开。
+function Expand-TokenText([string]$text, $roots) {
+  if (-not $text) { return $text }
+  $text = $text.Replace('{{APP_ROOT}}', (ConvertTo-FwdPath ([string]$roots.appRoot)))
+  $text = $text.Replace('{{WORKSPACE_HOME}}', (ConvertTo-FwdPath ([string]$roots.workspaceHome)))
+  $text = $text.Replace('{{DSH_HOME}}', (ConvertTo-FwdPath ([string]$roots.dshHome)))
+  if ($roots.custom) {
+    if ($roots.custom -is [System.Collections.IDictionary]) {
+      foreach ($k in @($roots.custom.Keys)) {
+        $v = [string]($roots.custom[$k])
+        if ($k -and $v) { $text = $text.Replace(('{{ROOT:' + $k + '}}'), (ConvertTo-FwdPath $v)) }
+      }
+    } else {
+      foreach ($k in @($roots.custom.PSObject.Properties.Name | Where-Object { $_ })) {
+        $v = [string]($roots.custom.PSObject.Properties[$k].Value)
+        if ($v) { $text = $text.Replace(('{{ROOT:' + $k + '}}'), (ConvertTo-FwdPath $v)) }
+      }
+    }
+  }
+  return $text
+}
+# 文本里还剩哪些没展开的占位符（apply 用；返回去重后的 token 列表）
+function Get-MissingTokens([string]$text) {
+  if (-not $text) { return @() }
+  $m = [regex]::Matches($text, '\{\{(APP_ROOT|DSH_HOME|WORKSPACE_HOME|ROOT:[A-Za-z0-9_.\-]+)\}\}')
+  $set = @{}
+  foreach ($x in $m) { $set[$x.Value] = $true }
+  return @($set.Keys)
+}
+
+function Write-PendingPaths([string]$DshHome, $items) {
+  $f = Get-PendingPathsPath $DshHome
+  $j = [ordered]@{ generatedAt = (Get-Date).ToString('s'); missing = @($items) }
+  [IO.File]::WriteAllText($f, ($j | ConvertTo-Json -Depth 6), (New-Object Text.UTF8Encoding($false)))
+  return $f
+}
+
+function Clear-PendingPaths([string]$DshHome) {
+  $f = Get-PendingPathsPath $DshHome
+  if (Test-Path -LiteralPath $f) { Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue }
+}
+
+# 占位符给人看的中文说明（面板「路径确认」用，apply 记 pending 时也带上）
+function Get-TokenHint([string]$token) {
+  switch ($token) {
+    '{{APP_ROOT}}' { return '客户端安装目录（DeepSeekHarness 所在的目录）' }
+    '{{DSH_HOME}}' { return '.dsh 配置目录（一般是 %USERPROFILE%\.dsh）' }
+    '{{WORKSPACE_HOME}}' { return '工作区根目录（工作区都建在这下面）' }
+    default {
+      $key = $token -replace '^\{\{ROOT:', ''
+      $key = $key -replace '\}\}$', ''
+      return ('自选目录：' + $key + ' —— 这台机器上对应的路径由你来定')
+    }
+  }
+}

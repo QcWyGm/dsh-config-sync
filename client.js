@@ -381,6 +381,42 @@ window.__ModuleLoader__.load({
       return body
     }
 
+    /** 本机路径根：GET 拿当前值 + 待确认清单，POST 存用户选的本机路径。 */
+    async function callRoots(payload) {
+      const res = await fetch('/config-sync/roots', payload
+        ? {
+          method: 'POST',
+          cache: 'no-store',
+          credentials: 'same-origin',
+          headers: jsonHeaders,
+          body: JSON.stringify(payload),
+        }
+        : { cache: 'no-store', credentials: 'same-origin', headers: langHeaders() })
+      const text = await res.text()
+      let body
+      try { body = text ? JSON.parse(text) : null } catch { throw badJson(res) }
+      if (!res.ok || !body || body.ok !== true) throw new Error((body && body.error) || `${res.status}`)
+      return body
+    }
+
+    /** 问题反馈：GET 列仓库 feedback\ 里的记录，POST 新增一条并推到云端。 */
+    async function callFeedback(payload) {
+      const res = await fetch('/config-sync/feedback', payload
+        ? {
+          method: 'POST',
+          cache: 'no-store',
+          credentials: 'same-origin',
+          headers: jsonHeaders,
+          body: JSON.stringify(payload),
+        }
+        : { cache: 'no-store', credentials: 'same-origin', headers: langHeaders() })
+      const text = await res.text()
+      let body
+      try { body = text ? JSON.parse(text) : null } catch { throw badJson(res) }
+      if (!res.ok || !body || body.ok !== true) throw new Error((body && body.error) || `${res.status}`)
+      return body
+    }
+
     /** 取一份体检数据 + 生成脚本动作，供两个入口复用。 */
     function useSync() {
       const [data, setData] = react.useState(null)
@@ -1918,6 +1954,9 @@ window.__ModuleLoader__.load({
       const restoreCard = data ? h(RestoreCard, { data, onSaved: refresh }) : null
       // 「同步内容」卡自己拉 /config-sync/scope，不依赖 status（status 读的是仓库与本机，跟勾选无关）
       const scopeCard = h(ScopeCard, {})
+      // 「本机路径」与「问题反馈」自己持有数据（roots 文件是本机私有，feedback 在仓库里）
+      const rootsCard = h(RootsCard, { onRootsSaved: refresh })
+      const feedbackCard = h(FeedbackCard, {})
       // 冲突卡只在真有清单时才出现：没冲突就不占版面
       const conflictCard = data && data.conflicts && data.conflicts.exists
         ? h(ConflictCard, { data, onSaved: refresh })
@@ -1966,6 +2005,7 @@ window.__ModuleLoader__.load({
           conflictCard
             ? Section(M('同步冲突', 'Sync conflicts'), M('这些文件挡住了拉取：逐项选完保存，再点「立即拉取」', 'These files block the pull: pick per file, save, then pull'), [conflictCard])
             : null,
+          Section(M('本机路径', 'Local paths'), M('每台机器只确认一次：仓库里的配置用占位符，落地时按这里的路径展开', 'Confirm once per machine: repo configs use placeholders, expanded with these paths'), [rootsCard]),
           Section(M('同步目标', 'Sync targets'), M('仓库与远端都是本机配置，改完立即生效', 'Repo and remote are local settings, applied at once'), [repoCard, remoteCard].filter(Boolean)),
           Section(M('自动化与插件更新', 'Automation & plugin update'), M('退出后自动做什么、插件自己怎么升级', 'What runs automatically after exit, and how the plugin upgrades'), [autoCard, updCard].filter(Boolean)),
           Section(M('退出后执行', 'After exit'), null, [actionCard]),
@@ -1973,7 +2013,214 @@ window.__ModuleLoader__.load({
           Section(M('还原备份', 'Restore backup'), M('点快照 → 确认差异 → 排队还原（退出客户端后执行）', 'Pick a snapshot → confirm the diff → queued restore (runs after the client quits)'), [restoreCard].filter(Boolean)),
           // 「同步内容」放在整页最下面：它是"细项配置"，看清前面的状态与动作后才会来调整
           Section(M('同步内容', 'Sync content'), M('十组内容，默认全勾；必需组锁定', 'Ten groups, all checked; required groups are locked'), [scopeCard]),
+          // 反馈放在最后一区：查完状态、调完配置，才轮到「有问题要报」
+          Section(M('问题反馈', 'Feedback'), M('提交的问题会存进仓库 feedback\\ 并推送到云端，两台机器都能看到', 'Reports are stored in the repo feedback\\ folder and pushed to the cloud, visible on both machines'), [feedbackCard]),
         ),
+      )
+    }
+
+    /**
+     * 本机路径确认卡。
+     * 仓库里存的配置不写死盘符：{{APP_ROOT}} / {{DSH_HOME}} / {{WORKSPACE_HOME}} / {{ROOT:<key>}}，
+     * 落地前要换成这台机器的真实路径。以前只靠脚本自动探测，换机器就猜；现在探测值先填好给你改，
+     * 确认过的存进 <dshHome>\config-sync-roots.json，下次不再问。
+     */
+    function RootsCard(props) {
+      const [data, setData] = react.useState(null)
+      const [form, setForm] = react.useState(null)
+      const [busy, setBusy] = react.useState(false)
+      const [err, setErr] = react.useState('')
+      const [msg, setMsg] = react.useState('')
+
+      const load = async () => {
+        setBusy(true); setErr(''); setMsg('')
+        try {
+          const r = await callRoots()
+          setData(r)
+          setForm({
+            appRoot: (r.roots && r.roots.appRoot) || '',
+            dshHome: (r.roots && r.roots.dshHome) || '',
+            workspaceHome: (r.roots && r.roots.workspaceHome) || '',
+            custom: (r.roots && r.roots.custom) || {},
+          })
+        } catch (e) {
+          setErr(String((e && e.message) || e))
+        } finally { setBusy(false) }
+      }
+      react.useEffect(() => { load() }, [])
+
+      const setField = (k, v) => setForm((f) => ({ ...(f || {}), [k]: v }))
+      const setCustom = (k, v) => setForm((f) => ({ ...(f || {}), custom: { ...((f && f.custom) || {}), [k]: v } }))
+      const save = async () => {
+        if (!form) return
+        setBusy(true); setErr(''); setMsg('')
+        try {
+          const r = await callRoots({ roots: form })
+          setMsg([r.note, ...((r.warns || []).map((w) => `⚠ ${w}`))].filter(Boolean).join(' '))
+          await load()
+          if (props && typeof props.onRootsSaved === 'function') props.onRootsSaved()
+        } catch (e) {
+          setErr(String((e && e.message) || e))
+        } finally { setBusy(false) }
+      }
+
+      const missing = (data && data.missing) || []
+      const customKeys = form && form.custom ? Object.keys(form.custom) : []
+      const rootRows = [
+        { key: 'appRoot', label: M('客户端安装目录', 'Client install root'), token: '{{APP_ROOT}}', ph: 'D:\\DeepSeekHarness' },
+        { key: 'dshHome', label: M('.dsh 目录', '.dsh folder'), token: '{{DSH_HOME}}', ph: 'C:\\Users\\<user>\\.dsh' },
+        { key: 'workspaceHome', label: M('工作区根', 'Workspace root'), token: '{{WORKSPACE_HOME}}', ph: 'D:\\DeepSeekHarness\\workspace' },
+      ]
+
+      return h('div', { style: S.card },
+        h('div', { style: S.cardHead },
+          h('div', { style: S.cardTitle }, M('本机路径', 'Local paths')),
+          h('div', { style: { flex: 1 } }, null),
+          missing.length
+            ? h('span', { style: { ...S.chip, color: 'var(--dsw-alias-state-warn-primary)' } },
+              M(`待确认 ${missing.length} 项`, `${missing.length} to confirm`))
+            : h('span', { style: { ...S.chip, color: 'var(--dsw-alias-state-success-primary, #2e7d32)' } },
+              M('已确认', 'Confirmed')),
+          h('button', { type: 'button', style: S.btn, disabled: busy, onClick: load },
+            busy ? M('读取中…', 'Loading…') : M('重新读取', 'Reload')),
+        ),
+        missing.length
+          ? h('div', { style: { ...S.panel, gap: '4px' } },
+            h('div', { style: { ...S.hint, color: 'var(--dsw-alias-state-warn-primary)' } },
+              M('上次拉取时有配置没写进去：它们引用的目录这台机器还没确认。填好下面的路径再保存，之后重新拉取一次即可。',
+                'Some configs were skipped during the last pull: the folders they reference are not confirmed on this machine. Fill in the paths below, save, then pull again.')),
+            missing.slice(0, 20).map((m, i) => h('div', { key: i, style: S.hint },
+              `· ${m.token || '?'} — ${m.label || m.file || ''}${m.hint ? `：${m.hint}` : ''}`)))
+          : null,
+        form
+          ? rootRows.map((row) => h('div', { key: row.key, style: S.kvRow },
+            h('div', { style: S.kvKey }, row.label),
+            h('input', {
+              type: 'text', style: S.input, value: form[row.key] || '', spellCheck: false,
+              placeholder: row.ph,
+              onChange: (e) => setField(row.key, e.target.value),
+            }),
+          ))
+          : h('div', { style: S.hint }, M('读取中…', 'Loading…')),
+        form && customKeys.length
+          ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: '4px' } },
+            h('div', { style: S.footnote }, M('自选目录（插件装在别处时要指定）', 'Custom folders (needed when plugins live elsewhere)')),
+            customKeys.map((k) => h('div', { key: `c-${k}`, style: S.kvRow },
+              h('div', { style: S.kvKey }, k),
+              h('input', {
+                type: 'text', style: S.input, value: form.custom[k] || '', spellCheck: false,
+                placeholder: M('这台机器上对应的绝对路径', 'Absolute path on this machine'),
+                onChange: (e) => setCustom(k, e.target.value),
+              }),
+            )))
+          : null,
+        h('div', { style: S.actions },
+          h('button', { type: 'button', style: S.btnPrimary, disabled: busy || !form, onClick: save },
+            busy ? M('保存中…', 'Saving…') : M('保存本机路径', 'Save paths')),
+        ),
+        data && data.detected
+          ? h('div', { style: S.footnote },
+            M(
+              `自动探测：安装目录 ${data.detected.appRoot || '（没找到）'}；.dsh ${data.detected.dshHome || '?'}；工作区根 ${data.detected.workspaceHome || '（从工作区登记表推不出来）'}`,
+              `Detected: app root ${data.detected.appRoot || '(not found)'}; .dsh ${data.detected.dshHome || '?'}; workspace root ${data.detected.workspaceHome || '(could not infer from the workspace registry)'}`,
+            ))
+          : null,
+        data && data.file
+          ? h('div', { style: S.footnote }, M(`存在：${data.file}（本机私有，不进仓库）`, `Stored at: ${data.file} (local only, never committed)`))
+          : null,
+        msg ? h('div', { style: S.hint }, msg) : null,
+        err ? h('div', { style: { ...S.hint, color: 'var(--dsw-alias-state-error-primary)' } }, M(`失败：${err}`, `Failed: ${err}`)) : null,
+      )
+    }
+
+    /**
+     * 问题反馈卡：写进仓库的 feedback\ 目录并推到云端，另一台机器拉取后同样能看到。
+     * 推送失败不算失败：文件已经留在本机仓库里，下次推送会一起上去。
+     */
+    function FeedbackCard() {
+      const [items, setItems] = react.useState([])
+      const [ready, setReady] = react.useState(false)
+      const [title, setTitle] = react.useState('')
+      const [text, setText] = react.useState('')
+      const [busy, setBusy] = react.useState(false)
+      const [msg, setMsg] = react.useState('')
+      const [err, setErr] = react.useState('')
+
+      const load = async () => {
+        try {
+          const r = await callFeedback()
+          setItems(r.items || [])
+          setReady(Boolean(r.repoReady))
+        } catch (e) {
+          setErr(String((e && e.message) || e))
+        }
+      }
+      react.useEffect(() => { load() }, [])
+
+      const submit = async () => {
+        setBusy(true); setErr(''); setMsg('')
+        try {
+          const r = await callFeedback({ title, body: text })
+          setMsg(r.pushed
+            ? M('已提交并推送到云端仓库，另一台机器拉取后就能看到。', 'Submitted and pushed to the cloud repo; the other machine sees it after pulling.')
+            : M(`已存进本机仓库（${r.error || '还没推送上去'}）`, `Saved to the local repo (${r.error || 'not pushed yet'})`))
+          setTitle('')
+          setText('')
+          await load()
+        } catch (e) {
+          setErr(String((e && e.message) || e))
+        } finally { setBusy(false) }
+      }
+
+      const fmt = (s) => {
+        if (!s) return '?'
+        try { return new Date(s).toLocaleString(localeNow(), { hour12: false }) } catch { return s }
+      }
+
+      return h('div', { style: S.card },
+        h('div', { style: S.cardHead },
+          h('div', { style: S.cardTitle }, M('问题反馈', 'Feedback')),
+          h('div', { style: { flex: 1 } }, null),
+          h('span', { style: S.chip }, M(`${items.length} 条`, `${items.length} item(s)`)),
+          h('button', { type: 'button', style: S.btn, disabled: busy, onClick: load }, M('刷新', 'Refresh')),
+        ),
+        h('div', { style: S.kvRow },
+          h('div', { style: S.kvKey }, M('标题', 'Title')),
+          h('input', {
+            type: 'text', style: S.input, value: title, spellCheck: false,
+            placeholder: M('一句话说清是什么问题（例如：拉取后桌宠配置没跟着过来）', 'One line about the problem (e.g. pet config did not come over after a pull)'),
+            onChange: (e) => setTitle(e.target.value),
+          }),
+        ),
+        h('div', { style: S.kvRow },
+          h('div', { style: S.kvKey }, M('详情', 'Details')),
+          h('textarea', {
+            style: { ...S.input, minHeight: '64px', resize: 'vertical', fontFamily: 'inherit' },
+            value: text, spellCheck: false, rows: 3,
+            placeholder: M('现象、期望、版本与机器（可选）', 'What happened, what you expected, version and machine (optional)'),
+            onChange: (e) => setText(e.target.value),
+          }),
+        ),
+        h('div', { style: S.actions },
+          h('button', { type: 'button', style: S.btnPrimary, disabled: busy || !title.trim() || !ready, onClick: submit },
+            busy ? M('提交中…', 'Submitting…') : M('提交并推送', 'Submit & push')),
+          ready ? null : h('div', { style: S.hint }, M('仓库没配好，暂时存不了反馈', 'The repo is not ready, so feedback cannot be stored yet')),
+        ),
+        msg ? h('div', { style: S.hint }, msg) : null,
+        err ? h('div', { style: { ...S.hint, color: 'var(--dsw-alias-state-error-primary)' } }, M(`失败：${err}`, `Failed: ${err}`)) : null,
+        items.length
+          ? h('div', { style: { ...S.panel, gap: '4px' } },
+            items.slice(0, 30).map((it, i) => h('div', { key: it.id || i, style: S.kvRow },
+              h('div', { style: { ...S.kvKey, width: '74px', minWidth: '74px' } }, fmt(it.createdAt)),
+              h('div', { style: S.kvVal },
+                `${it.title || ''}${it.body ? ` — ${String(it.body).slice(0, 120)}` : ''}`,
+                h('div', { style: S.footnote },
+                  `${it.machine || '?'}${it.pluginVersion ? ` · v${it.pluginVersion}` : ''}${it.status ? ` · ${it.status}` : ''}`)),
+            )))
+          : h('div', { style: S.footnote }, M('还没有反馈记录。', 'No feedback yet.')),
+        h('div', { style: S.footnote },
+          M('反馈存在仓库 feedback\\ 目录（一条一个 json），提交时会 git commit + push 到云端。',
+            'Feedback lives in the repo feedback\\ folder (one json per item); submit commits and pushes it to the cloud.')),
       )
     }
 

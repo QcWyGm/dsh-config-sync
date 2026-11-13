@@ -21,7 +21,7 @@ import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { createRequire } from 'node:module'
 import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
-import { homedir } from 'node:os'
+import { homedir, hostname } from 'node:os'
 import { basename, dirname, isAbsolute, join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -34,6 +34,9 @@ const ROUTE_SETTINGS = '/config-sync/settings'
 const ROUTE_UPDATE = '/config-sync/update'
 const ROUTE_SCOPE = '/config-sync/scope'
 const ROUTE_CONFLICT = '/config-sync/conflict'
+// 0.3.30：跨机路径确认（每台机器把自己的根目录报给插件一次）与问题反馈（落仓库 feedback\ 再推 GitHub）
+const ROUTE_ROOTS = '/config-sync/roots'
+const ROUTE_FEEDBACK = '/config-sync/feedback'
 const SETTINGS_NAME = 'dsh-config-sync.json'
 
 /**
@@ -2837,6 +2840,250 @@ async function handlePrepare(req, res, config) {
   }
 }
 
+/**
+ * 跨机路径根：仓库里的配置存的是 {{APP_ROOT}} / {{DSH_HOME}} / {{WORKSPACE_HOME}} / {{ROOT:<key>}}，
+ * 换一台机器落地时，这几个根都不一样。所以每台机器在这里确认一次自己的根，记进
+ * <dshHome>\config-sync-roots.json（本机私有，不进仓库），apply 再按这份值展开。
+ * 确认过的不再问：文件里有值就直接用，面板只在缺值时列出来。
+ */
+function rootsPathOf(dshHome) { return join(dshHome, 'config-sync-roots.json') }
+function pendingPathOf(dshHome) { return join(dshHome, 'config-sync-pending-paths.json') }
+
+/** 工作区根：本机工作区一般建在同一层，取登记表里出现最多的那个父目录 */
+function guessWorkspaceHome(dshHome) {
+  const list = workspaceRoots(dshHome)
+  if (!list.length) return ''
+  const parents = list.map((p) => dirname(String(p).replace(/[\\/]+$/, ''))).filter(Boolean)
+  let best = ''
+  let bestCount = 0
+  for (const p of parents) {
+    let c = 0
+    for (const q of parents) { if (q.toLowerCase() === p.toLowerCase()) c += 1 }
+    if (c > bestCount) { bestCount = c; best = p }
+  }
+  return best
+}
+
+function tokenHint(token) {
+  const key = String(token || '')
+  if (key === '{{APP_ROOT}}') return t('客户端安装目录（DeepSeekHarness 所在的那个目录）', 'Client install root (the folder that contains DeepSeekHarness)')
+  if (key === '{{DSH_HOME}}') return t('.dsh 配置目录（一般是 %USERPROFILE%\\.dsh）', '.dsh folder (usually %USERPROFILE%\\.dsh)')
+  if (key === '{{WORKSPACE_HOME}}') return t('工作区根目录（本机工作区都建在它下面）', 'Workspace root (all workspaces live under it)')
+  const name = key.replace(/^\{\{ROOT:/, '').replace(/\}\}$/, '')
+  return t(`自选目录：${name} —— 这台机器上对应的路径由你来定`, `Custom folder "${name}" — pick the matching path on this machine`)
+}
+
+async function handleRoots(req, res, config) {
+  const dshHome = config?.dshHome || process.env.DSH_HOME || join(homedir(), '.dsh')
+  if (req.method === 'GET') {
+    try {
+      const saved = readJson(rootsPathOf(dshHome)) || {}
+      const detected = {
+        appRoot: resolveAppRoot(config?.appRoot) || '',
+        dshHome,
+        workspaceHome: guessWorkspaceHome(dshHome),
+      }
+      const pending = readJson(pendingPathOf(dshHome)) || {}
+      const missing = Array.isArray(pending.missing) ? pending.missing : []
+      sendJson(res, 200, {
+        ok: true,
+        roots: {
+          appRoot: saved.appRoot || detected.appRoot,
+          dshHome: saved.dshHome || detected.dshHome,
+          workspaceHome: saved.workspaceHome || detected.workspaceHome,
+          custom: (() => {
+            // 用户主目录能自动探测，不用问人：工作区建在 Documents\deepseek-harness 下时靠它展开
+            const c = saved.custom && typeof saved.custom === 'object' ? { ...saved.custom } : {}
+            let home = ''
+            try { home = homedir() } catch { }
+            if (home && !c.userHome) c.userHome = home
+            return c
+          })(),
+          confirmed: Array.isArray(saved.confirmed) ? saved.confirmed : [],
+          updatedAt: saved.updatedAt || '',
+        },
+        detected,
+        missing: missing.map((m) => ({
+          token: String(m.token || ''),
+          file: String(m.file || ''),
+          label: String(m.label || ''),
+          hint: String(m.hint || tokenHint(m.token)),
+        })),
+        file: rootsPathOf(dshHome),
+      })
+    } catch (error) {
+      sendJson(res, 500, { ok: false, error: String((error && error.message) || error) })
+    }
+    return
+  }
+  if (req.method !== 'POST') { sendJson(res, 405, { ok: false, error: 'POST only' }); return }
+  if (!originAllowed(req)) { sendJson(res, 403, { ok: false, error: 'cross-origin request rejected' }); return }
+  try {
+    const raw = await readBody(req)
+    const body = raw.trim() ? JSON.parse(raw) : {}
+    const input = body.roots && typeof body.roots === 'object' ? body.roots : {}
+    const prev = readJson(rootsPathOf(dshHome)) || {}
+    const pick = (key, fallback) => {
+      const v = Object.prototype.hasOwnProperty.call(input, key) ? input[key] : prev[key]
+      return String(v == null ? '' : v).trim() || String(fallback || '').trim()
+    }
+    const next = {
+      version: 1,
+      appRoot: pick('appRoot', resolveAppRoot(config?.appRoot) || ''),
+      dshHome: pick('dshHome', dshHome),
+      workspaceHome: pick('workspaceHome', guessWorkspaceHome(dshHome)),
+      custom: {},
+      confirmed: [],
+      updatedAt: new Date().toISOString(),
+    }
+    const rawCustom = input.custom && typeof input.custom === 'object' ? input.custom : (prev.custom || {})
+    for (const [k, v] of Object.entries(rawCustom)) {
+      const key = String(k || '').trim()
+      const val = String(v == null ? '' : v).trim()
+      if (key && val) next.custom[key] = val
+    }
+    // 校验：三个根都不能空、必须是绝对路径。目录不存在只提示不拒 —— 新机器上目标目录常常还没建。
+    const warns = []
+    for (const key of ['appRoot', 'dshHome', 'workspaceHome']) {
+      if (!next[key]) {
+        throw new Error(t(
+          `本机路径不能为空：${key}`,
+          `A local path cannot be empty: ${key}`,
+        ))
+      }
+      if (!isAbsolute(next[key])) {
+        throw new Error(t(
+          `要填绝对路径（例如 D:\\DeepSeekHarness）：${next[key]}`,
+          `An absolute path is required (e.g. D:\\DeepSeekHarness): ${next[key]}`,
+        ))
+      }
+      if (!existsSync(next[key])) warns.push(t(`目录还不存在：${next[key]}`, `Folder does not exist yet: ${next[key]}`))
+    }
+    for (const [k, v] of Object.entries(next.custom)) {
+      if (!isAbsolute(v)) throw new Error(t(`自选目录要填绝对路径：${k} = ${v}`, `Custom folder must be an absolute path: ${k} = ${v}`))
+      if (!existsSync(v)) warns.push(t(`目录还不存在：${v}`, `Folder does not exist yet: ${v}`))
+    }
+    const confirmed = new Set(Array.isArray(prev.confirmed) ? prev.confirmed : [])
+    for (const key of ['appRoot', 'dshHome', 'workspaceHome']) confirmed.add(key)
+    for (const k of Object.keys(next.custom)) confirmed.add(`ROOT:${k}`)
+    next.confirmed = [...confirmed]
+
+    mkdirSync(dirname(rootsPathOf(dshHome)), { recursive: true })
+    writeFileSync(rootsPathOf(dshHome), `${JSON.stringify(next, null, 2)}\n`, 'utf8')
+    // 根都确认了，待确认清单就没意义了：清掉，下次拉取不再拦
+    try { if (existsSync(pendingPathOf(dshHome))) unlinkSync(pendingPathOf(dshHome)) } catch { }
+
+    sendJson(res, 200, {
+      ok: true,
+      roots: next,
+      warns,
+      note: t(
+        '已保存本机路径。接着点一次「拉取」（或退出后用拉取脚本），配置就会按这台机器的路径重新落地。',
+        'Saved. Run Pull once (or the pull script after quitting) so the configs are written with these paths.',
+      ),
+    })
+  } catch (error) {
+    sendJson(res, 400, { ok: false, error: String((error && error.message) || error) })
+  }
+}
+
+/**
+ * 问题反馈：落成仓库里的 feedback\<时间戳>-<id>.json，再 git add/commit/push 到云端。
+ * 为什么用文件而不是 Issue：不依赖 API 令牌，另一台机器拉取后同样能在面板里看到；
+ * 推送失败也不回滚本地文件（先把反馈留住，等网络好了下次推送会带上）。
+ */
+function feedbackDirOf(repo) { return join(repo, 'feedback') }
+
+function pluginVersion() {
+  try {
+    const pkg = JSON.parse(readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'package.json'), 'utf8'))
+    return String(pkg.version || '')
+  } catch { return '' }
+}
+
+function stampNow(date) {
+  const pad = (n) => String(n).padStart(2, '0')
+  return `${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}${pad(date.getHours())}${pad(date.getMinutes())}${pad(date.getSeconds())}`
+}
+
+async function handleFeedback(req, res, config) {
+  const dshHome = config?.dshHome || process.env.DSH_HOME || join(homedir(), '.dsh')
+  const repo = resolveRepo(config?.repoPath, dshHome).repo || ''
+  const dir = repo ? feedbackDirOf(repo) : ''
+
+  if (req.method === 'GET') {
+    try {
+      const items = []
+      if (dir && existsSync(dir)) {
+        for (const f of readdirSync(dir)) {
+          if (!f.toLowerCase().endsWith('.json')) continue
+          const j = readJson(join(dir, f))
+          if (j && (j.id || j.title)) items.push({ ...j, id: String(j.id || f.replace(/\.json$/i, '')) })
+        }
+      }
+      items.sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')))
+      sendJson(res, 200, {
+        ok: true,
+        items: items.slice(0, 300),
+        repoReady: !!(repo && existsSync(repo)),
+        dir,
+        version: pluginVersion(),
+      })
+    } catch (error) {
+      sendJson(res, 500, { ok: false, error: String((error && error.message) || error) })
+    }
+    return
+  }
+  if (req.method !== 'POST') { sendJson(res, 405, { ok: false, error: 'POST only' }); return }
+  if (!originAllowed(req)) { sendJson(res, 403, { ok: false, error: 'cross-origin request rejected' }); return }
+  try {
+    const raw = await readBody(req)
+    const body = raw.trim() ? JSON.parse(raw) : {}
+    const title = String(body.title || '').trim().slice(0, 200)
+    const text = String(body.body || body.detail || '').trim().slice(0, 4000)
+    if (!title) throw new Error(t('先写个标题，方便以后对上号', 'Give it a title so it can be found later'))
+    if (!repo) throw new Error(t('还没有配置仓库目录，反馈没地方存', 'The repo directory is not configured, so there is nowhere to store feedback'))
+    if (!existsSync(repo)) throw new Error(t(`仓库目录不存在：${repo}`, `Repo directory does not exist: ${repo}`))
+
+    const now = new Date()
+    const stamp = stampNow(now)
+    const id = `${stamp}-${createHash('sha1').update(`${title}\n${text}\n${now.getTime()}`).digest('hex').slice(0, 8)}`
+    const record = {
+      id,
+      title,
+      body: text,
+      pluginVersion: pluginVersion(),
+      machine: (() => { try { return hostname() } catch { return '' } })(),
+      createdAt: now.toISOString(),
+      status: 'open',
+    }
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, `${id}.json`), `${JSON.stringify(record, null, 2)}\n`, 'utf8')
+
+    // 只提交 feedback 目录：别人的改动不碰，也不掺进这次提交
+    let pushed = false
+    let pushError = ''
+    const rel = 'feedback'
+    const added = await git(repo, ['add', '--', rel])
+    if (added === null) {
+      pushError = t('git add 失败（本地文件已保留）', 'git add failed (the local file is kept)')
+    } else {
+      const statusLine = await git(repo, ['status', '--porcelain', '--', rel])
+      if (statusLine && statusLine.trim()) {
+        const commit = await git(repo, ['commit', '-m', `feedback: ${title.slice(0, 60)}`, '--', rel])
+        if (commit === null) pushError = t('git commit 失败（本地文件已保留）', 'git commit failed (the local file is kept)')
+      }
+      const push = await git(repo, ['push', 'origin', 'HEAD'])
+      if (push === null) {
+        if (!pushError) pushError = t('git push 失败：反馈已存在本地仓库，下次推送会一起上去', 'git push failed: the feedback is in the local repo and will go up with the next push')
+      } else pushed = true
+    }
+
+    sendJson(res, 200, { ok: true, id, pushed, error: pushError, item: record })
+  } catch (error) {
+    sendJson(res, 400, { ok: false, error: String((error && error.message) || error) })
+  }
+}
 export function apply(ctx, config) {
   try {
     ctx.inject(['webServer'], (scoped) => {
@@ -2877,6 +3124,16 @@ export function apply(ctx, config) {
         kind: 'exact',
         path: ROUTE_CONFLICT,
         handler: withLang(handleConflict),
+      }))
+      scoped.effect(() => scoped.webServer.register({
+        kind: 'exact',
+        path: ROUTE_ROOTS,
+        handler: withLang(handleRoots),
+      }))
+      scoped.effect(() => scoped.webServer.register({
+        kind: 'exact',
+        path: ROUTE_FEEDBACK,
+        handler: withLang(handleFeedback),
       }))
     })
     // 开关打开才排一次启动检查（默认关 = 什么都不做）

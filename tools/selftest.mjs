@@ -94,7 +94,7 @@ function check(label, cond, detail = '') {
 }
 
 console.log('== dsh-config-sync 宿主半身自检 ==')
-check('apply() 注册了路由', routes.size === 7 && routes.has('/config-sync/update') && routes.has('/config-sync/scope') && routes.has('/config-sync/conflict'), `实际 ${routes.size} 条：${[...routes.keys()].join(', ')}`)
+check('apply() 注册了路由', routes.size === 9 && routes.has('/config-sync/update') && routes.has('/config-sync/scope') && routes.has('/config-sync/conflict') && routes.has('/config-sync/roots') && routes.has('/config-sync/feedback'), `实际 ${routes.size} 条：${[...routes.keys()].join(', ')}`)
 
 const status = await call('/config-sync/status', { headers: { host: 'localhost:3080' } })
 const body = JSON.parse(status.body || '{}')
@@ -718,16 +718,16 @@ if (prevScope === null) { try { unlinkSync(scopeFile) } catch { } } else writeFi
     !clientSrc.includes("M('明细', 'Details')")
     && clientSrc.includes('onClick: canExpand')
     && clientSrc.includes("expanded ? '▾' : '▸'"), 'client.js')
-  check('同步内容卡挂在页面最下面（最后一个 Section）', (() => {
-    // 顺序：概览 → 同步目标 → 自动化与插件更新 → 退出后执行 → 还原备份 → 同步内容；
-    // 判据是「同步内容」之后不再出现任何 Section(...)，而不是写死它紧跟谁（中间还会插卡）。
-    const at = clientSrc.indexOf("Section(M('同步内容'")
-    if (at < 0) return false
-    const after = clientSrc.slice(at + 1)
-    if (/Section\(M\(/.test(after)) return false
-    const order = ["概览", "同步目标", "自动化与插件更新", "退出后执行", "还原备份", "同步内容"]
-      .map((k) => clientSrc.indexOf(`Section(M('${k}'`))
-    return order.every((p, i) => p >= 0 && (i === 0 || p > order[i - 1]))
+  check('同步内容卡与问题反馈卡挂在页面最下面（其后不再有别的 Section）', (() => {
+    // 顺序：概览 → 同步目标 → 自动化与插件更新 → 退出后执行 → 还原备份 → 同步内容 → 问题反馈；
+    // 判据是「顺序」而不是写死紧跟，中间还会插卡（本机路径就插在同步目标之前）。
+    const order = ["概览", "同步目标", "自动化与插件更新", "退出后执行", "还原备份", "同步内容", "问题反馈"]
+      .map((k) => ({ k, at: clientSrc.indexOf(`Section(M('${k}'`) }))
+    if (order.some((p) => p.at < 0)) return false
+    if (!order.every((p, i) => (i === 0 ? true : p.at > order[i - 1].at))) return false
+    // 问题反馈必须是最后一个 Section
+    const tail = clientSrc.slice(order[order.length - 1].at + 1)
+    return !/Section\(M\(/.test(tail)
   })(), 'client.js')
   // 「还原备份」卡：地址可改（留空=默认）、列出快照、点「立即还原」先出确认框再排队
   check('控件：还原备份卡有备份目录、快照列表与立即还原',
@@ -953,6 +953,86 @@ console.log('== 默认工作区校正 ==')
       && host.includes('defaultWorkspace: s.defaultWorkspace ||')
       && host.includes("has('defaultWorkspace')"),
     'index.js 没带该字段')
+}
+
+// 跨机路径占位符（0.3.30）：仓库里不写死盘符，落地时按本机根展开；展开不掉的记 pending 让用户确认。
+// 只做只读断言（不写真实的 roots.json / 不提交仓库），写入路径留给手工验证。
+console.log('')
+console.log('== 跨机路径占位符与问题反馈 ==')
+{
+  const root = join(dirname(fileURLToPath(import.meta.url)), '..')
+  const common = readFileSync(join(root, 'runtime', 'dsh-sync-common.ps1'), 'utf8')
+  const captureSrc = readFileSync(join(root, 'runtime', 'capture.ps1'), 'utf8')
+  const applySrc = readFileSync(join(root, 'runtime', 'apply.ps1'), 'utf8')
+  const host = readFileSync(join(root, 'index.js'), 'utf8')
+  const cli = readFileSync(join(root, 'client.js'), 'utf8')
+
+  check('common 提供路径根读写与占位符双向转换',
+    common.includes('function Get-SyncRoots') && common.includes('function Save-SyncRoots')
+      && common.includes('function ConvertTo-TokenText') && common.includes('function Expand-TokenText')
+      && common.includes('function Get-MissingTokens'),
+    '缺占位符函数')
+  check('common 覆盖四种路径写法（原样 / 双反斜杠 / 正斜杠 / 转义斜杠）',
+    common.includes('function Get-PathVariants') && common.includes("$p.Replace($bs, '/')"),
+    '变体列表不全')
+  check('占位符按根长度降序替换（workspaceHome 在 appRoot 之下不会替换错位）',
+    common.includes('Sort-Object { $_.Value.Length } -Descending'),
+    '没有按长度排序')
+  check('capture 写仓库前把本机根换成占位符',
+    captureSrc.includes('ConvertTo-TokenText $txt $roots') && captureSrc.includes('Get-SyncRoots $DshHome $AppRoot $WorkspaceHome'),
+    'capture 没做归一')
+  check('capture 首次自动落一份 config-sync-roots.json',
+    captureSrc.includes('Save-SyncRoots $DshHome $roots'),
+    '没写 roots 文件')
+  const settingsCount = (captureSrc.match(/Repo = 'settings\\/g) || []).length
+  const applyCount = (applySrc.match(/Repo = 'settings\\/g) || []).length
+  check('capture 覆盖到各插件自己的配置（不止 4 个）', settingsCount >= 11, `实际 ${settingsCount} 项`)
+  check('capture 与 apply 的 settings 清单一致', settingsCount === applyCount, `capture ${settingsCount} / apply ${applyCount}`)
+  check('apply 展开占位符，缺值的跳过不写并记 pending',
+    applySrc.includes('Expand-TokenText $txt $roots') && applySrc.includes('Write-PendingPaths $DshHome $pendingItems')
+      && applySrc.includes('continue'),
+    'apply 没按缺失跳过')
+  check('workspace.json（DSH 工作区登记）进了同步范围',
+    captureSrc.includes("storages\\workspace.json") && applySrc.includes("storages\\workspace.json"),
+    '工作区登记表没同步')
+  check('面板有「本机路径」卡与保存按钮',
+    cli.includes("M('本机路径', 'Local paths')") && cli.includes("M('保存本机路径', 'Save paths')")
+      && cli.includes('callRoots'),
+    'client.js 缺本机路径卡')
+  check('面板会列出待确认项（token + 文件 + 说明）',
+    cli.includes('data.missing') && cli.includes('m.token'),
+    '待确认清单没渲染')
+  check('面板有「问题反馈」卡：提交 + 列表 + 推送状态',
+    cli.includes("M('问题反馈', 'Feedback')") && cli.includes('callFeedback')
+      && cli.includes('r.pushed'),
+    'client.js 缺反馈卡')
+  check('反馈落仓库 feedback 目录并 commit+push',
+    host.includes('feedbackDirOf') && host.includes("'feedback'") && host.includes("'push', 'origin', 'HEAD'"),
+    'index.js 没落盘/推送')
+
+  const rootsGet = await call('/config-sync/roots', { headers: { host: 'localhost:3080' } })
+  const rootsBody = JSON.parse(rootsGet.body || '{}')
+  check('GET /config-sync/roots 返回本机根 + 探测值 + 待确认清单',
+    rootsBody.ok === true && rootsBody.roots && typeof rootsBody.roots.appRoot === 'string'
+      && rootsBody.detected && Array.isArray(rootsBody.missing),
+    '结构不全')
+  check('roots 的待确认项带人话说明（不是只给 token）',
+    rootsBody.missing.every((m) => typeof m.token === 'string' && typeof m.hint === 'string'),
+    '缺 hint')
+
+  const fbGet = await call('/config-sync/feedback', { headers: { host: 'localhost:3080' } })
+  const fbBody = JSON.parse(fbGet.body || '{}')
+  check('GET /config-sync/feedback 返回列表且标明仓库是否可用',
+    fbBody.ok === true && Array.isArray(fbBody.items) && typeof fbBody.repoReady === 'boolean',
+    '结构不全')
+  check('跨站请求被拒（roots）', await (async () => {
+    const r = await call('/config-sync/roots', {
+      method: 'POST',
+      headers: { host: 'localhost:3080', origin: 'https://evil.example.com', 'content-type': 'application/json' },
+      body: '{}',
+    })
+    return r.statusCode === 403
+  })(), '没拦住')
 }
 
 console.log('')

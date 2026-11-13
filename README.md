@@ -54,7 +54,7 @@ dsh plugin add https://raw.githubusercontent.com/QcWyGm/dsh-config-sync/main/rel
 
 **指标条**：五格一眼看完——`本机 / 契约`（版本不一致转橙）、`bundle`（有解析不到的转红）、`依赖`（有缺失转红）、`备份快照`（份数）、`上次同步`（时间，后面 `(+N)` 表示之后又有几个文件写入）。表里有事才在下面出现一条「待办」，没事就没有这一块。
 
-**分区**：概览（指标条 + 待办）→ 同步目标（本机仓库 / 云端仓库）→ 自动化与插件更新（自动同步 / 插件更新）→ 退出后执行 → 还原备份 → 同步内容。宽屏两列并排，卡片内文字压成"一行值 + 一行灰字说明"，长解释不再堆在正文里。
+**分区**：概览（指标条 + 待办）→ 本机路径（0.3.30 起：跨机根确认与待确认清单）→ 同步目标（本机仓库 / 云端仓库）→ 自动化与插件更新（自动同步 / 插件更新）→ 退出后执行 → 还原备份 → 同步内容 → 问题反馈（0.3.30 起）。宽屏两列并排，卡片内文字压成"一行值 + 一行灰字说明"，长解释不再堆在正文里。
 
 **「待推送」不只看 git**：`git status` 干净时，新会话/新资料可能还躺在 `~\.dsh` 里没 capture。所以 `sync.ps1` 在 push / pull 成功后写 `~\.dsh\config-sync-state.json`（`lastSyncAt`/`mode`/`head`），`status` 多返回一段 `local`：stat `sessions`、`skills`、`.agent-presets`、`mnemon`、profile 五文件、登记的工作区目录，**mtime 晚于 `lastSyncAt`** 的计入 `local.pending`，徽标转橙「待推送」。只看 mtime、不读内容、不跑 capture；上限 20000 文件 / 1.5 秒；复制或另存也会算进来，误报只是多一句提示。
 
@@ -156,6 +156,59 @@ dsh plugin add https://raw.githubusercontent.com/QcWyGm/dsh-config-sync/main/rel
 - **只在这个目录里选**：面板传来的必须是备份根之下真实存在的一份快照（越界、相对路径、含引号换行都直接报错），不会因为改了地址就把范围放宽到任意文件夹。
 - **老路径仍在**：「退出后执行」卡里的「只生成还原脚本」照旧写 `<仓库>\同步-还原-<快照名>.cmd`（含 `-DryRun` 预览、输 `y` 确认、`manual-<时间戳>` 自保），给离线 / 远控 / 手动执行用；`restore.ps1` 的 `-BackupDir` 参数没变，新增的 `-RollbackToPoint` 由面板那条链路自动加上。
 
+## 插件配置跟得走 + 跨机路径确认（0.3.30 起）
+
+新机器同步完发现「配置没了」，多数不是拉取失败，而是**这些配置从来就没进过仓库**。0.3.30 把「插件配置」组从 4 个文件扩到 13 项：
+
+| 仓库路径 | 本机来源 | 说明 |
+|---|---|---|
+| `settings\our-free-model.json` | `~\our-free-model\settings.json` | 免费模型中转设置（运行时字段已归一，不会每轮都「有改动」） |
+| `settings\comfyui-workflows.json` | `~\data\dsh-comfyui\workflows.json` | ComfyUI 工作流库 |
+| `settings\dsh-pet-main-config.jsonc` | `~\dsh-pet\main-config.jsonc` | 桌宠配置 |
+| `settings\dsh-market-state.json` | `~\.dsh` 的 profile 下 `.dsh-market\state.json` | 插件市场状态 |
+| `settings\dsh-pet-memory.json` | `~\dsh-pet\memory.json` | 桌宠记忆 |
+| `settings\our-free-model-picks.json` | `~\our-free-model\picks.json` | 收藏 |
+| `settings\dsh-im-interface-language.json` | `~\integrations\dsh-im\interface-language.json` | dsh-im 界面语言 |
+| `settings\dsh-qq-config.json` | `~\integrations\dsh-qq\config.json` | QQ 集成配置 |
+| `settings\dsh-qq-workspaces.json` | `~\integrations\dsh-qq\workspaces.json` | QQ 集成工作区 |
+| `settings\redteam-preset-declare.json` | `~\redteam\preset-declare.json` | 红队预设声明 |
+| `settings\task-board-ledger.json` | `~\task-board\ledger-v2.json` | 任务板台账 |
+| `settings\task-board-scheduler.json` | `~\task-board\scheduler-v2.json` | 任务板调度 |
+| `settings\dsh-workspaces.json` | `~\storages\workspace.json` | **DSH 工作区登记**（新机器「工作区不见了」就是它没同步） |
+
+**仍然排除**：凭据与运行时状态不进仓库 —— `channel-pack`（含 `token-ledger.json`）、`workbuddy-vault`、`dsh-purge`、`stats` / `feed` / `catalog` / `availability`、`integrations\dsh-qq\bots\<bot>\state.json`、会话缓存。
+
+### 带本机路径的配置：占位符 + 换机确认
+
+两台机器的盘符几乎不可能一样（一台 `D:\DeepSeekHarness`，另一台放在别处），所以带绝对路径的配置不能原样搬过去：
+
+| 占位符 | 含义 |
+|---|---|
+| `{{APP_ROOT}}` | 客户端安装目录（`DeepSeekHarness` 所在的那一层） |
+| `{{DSH_HOME}}` | `.dsh` 配置目录（一般是 `%USERPROFILE%\.dsh`） |
+| `{{WORKSPACE_HOME}}` | 工作区根目录 |
+| `{{ROOT:<key>}}` | 用户自选目录（ComfyUI 模型目录、代理程序路径等），键值由用户在面板里定 |
+
+- `capture.ps1` 写仓库**前**做归一：本机根 → 占位符。同一个路径在原文件里可能是 4 种写法（原样反斜杠 / JSON 双反斜杠 / 正斜杠 / JSON 转义斜杠），都会认；替换按根长度降序（工作区根在安装目录之下，先换长的才不会错位）。
+- 仓库里一律**正斜杠**（`{{APP_ROOT}}/mnemon`），JSON 里不会出现反斜杠转义问题。
+- `apply.ps1` 落地**前**展开：占位符 → 本机路径。
+
+### 路径确认：拉取后由你选，选过就不再问
+
+- 首次同步会在 `~\.dsh\config-sync-roots.json` 落一份本机根（探测值），**本机私有、不进仓库**。
+- 某台机器缺某个根（展开不掉）时，`apply.ps1` **跳过那个文件不写**，把它记进 `~\.dsh\config-sync-pending-paths.json`（哪个 token、哪个文件、要选什么目录）。
+- 面板「本机路径」卡把这些项列出来，填好本机路径 → 保存 → 重新拉取一次就写进去。
+- 确认过的值优先于自动探测，之后不再问；根都对不上的情况下**宁可不写**——把 `{{ROOT:xxx}}` 字面量写进配置，插件读到会当真实路径，那种报错比「没写」难查得多。
+
+## 问题反馈（0.3.30 起）
+
+面板最下面新增「问题反馈」卡：填标题 + 详情，提交后：
+
+1. 落成仓库里的 `feedback\<yyyyMMddHHmmss>-<8位id>.json`，内容 `{id,title,body,pluginVersion,machine,createdAt,status:'open'}`；
+2. `git add -- feedback` → `git commit` → `git push origin HEAD`（只提交 feedback 目录，不掺别人的改动）；
+3. 列表按时间倒序显示提交过的反馈（**带机器名**，另一台机器拉取后同样能看到）。
+
+推送失败不算失败：文件已经留在本机仓库，等网络好了下次推送会一起上去；面板会明确写「已存进本机仓库（还没推送上去）」。
 ## 卸载残留自动清理（0.3.29 起）
 
 卸载插件是宿主做的：删安装目录、删 `package.json` 里的依赖、删 `cordis.patch.yml` 里的模块段。但它**不删 `profile\node_modules` 里那条 junction**——实测 `dsh-image-search` 卸载后目标目录 `D:\DeepSeekHarness\dsh-image-search-0.1.0` 已经没了、链接还指着它。这类断链 pnpm 也不管（平铺布局下它只按 lockfile 重装，而链接不是它建的），同步同样从不清，于是一直挂到下次重装。
@@ -186,7 +239,7 @@ dsh plugin add https://raw.githubusercontent.com/QcWyGm/dsh-config-sync/main/rel
 | 技能 | `skills/` | 每个技能目录 |
 | 预设 | `presets/` | 每个预设 |
 | 技能市场台账 | `storages-record/` | `skill-market-installed.json`、`skill-market-panel.json` |
-| 插件配置 | `settings/` | 每个配置文件 |
+| 插件配置 | `settings/` | 13 个配置文件（清单见上面「插件配置跟得走」一节），可单独排除 |
 | 记忆 | `mnemon/` | 整目录（只有一项） |
 | 本地插件 | `local-plugins/` | 每个 link 插件 |
 | 工作区 | `workspace/` | 每个登记的工作区（登记表 `workspace-registry.json` 也只写勾选项） |

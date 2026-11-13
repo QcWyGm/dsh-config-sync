@@ -599,11 +599,21 @@ if (-not (Test-Path -LiteralPath $ProfileDir)) {
 }
 
 # 需要跨机一致的插件设置 / 工作流：仓库路径 → 本机路径
+# 0.3.30 起扩到各插件自己的配置；文件里存的是占位符，落到本机前统一展开
 $settingsMap = @(
-  @{ Repo = 'settings\our-free-model.json';        Src = (Join-Path $DshHome 'our-free-model\settings.json') },
-  @{ Repo = 'settings\comfyui-workflows.json';     Src = (Join-Path $DshHome 'data\dsh-comfyui\workflows.json') },
-  @{ Repo = 'settings\dsh-pet-main-config.jsonc'; Src = (Join-Path $DshHome 'dsh-pet\main-config.jsonc') },
-  @{ Repo = 'settings\dsh-market-state.json';      Src = (Join-Path $ProfileDir '.dsh-market\state.json') }
+  @{ Repo = 'settings\our-free-model.json';        Src = (Join-Path $DshHome 'our-free-model\settings.json');                    Label = 'our-free-model 插件设置' },
+  @{ Repo = 'settings\comfyui-workflows.json';     Src = (Join-Path $DshHome 'data\dsh-comfyui\workflows.json');                  Label = 'ComfyUI 工作流库' },
+  @{ Repo = 'settings\dsh-pet-main-config.jsonc';  Src = (Join-Path $DshHome 'dsh-pet\main-config.jsonc');                        Label = '桌宠配置' },
+  @{ Repo = 'settings\dsh-market-state.json';      Src = (Join-Path $ProfileDir '.dsh-market\state.json');                       Label = '插件市场状态' },
+  @{ Repo = 'settings\dsh-pet-memory.json';        Src = (Join-Path $DshHome 'dsh-pet\memory.json');                              Label = '桌宠记忆' },
+  @{ Repo = 'settings\our-free-model-picks.json';  Src = (Join-Path $DshHome 'our-free-model\picks.json');                        Label = 'our-free-model 收藏' },
+  @{ Repo = 'settings\dsh-im-interface-language.json'; Src = (Join-Path $DshHome 'integrations\dsh-im\interface-language.json'); Label = 'dsh-im 界面语言' },
+  @{ Repo = 'settings\dsh-qq-config.json';         Src = (Join-Path $DshHome 'integrations\dsh-qq\config.json');                  Label = 'QQ 集成配置' },
+  @{ Repo = 'settings\dsh-qq-workspaces.json';     Src = (Join-Path $DshHome 'integrations\dsh-qq\workspaces.json');              Label = 'QQ 集成工作区' },
+  @{ Repo = 'settings\redteam-preset-declare.json'; Src = (Join-Path $DshHome 'redteam\preset-declare.json');                      Label = '红队预设声明' },
+  @{ Repo = 'settings\task-board-ledger.json';     Src = (Join-Path $DshHome 'task-board\ledger-v2.json');                        Label = '任务板台账' },
+  @{ Repo = 'settings\task-board-scheduler.json';  Src = (Join-Path $DshHome 'task-board\scheduler-v2.json');                     Label = '任务板调度' },
+  @{ Repo = 'settings\dsh-workspaces.json';        Src = (Join-Path $DshHome 'storages\workspace.json');                          Label = 'DSH 工作区登记' }
 )
 
 # ---------- 0.5 宿主版本契约（一切动作之前先校验） ----------
@@ -835,19 +845,39 @@ if ((Test-Path -LiteralPath $ledgerSrc) -and (Test-SyncItemEnabled $Scope 'stora
 } else { Warn '跳过（未勾选同步）：技能市场台账' }
 
 # ---------- 7.6. 还原插件设置与工作流 ----------
+# 仓库里存的是占位符（{{APP_ROOT}} / {{DSH_HOME}} / {{WORKSPACE_HOME}} / {{ROOT:<key>}}），
+# 先展开成本机路径再写。展开完还剩占位符的，说明这台机器还没确认过那个根 —— 宁可不写：
+# 把 {{ROOT:xxx}} 字面量写进配置，插件读到会当成真实路径，报错比不写更难查。
+$roots = Get-SyncRoots $DshHome $AppRoot $WorkspaceHome
+$pendingItems = New-Object System.Collections.ArrayList
 if (Test-SyncGroupEnabled $Scope 'settings') {
 foreach ($m in $settingsMap) {
   if (-not (Test-SyncItemEnabled $Scope 'settings' ($m.Repo -replace '^settings\\', ''))) { continue }
   $srcRepo = Join-Path $RepoRoot $m.Repo
   if (-not (Test-Path -LiteralPath $srcRepo)) { Warn ("仓库里没有 " + $m.Repo + "，跳过"); continue }
+  $txt = [IO.File]::ReadAllText($srcRepo)
+  $expanded = Expand-TokenText $txt $roots
+  $missing = @(Get-MissingTokens $expanded)
+  if ($missing.Count -gt 0) {
+    # 缺什么就别写什么：写进去的是占位符字面量，插件读到会当成真实路径
+    foreach ($k in $missing) {
+      $pendingItems.Add([pscustomobject][ordered]@{ token = $k; file = $m.Repo; label = $m.Label; hint = (Get-TokenHint $k) }) | Out-Null
+    }
+    Warn ("跳过 " + $m.Repo + "：需要先确认路径 " + ($missing -join '、'))
+    continue
+  }
   $dir = Split-Path -Parent $m.Src
   if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
-  Copy-Item -LiteralPath $srcRepo -Destination $m.Src -Force
-  # 设置文件里也可能带客户端安装目录（如 ComfyUI 工作流里的模型路径），一并换成本机路径
-  Expand-AppRootFile $m.Src $appRootFwd | Out-Null
+  [IO.File]::WriteAllText($m.Src, $expanded, (New-Object Text.UTF8Encoding($false)))
 }
-Ok "已还原插件设置 / ComfyUI 工作流 / 桌宠配置 / 市场状态"
-} else { Warn '跳过（未勾选同步）：插件设置 / ComfyUI 工作流 / 桌宠配置 / 市场状态' }
+Ok "已还原插件设置 / 工作流 / 各插件配置"
+} else { Warn '跳过（未勾选同步）：插件设置 / 工作流 / 各插件配置' }
+if ($pendingItems.Count -gt 0) {
+  $pf = Write-PendingPaths $DshHome $pendingItems
+  Warn ("有 " + $pendingItems.Count + " 项配置等待确认路径，本次未写入。已记到 " + $pf + "，到面板「本机路径」选好目录，之后再拉取一次即可。")
+} elseif (Test-SyncGroupEnabled $Scope 'settings') {
+  Clear-PendingPaths $DshHome
+}
 
 # ---------- 7.5. 还原记忆插件数据目录 mnemon ----------
 $mnemonSrc = Join-Path $RepoRoot 'mnemon'
@@ -1179,4 +1209,3 @@ Say "验证：插件页看 20 项是否齐全、按要求检查 cordis.patch.yml
 Say "如需回滚：把 $BackupDir 里的文件拷回原位置（工作区资料在 workspace\ 子目录、登记表备份为 workspace-registry-before.json）。"
 
 exit 0
-

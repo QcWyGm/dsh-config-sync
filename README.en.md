@@ -54,7 +54,7 @@ The layout is "one status row + one metric strip + section cards", read top to b
 
 **Metric strip**: five cells at a glance — `App / contract` (turns orange when they disagree), `bundle` (red when something is unresolvable), `Dependencies` (red when something is missing), `Snapshots` (count) and `Last sync` (time, with `(+N)` for files written after it). A "to-do" card appears below only when there is something to fix.
 
-**Sections**: Overview (strip + to-do) → Sync targets (Local / Cloud repo) → Automation & plugin update → After exit → Restore backup → Sync content. Two columns on wide screens, and each card keeps text to "one value line + one grey hint line" instead of long prose.
+**Sections**: Overview (strip + to-do) → Local paths (since 0.3.30: cross-machine root confirmation and the pending list) → Sync targets (Local / Cloud repo) → Automation & plugin update → After exit → Restore backup → Sync content → Feedback (since 0.3.30). Two columns on wide screens, and each card keeps text to "one value line + one grey hint line" instead of long prose.
 
 **"To push" is not just git**: even with a clean `git status`, new sessions/materials may still sit in `~\.dsh` uncaptured. So `sync.ps1` writes `~\.dsh\config-sync-state.json` (`lastSyncAt`/`mode`/`head`) after a successful push/pull, and `status` returns an extra `local` block: it stats `sessions`, `skills`, `.agent-presets`, `mnemon`, the five profile files and registered workspace directories, counting anything whose **mtime is later than `lastSyncAt`** into `local.pending`, which turns the badge orange "To push". mtime only — no content reads, no capture; capped at 20,000 files / 1.5 s; copies and "save as" count too, and a false positive only costs one extra hint.
 
@@ -156,6 +156,59 @@ The panel has a "Restore backup" card (placed after "After exit" and before "Syn
 - **Only this folder's snapshots are accepted**: the path from the panel must be a real snapshot under the backup root (escaping it, relative paths, quotes or newlines are rejected), so changing the folder never widens the scope to arbitrary directories.
 - **The old path still works**: "generate restore script only" in the "After exit" card still writes `<repo>\restore-<snapshot name>.cmd` (dry-run preview, `y` confirmation, `manual-<timestamp>` safety copy) for offline / remote / manual use; `restore.ps1 -BackupDir` is unchanged, and `-RollbackToPoint` is added automatically by the panel pipeline.
 
+## Plugin configs travel with the sync + cross-machine paths (since 0.3.30)
+
+A new machine ending up with "no config" is mostly not a failed pull — **those configs were never in the repo**. 0.3.30 grows the settings group from 4 files to 13:
+
+| Repo path | Local source | What it is |
+|---|---|---|
+| `settings\our-free-model.json` | `~\our-free-model\settings.json` | Free-model relay settings (runtime fields normalised, so every round is not "changed") |
+| `settings\comfyui-workflows.json` | `~\data\dsh-comfyui\workflows.json` | ComfyUI workflow library |
+| `settings\dsh-pet-main-config.jsonc` | `~\dsh-pet\main-config.jsonc` | Desktop pet config |
+| `settings\dsh-market-state.json` | `.dsh-market\state.json` under the profile | Plugin market state |
+| `settings\dsh-pet-memory.json` | `~\dsh-pet\memory.json` | Pet memory |
+| `settings\our-free-model-picks.json` | `~\our-free-model\picks.json` | Picks / favourites |
+| `settings\dsh-im-interface-language.json` | `~\integrations\dsh-im\interface-language.json` | dsh-im UI language |
+| `settings\dsh-qq-config.json` | `~\integrations\dsh-qq\config.json` | QQ integration config |
+| `settings\dsh-qq-workspaces.json` | `~\integrations\dsh-qq\workspaces.json` | QQ integration workspaces |
+| `settings\redteam-preset-declare.json` | `~\redteam\preset-declare.json` | Redteam preset declarations |
+| `settings\task-board-ledger.json` | `~\task-board\ledger-v2.json` | Task-board ledger |
+| `settings\task-board-scheduler.json` | `~\task-board\scheduler-v2.json` | Task-board scheduler |
+| `settings\dsh-workspaces.json` | `~\storages\workspace.json` | **DSH workspace registry** (the usual reason workspaces vanish on a new machine) |
+
+**Still excluded**: credentials and runtime state — `channel-pack` (contains `token-ledger.json`), `workbuddy-vault`, `dsh-purge`, `stats` / `feed` / `catalog` / `availability`, `integrations\dsh-qq\bots\<bot>\state.json`, session caches.
+
+### Configs that carry absolute paths: placeholders + a one-time confirmation
+
+Two machines rarely share drive letters (one has `D:\DeepSeekHarness`, the other does not), so such configs cannot be copied verbatim:
+
+| Placeholder | Meaning |
+|---|---|
+| `{{APP_ROOT}}` | Client install root (the folder holding `DeepSeekHarness`) |
+| `{{DSH_HOME}}` | `.dsh` folder (usually `%USERPROFILE%\.dsh`) |
+| `{{WORKSPACE_HOME}}` | Workspace root |
+| `{{ROOT:<key>}}` | A folder you pick (ComfyUI models, proxy binary path, ...), the value is yours to decide in the panel |
+
+- Before writing to the repo, `capture.ps1` normalises local roots into placeholders. All four spellings of a path are recognised (raw backslashes / JSON doubled / forward slashes / JSON escaped slash), and longer roots are replaced first so `{{WORKSPACE_HOME}}` never gets swallowed by `{{APP_ROOT}}`.
+- The repo always stores **forward slashes** (`{{APP_ROOT}}/mnemon`), so JSON needs no backslash escaping.
+- Before landing, `apply.ps1` expands placeholders back into local paths.
+
+### Path confirmation: you pick after a pull, never asked twice
+
+- The first sync writes `<dshHome>\config-sync-roots.json` with detected roots. **Local only, never committed.**
+- When a root is missing on this machine, `apply.ps1` **skips that file instead of writing it** and records it in `<dshHome>\config-sync-pending-paths.json` (which token, which file, what folder to pick).
+- The panel's "Local paths" card lists those items; fill in the paths, save, then pull once more.
+- Confirmed values win over detection and are not asked again. **Not writing beats writing garbage** — a literal `{{ROOT:xxx}}` inside a config is read by plugins as a real path, and that error is far harder to trace than a skipped file.
+
+## Feedback (since 0.3.30)
+
+A new Feedback card at the bottom of the panel. Submit a title and details and it will:
+
+1. Be stored as `feedback\<yyyyMMddHHmmss>-<8 hex>.json` in the repo: `{id,title,body,pluginVersion,machine,createdAt,status:'open'}`;
+2. Be `git add -- feedback` → `git commit` → `git push origin HEAD` (only the feedback folder, never someone else's changes);
+3. Appear in a newest-first list, **with the submitting machine name** — the other machine sees the same list after pulling.
+
+A failed push is not a failed report: the file stays in the local repo and goes up with the next push, and the card says so explicitly.
 ## Uninstall leftovers cleaned automatically (since 0.3.29)
 
 Uninstalling a plugin is the host's job: it removes the install directory, the `package.json` dependency and the `cordis.patch.yml` block. It does **not** remove the junction under `profile\node_modules` - measured on `dsh-image-search`, whose target `D:\DeepSeekHarness\dsh-image-search-0.1.0` was gone while the link still pointed at it. Broken links like that are invisible to pnpm too (with a flat layout it only reinstalls from the lockfile, and the link was not created by pnpm), and syncing never cleaned them either, so they survive until the next reinstall.
@@ -186,7 +239,7 @@ The panel has a "Sync content" card (placed at the very bottom of the page): the
 | Skills | `skills/` | one entry per skill folder |
 | Presets | `presets/` | one entry per preset |
 | Skill-market ledger | `storages-record/` | `skill-market-installed.json`, `skill-market-panel.json` |
-| Plugin configs | `settings/` | one entry per config file |
+| Plugin configs | `settings/` | 13 config files (see the table in "Plugin configs travel with the sync"), each excludable |
 | Mnemon | `mnemon/` | the whole folder (single entry) |
 | Local plugins | `local-plugins/` | one entry per linked plugin |
 | Workspaces | `workspace/` | one entry per registered workspace (`workspace-registry.json` only lists checked ones) |
