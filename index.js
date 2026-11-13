@@ -397,6 +397,35 @@ function git(repo, args) {
   })
 }
 
+/**
+ * 云端仓库有几个分支。只服务一处判断：本机还是空目录时，云端到底有没有东西可拉 ——
+ * 0 表示空仓库（可以走「初始化推送」），null 表示判不了（离线/认证失败/没配地址）。
+ * 判不了时宁可按老规矩只允许拉取，也不要在盲状态下开推送。
+ * 用 ls-remote 而不是 fetch：纯查询，不写本地 refs，也不会在仓库目录里留下半截状态。
+ */
+const lsRemoteCache = new Map()
+function lsRemoteHeads(url, settings) {
+  if (!url) return Promise.resolve(null)
+  // 短缓存：面板会定时刷 status，空目录状态下每次都实测一次 ls-remote（最坏 15 秒超时）会把刷新拖住。
+  // 10 秒内的同一个地址直接复用上次答案；探不到（null）也缓存，免得离线时反复等超时。
+  const hit = lsRemoteCache.get(url)
+  if (hit && Date.now() - hit.at < 10000) return Promise.resolve(hit.heads)
+  const key = (settings && settings.sshKey) || defaultSshKey()
+  const hasKey = Boolean(key) && isFile(key)
+  const coreSsh = readSshCommandFromGitConfig('')
+  const sshExe = coreSsh ? '' : resolveSshExe()
+  const env = { ...process.env }
+  if (hasKey && coreSsh) env.GIT_SSH_COMMAND = coreSsh
+  else if (hasKey && sshExe) env.GIT_SSH_COMMAND = `"${sshExe}" -i "${key}" -o BatchMode=yes -o StrictHostKeyChecking=accept-new`
+  return new Promise((resolve) => {
+    execFile(resolveGitExe(), ['ls-remote', '--heads', url], { windowsHide: true, timeout: 15000, env }, (err, stdout) => {
+      const heads = err ? null : String(stdout || '').split('\n').filter((line) => line.includes('refs/heads/')).length
+      lsRemoteCache.set(url, { at: Date.now(), heads })
+      resolve(heads)
+    })
+  })
+}
+
 function readBundles(profileDir) {
   const pkg = readJson(join(profileDir, 'package.json'))
   return {
@@ -709,6 +738,9 @@ async function inspect(config) {
   const advice = []
   // 本机仓库处在哪个阶段：空白目录 = 等首次拉取，是正常状态，不该报异常
   const phase = repoPhase(repo)
+  // 云端有没有内容：只在本地仓库还没就位时才探（真仓库不需要每次刷面板都打一次网络）
+  const remoteProbeUrl = gitRemoteUrl || settings.remoteUrl || ''
+  const remoteHeads = (remoteProbeUrl && phase !== 'ok') ? await lsRemoteHeads(remoteProbeUrl, settings) : null
   if (!appRoot) {
     advice.push(t(
       '定位不到客户端根目录：插件不在 <客户端根> 下（如 D:\\DeepSeekHarness\\dsh-config-sync-0.1.0），'
@@ -722,11 +754,21 @@ async function inspect(config) {
       '还没有配置仓库目录：请在下面的「本机仓库」卡里点「设置路径」，指向那台机器上的 dsh-config 仓库（含 apply.ps1 和 profile\\package.json）',
       'The repo directory is not set: use the Local repo card below to point at the dsh-config repo on this machine (it must contain apply.ps1 and profile\\package.json).',
     ))
-  } else if (phase === 'empty') {
-    advice.push(t(
-      `本机仓库还是空目录：${repo} —— 执行「拉取」会从云端把仓库内容拉到这里（首次拉取自动初始化，不需要推送）`,
-      `The local repo is still an empty folder: ${repo} — running Pull brings the repo down from the cloud (the first pull initializes it; no push needed).`,
-    ))
+  } else if (phase === 'empty' || phase === 'missing') {
+    const where = phase === 'missing'
+      ? t(`目录还不存在（${repo}）`, `the folder does not exist yet (${repo})`)
+      : t(`还是空目录（${repo}）`, `is still an empty folder (${repo})`)
+    if (remoteHeads === 0) {
+      advice.push(t(
+        `本机仓库${where}，云端仓库也还没有任何内容：点「初始化推送」把本机配置当作初始内容推上去（自动 git init + capture + 提交 + 推送）`,
+        `The local repo ${where} and the cloud has nothing yet: use "Initialize push" to upload this machine's config as the initial content (git init + capture + commit + push).`,
+      ))
+    } else {
+      advice.push(t(
+        `本机仓库${where} —— 执行「拉取」会从云端把仓库内容拉到这里（首次拉取自动初始化，不需要推送）`,
+        `The local repo ${where} — running Pull brings the repo down from the cloud (the first pull initializes it; no push needed).`,
+      ))
+    }
   } else if (!isRepoDir(repo)) {
     advice.push(t(
       `这个目录既不是空目录、也不像 dsh-config 仓库（缺 apply.ps1 或 profile\\package.json）：${repo} —— 请在「本机仓库」卡里重新设路径`,
@@ -795,10 +837,18 @@ async function inspect(config) {
       // 空目录 = 等首次拉取（正常状态，不报异常）；pushAllowed/pullAllowed 就是按它算出来的门禁
       phase,
       empty: phase === 'empty',
-      // 推送只允许在真仓库上：空目录没有内容可推，硬推只会把本机状态写进一份不存在的历史
-      pushAllowed: phase === 'ok',
-      // 拉取允许 ok / empty：sync.ps1 的 Initialize-RepoIfNeeded 会自动 init + fetch + checkout
-      pullAllowed: phase === 'ok' || phase === 'empty',
+      // 云端仓库的分支数：0=空仓库，null=没探成（离线/认证失败/真仓库时不探）
+      remoteHeads,
+      remoteEmpty: remoteHeads === 0,
+      // 仓库三态，面板据此决定强调哪个按钮：
+      //   ok         真仓库，推送/拉取都行
+      //   await-pull 本机空、云端有内容 → 只允许拉取
+      //   await-init 两边都空 → 只允许推送，而且这次推送就是「初始化推送」
+      mode: phase === 'ok' ? 'ok' : (remoteHeads === 0 ? 'await-init' : 'await-pull'),
+      // 推送：真仓库，或「空目录 + 云端也空」的首次推送（目录不存在时先让用户设好路径，不在这里放开）
+      pushAllowed: phase === 'ok' || (phase === 'empty' && remoteHeads === 0),
+      // 拉取：真仓库，或空目录/没建目录且云端有内容（sync.ps1 的 Initialize-RepoIfNeeded 会自动 init + fetch + checkout）
+      pullAllowed: phase === 'ok' || ((phase === 'empty' || phase === 'missing') && remoteHeads !== 0),
       // 路径是怎么来的：settings=本机设置（面板可改）、config=插件配置、env=环境变量、auto=自动探测、none=没配
       source: resolved.source,
       configured: Boolean(settings.repoPath || config?.repoPath),
@@ -2570,8 +2620,8 @@ async function handleAuto(req, res, config) {
         sendJson(res, 200, {
           ok: true, action, drift: null, error: null, pendingPull: true,
           note: t(
-            '本机仓库还是空的：先执行「拉取」把云端内容拉下来，之后再比对差异',
-            'The local repo is still empty: run Pull to bring the cloud content down first, then drift can be compared.',
+            '本机仓库还没内容：云端有内容就点「拉取」；两边都空就点「初始化推送」。比对差异要有仓库内容之后才做',
+            'The local repo has no content yet: Pull if the cloud has content, Initialize push if both are empty. Drift needs repo content first.',
           ),
         })
         return
@@ -2626,12 +2676,23 @@ async function handleAuto(req, res, config) {
 
     if (action === 'pull-now' || action === 'push-now') {
       const mode = action === 'pull-now' ? 'pull' : 'push'
-      // 推送的门禁：本机仓库必须是真仓库；空目录只允许拉取（面板按钮那边也已经禁掉，这里再兜一层）
+      // 推送的门禁：真仓库直接推；本机还是空的，只有「云端也空」才能推 —— 那次推送就是初始化推送。
+      // 云端已有内容时拒绝，让用户先拉取（否则本机状态会被写进一份已经在用的历史里）。
       if (mode === 'push' && repoPhase(repo) !== 'ok') {
-        throw new Error(t(
-          `本机仓库还是空的（${repo}）：先「拉取」云端内容，再生成推送`,
-          `The local repo is still empty (${repo}): run Pull to get the cloud content first, then push.`,
-        ))
+        const url = (await git(repo, ['remote', 'get-url', 'origin'])) || settings.remoteUrl || ''
+        const heads = await lsRemoteHeads(url, settings)
+        if (heads === null) {
+          throw new Error(t(
+            `连不上云端、或还没有云端仓库地址（${url || '未配置'}）：初始化推送要先确认云端是空仓库`,
+            `Cannot reach the cloud or no remote URL is set (${url || 'not set'}): initialize push needs to confirm the cloud repo is still empty.`,
+          ))
+        }
+        if (heads > 0) {
+          throw new Error(t(
+            `云端仓库已经有内容（${heads} 个分支）：本机还是空的，先「拉取」把内容拉下来，再生成推送`,
+            `The cloud repo already has content (${heads} branch(es)): run Pull to fetch it first, then push.`,
+          ))
+        }
       }
       // 拉取/推送做完都把客户端拉回来（用户要求"完成后自动启动 dsh"），仍受 autoRestart 开关约束
       const restart = body.restart !== false && settings.autoRestart !== false
@@ -2775,13 +2836,28 @@ async function handlePrepare(req, res, config) {
     }
     const repoReady = isRepoDir(repo)
     const phase = repoPhase(repo)
-    // 空白文件夹（或还没建）代表「等首次拉取」：只允许拉取，不允许推送 ——
-    // 没有仓库内容可推，硬推等于把本机状态写进一份并不存在的历史。
-    if ((action === 'push' || action === 'all') && phase !== 'ok') {
-      if (action === 'push') {
+    // 本机还没内容时，先问一次云端：云端也空 = 只能「初始化推送」，云端有内容 = 只能拉取。
+    // 一次请求算清楚，下面 push 门禁、all 的脚本组合、bootstrap 说明都用这同一个答案。
+    const probeSettings = readSettings(dshHome)
+    let remoteHeadsForPrepare = null
+    if (phase !== 'ok') {
+      const probeUrl = (await git(repo, ['remote', 'get-url', 'origin'])) || probeSettings.remoteUrl || ''
+      remoteHeadsForPrepare = await lsRemoteHeads(probeUrl, probeSettings)
+    }
+    // 空白文件夹（或还没建）代表「本机还没有仓库内容」：能不能推，取决于云端有没有内容 ——
+    //   云端也空 → 允许，这次推送就是「初始化推送」（sync.ps1 会 git init + 写骨架 + capture + 提交 + 推）
+    //   云端有内容 → 拒绝，先拉取（硬推会把本机状态写进一份正在使用的历史）
+    if (action === 'push' && phase !== 'ok') {
+      if (remoteHeadsForPrepare === null) {
         throw new Error(t(
-          `本机仓库还是空的（${repo}）：先执行「拉取」把云端内容拉下来，之后才能推送`,
-          `The local repo is still empty (${repo}): run Pull first to bring the cloud content down, then push.`,
+          `连不上云端仓库（${probeSettings.remoteUrl || '还没配地址'}）：初始化推送要先确认云端是空仓库，请先确认地址与网络`,
+          `Cannot reach the cloud repo (${probeSettings.remoteUrl || 'no URL configured'}): initialize push needs to confirm the cloud repo is empty — check the URL and network.`,
+        ))
+      }
+      if (remoteHeadsForPrepare > 0) {
+        throw new Error(t(
+          `云端仓库已经有内容（${remoteHeadsForPrepare} 个分支）：本机还是空的，先执行「拉取」把内容拉下来，之后才能推送`,
+          `The cloud repo already has content (${remoteHeadsForPrepare} branch(es)): run Pull first to bring it down, then push.`,
         ))
       }
     }
@@ -2817,20 +2893,28 @@ async function handlePrepare(req, res, config) {
     const stateWithBackup = { ...state, backupDir }
     const bootstrap = repoReady ? null : {
       repo,
+      initPush: phase !== 'ok' && remoteHeadsForPrepare === 0,
       note: t(
-        phase === 'empty'
-          ? '本机仓库是空目录：点「拉取」会用插件自带的 runtime 从云端把仓库内容拉到这个路径（拉完就能正常推送/拉取）'
-          : '本机还没有这个仓库（或还没克隆）：生成的三份脚本先用插件自带的 runtime，第一次执行拉取会自动从云端克隆到该目录',
-        phase === 'empty'
-          ? 'The local repo folder is empty: Pull uses the bundled runtime to fetch the repo from the cloud into that path (after that, push/pull work normally).'
-          : 'This repo is not on this machine yet (or not cloned): the scripts use the plugin\'s bundled runtime, and the first pull clones it from the cloud into that directory.',
+        remoteHeadsForPrepare === 0
+          ? '本机仓库和云端仓库都还是空的：点「推送」即「初始化推送」——会 git init、写出仓库骨架（apply/capture/sync 等执行体与版本契约）并把本机配置作为初始内容提交推送'
+          : (phase === 'empty'
+            ? '本机仓库是空目录：点「拉取」会用插件自带的 runtime 从云端把仓库内容拉到这个路径（拉完就能正常推送/拉取）'
+            : '本机还没有这个仓库（或还没克隆）：生成的三份脚本先用插件自带的 runtime，第一次执行拉取会自动从云端克隆到该目录'),
+        remoteHeadsForPrepare === 0
+          ? 'Both the local repo and the cloud are empty: Push becomes Initialize push — it runs git init, writes the repo skeleton (apply/capture/sync bodies plus the version contract) and commits this machine\'s config as the initial content.'
+          : (phase === 'empty'
+            ? 'The local repo folder is empty: Pull uses the bundled runtime to fetch the repo from the cloud into that path (after that, push/pull work normally).'
+            : 'This repo is not on this machine yet (or not cloned): the scripts use the plugin\'s bundled runtime, and the first pull clones it from the cloud into that directory.'),
       ),
     }
     if (action === 'all') {
-      // 空目录不生成推送：面板只允许「拉取」这条线，这里也保持一致，免得脚本白跑一趟
-      const wanted = phase === 'ok' ? ['push', 'pull', 'restore'] : ['pull', 'restore']
+      // 脚本怎么组合，跟门禁同一套口径：真仓库全给；两边都空只给「推送（初始化）+ 还原」；
+      // 本机空云端有内容只给「拉取 + 还原」。面板上的「一键生成」按同一份规则显示按钮文案。
+      const wanted = phase === 'ok' ? ['push', 'pull', 'restore']
+        : (remoteHeadsForPrepare === 0 ? ['push', 'restore'] : ['pull', 'restore'])
+      const skipped = phase === 'ok' ? [] : (remoteHeadsForPrepare === 0 ? ['pull'] : ['push'])
       const built = wanted.map((a) => buildCmd(config, a, repo, appRoot, dshHome, state))
-      sendJson(res, 200, { ok: true, action, built, bootstrap, skipped: phase === 'ok' ? [] : ['push'] })
+      sendJson(res, 200, { ok: true, action, built, bootstrap, skipped })
       return
     }
     const built = buildCmd(config, action, repo, appRoot, dshHome, stateWithBackup)

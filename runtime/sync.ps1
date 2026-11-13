@@ -437,17 +437,104 @@ function Test-DshRunning {
   用 init+fetch+checkout 而不是 git clone，是因为目录里已经躺着插件生成的 同步-*.cmd，
   clone 会拒绝非空目录；这些 .cmd 不在版本库里，checkout 不会动它们。
 #>
+# 云端地址：插件设置里那份（面板保存的就是它）。读不到返回空串，由调用方决定怎么报。
+function Get-SettingsRemoteUrl {
+  $settingsFile = Join-Path $DshHome 'dsh-config-sync.json'
+  if (-not (Test-Path -LiteralPath $settingsFile)) { return '' }
+  try {
+    $obj = Get-Content -LiteralPath $settingsFile -Raw -Encoding utf8 | ConvertFrom-Json
+    if ($obj.remoteUrl) { return [string]$obj.remoteUrl }
+  } catch { }
+  return ''
+}
+
+<#
+  云端仓库有几个分支：0 = 空仓库（还没推过任何东西），-1 = 连不上/没配地址（判不了）。
+  只服务一处判断：本机还是空目录时，云端到底有没有东西可拉 —— 没有就允许「初始化推送」。
+  用 ls-remote 而不是 fetch：纯查询，不写本地 refs，失败也不留半截状态。
+#>
+function Get-RemoteHeads([string]$RemoteUrl) {
+  if (-not $RemoteUrl) { return -1 }
+  $line = '"' + $git + '" ls-remote --heads "' + $RemoteUrl + '" 2>&1'
+  $out = (@(& "$env:ComSpec" /c $line) -join "`n")
+  if ($LASTEXITCODE -ne 0) { return -1 }
+  return @($out -split "`n" | Where-Object { $_ -match 'refs/heads/' }).Count
+}
+
+<#
+  初始化推送：本机空目录 + 云端空仓库，把本机配置当作仓库的初始内容推上去。
+  骨架要一起带进仓库 —— 历史仓库本来就有 apply.ps1 / capture.ps1 / dsh-sync-common.ps1 这几份副本，
+  少拷了它们，远端就变成「只有 settings 没有执行体」的半截仓库，另一台 pull 下来跑不起来。
+  profile\host-contract.json 用本机客户端版本生成（apply 靠它校验两端版本，缺了只会跳过校验）。
+#>
+function Initialize-EmptyRepo([string]$RemoteUrl) {
+  if (-not $RemoteUrl) {
+    Die ("本机仓库还是空的（$RepoRoot），也没读到云端仓库地址：" +
+      "请先在面板「云端仓库」里填好地址并保存，再重跑本脚本。")
+  }
+  if (-not (Test-Path -LiteralPath $RepoRoot)) { New-Item -ItemType Directory -Path $RepoRoot -Force | Out-Null }
+  Say ""
+  Say "== 初始化仓库（首次推送） =="
+  Say "  目录：$RepoRoot"
+  Say "  云端：$RemoteUrl（空仓库）"
+  if (-not (Test-Path -LiteralPath (Join-Path $RepoRoot '.git'))) {
+    $initLine = '"' + $git + '" -C "' + $RepoRoot + '" init --initial-branch=main 2>&1'
+    & "$env:ComSpec" /c $initLine | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+      & "$env:ComSpec" /c ('"' + $git + '" -C "' + $RepoRoot + '" init 2>&1') | Out-Null
+      if ($LASTEXITCODE -ne 0) { Die "git init 失败：$RepoRoot" }
+    }
+  }
+  $originUrl = (@(& "$env:ComSpec" /c ('"' + $git + '" -C "' + $RepoRoot + '" remote get-url origin 2>nul')) -join '').Trim()
+  if ($originUrl) {
+    & "$env:ComSpec" /c ('"' + $git + '" -C "' + $RepoRoot + '" remote set-url origin "' + $RemoteUrl + '" 2>&1') | Out-Null
+  } else {
+    & "$env:ComSpec" /c ('"' + $git + '" -C "' + $RepoRoot + '" remote add origin "' + $RemoteUrl + '" 2>&1') | Out-Null
+  }
+  if ($LASTEXITCODE -ne 0) { Die "给仓库加 origin 失败：$RemoteUrl" }
+
+  $copied = 0
+  foreach ($n in @('apply.ps1', 'capture.ps1', 'sync.ps1', 'restore.ps1', 'post-exit.ps1', 'dsh-sync-common.ps1')) {
+    $src = Join-Path $PSScriptRoot $n
+    if (Test-Path -LiteralPath $src) {
+      Copy-Item -LiteralPath $src -Destination (Join-Path $RepoRoot $n) -Force
+      $copied++
+    }
+  }
+  if ($copied -gt 0) { Ok "已写入仓库骨架：$copied 个执行体（apply / capture / sync / restore / post-exit / common）" }
+
+  $contractPath = Join-Path $RepoRoot 'profile\host-contract.json'
+  if (-not (Test-Path -LiteralPath $contractPath)) {
+    $ver = ''
+    $pkg = Join-Path $AppRoot 'resources\app\package.json'
+    if (Test-Path -LiteralPath $pkg) {
+      try { $ver = [string](Get-Content -LiteralPath $pkg -Raw -Encoding utf8 | ConvertFrom-Json).version } catch { }
+    }
+    if (-not $ver) {
+      $vf = Join-Path $AppRoot 'version'
+      if (Test-Path -LiteralPath $vf) { $ver = (Get-Content -LiteralPath $vf -Raw -Encoding utf8).Trim() }
+    }
+    if ($ver) {
+      $dir = Join-Path $RepoRoot 'profile'
+      if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+      $obj = [ordered]@{
+        appVersion  = $ver
+        generatedAt = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
+        note        = '由 dsh-config-sync 首次推送生成（客户端版本契约）'
+      }
+      [IO.File]::WriteAllText($contractPath, ($obj | ConvertTo-Json -Depth 4), (New-Object Text.UTF8Encoding $false))
+      Ok "已写入版本契约：$ver"
+    } else {
+      Warn "读不到本机客户端版本，跳过 profile\host-contract.json（另一台 pull 时会跳过版本校验）"
+    }
+  }
+  Ok "已初始化空仓库并指向 origin"
+}
+
 function Initialize-RepoIfNeeded {
   $gitDir = Join-Path $RepoRoot '.git'
   if ((Test-Path -LiteralPath $gitDir) -and (Test-Path -LiteralPath (Join-Path $RepoRoot 'sync.ps1'))) { return }
-  $settingsFile = Join-Path $DshHome 'dsh-config-sync.json'
-  $remote = ''
-  if (Test-Path -LiteralPath $settingsFile) {
-    try {
-      $obj = Get-Content -LiteralPath $settingsFile -Raw -Encoding utf8 | ConvertFrom-Json
-      if ($obj.remoteUrl) { $remote = [string]$obj.remoteUrl }
-    } catch { }
-  }
+  $remote = Get-SettingsRemoteUrl
   if (-not (Test-Path -LiteralPath $RepoRoot)) { New-Item -ItemType Directory -Path $RepoRoot -Force | Out-Null }
   if (-not (Test-Path -LiteralPath $gitDir)) {
     if (-not $remote) { Die ("本机还没有仓库（$RepoRoot），也没读到云端仓库地址：" +
@@ -490,14 +577,52 @@ function Initialize-RepoIfNeeded {
 
 # ---------- push ----------
 if ($Action -eq 'push') {
-  # 空白文件夹 = 等首次拉取：这里不允许推送。没有仓库内容可推，硬推只会把本机状态
-  # 写进一份并不存在的历史（后续 pull 会撞一堆 untracked）。新机器请先跑 pull。
-  if (-not (Test-Path -LiteralPath (Join-Path $RepoRoot 'apply.ps1'))) {
-    Warn "本机仓库还没有内容（$RepoRoot）：推送只用于把本机改动提交进一个已有的仓库。"
-    Warn "新机器/空目录请先跑「拉取」：它会自动 git init + fetch + checkout，把云端仓库拉下来。"
-    Die "已停止（未抓取、未提交、未推送）。"
+  # 推送的三种起点，判据统一成「本机有没有历史 + 云端有没有内容」：
+  #   有仓库有历史            → 正常推送（老逻辑照旧）
+  #   本机没内容、云端有内容   → 只能先拉取（硬推会把本机状态写进一份已经在用的历史）
+  #   本机没内容、云端也空     → 初始化推送：本机配置就是仓库的初始内容（新需求）
+  $hasGit = Test-Path -LiteralPath (Join-Path $RepoRoot '.git')
+  # 远端地址：仓库里已有 origin 就以它为准（用户/历史可能已经 remote set-url 过），没有才回落设置文件
+  $remoteUrlForPush = ''
+  if ($hasGit) {
+    $remoteUrlForPush = (@(& "$env:ComSpec" /c ('"' + $git + '" -C "' + $RepoRoot + '" remote get-url origin 2>nul')) -join '').Trim()
   }
-  Initialize-RepoIfNeeded
+  if (-not $remoteUrlForPush) { $remoteUrlForPush = Get-SettingsRemoteUrl }
+  $hasCommit = $false
+  if ($hasGit) {
+    $probe = @(& "$env:ComSpec" /c ('"' + $git + '" -C "' + $RepoRoot + '" rev-parse --verify HEAD 2>nul'))
+    $hasCommit = (($probe -join '').Trim().Length -gt 0)
+  }
+  if (-not $hasCommit) {
+    # 目录里已经有别的东西（非空、也不是本插件生成的 同步-*.cmd）→ 多半填错路径，别往里写
+    if (Test-Path -LiteralPath $RepoRoot) {
+      $stray = @(Get-ChildItem -LiteralPath $RepoRoot -Force |
+        Where-Object { -not $_.Name.StartsWith('.') -and $_.Name -notmatch '^同步-[\s\S]*\.cmd$' })
+      if ($stray.Count -gt 0) {
+        Warn ("这个目录不是空的（{0} 项：{1}），也不像 dsh-config 仓库：{2}" -f `
+          $stray.Count, (($stray | Select-Object -First 3 | ForEach-Object { $_.Name }) -join '、'), $RepoRoot)
+        Die "已停止（未抓取、未提交、未推送）。请在面板「本机仓库」里重新设路径。"
+      }
+    }
+    $heads = Get-RemoteHeads $remoteUrlForPush
+    if ($heads -lt 0) {
+      Warn "连不上云端、或还没配云端地址（$remoteUrlForPush）：初始化推送要先确认云端是空仓库"
+      Die "已停止（未抓取、未提交、未推送）。请先确认「云端仓库」里的地址能访问，再重跑。"
+    }
+    if ($heads -gt 0) {
+      Warn "云端仓库已经有内容（$heads 个分支）：本机还是空的，应该先拉取，而不是推送"
+      Warn "硬推会把本机状态写进一份正在使用的历史里；新机器请点「立即拉取」"
+      Die "已停止（未抓取、未提交、未推送）。"
+    }
+    Initialize-EmptyRepo $remoteUrlForPush
+  } else {
+    # 有历史但缺仓库骨架：说明这目录本来不是 dsh-config 仓库（老仓库被删过脚本），照老规矩拒推
+    if (-not (Test-Path -LiteralPath (Join-Path $RepoRoot 'apply.ps1'))) {
+      Warn "仓库目录缺 apply.ps1（$RepoRoot）：推送只用于把本机改动提交进一个已有的仓库。"
+      Die "已停止（未抓取、未提交、未推送）。"
+    }
+    Initialize-RepoIfNeeded
+  }
   if ((Test-DshRunning) -and (-not $Force)) {
     Warn "检测到 DeepSeek Harness 在运行：capture 可能抓到写了一半的配置"
     Warn "建议完全退出（含托盘）后重跑；确认要继续可加 -Force"

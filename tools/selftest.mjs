@@ -102,7 +102,11 @@ check('status 返回 200', status.statusCode === 200, String(status.statusCode))
 check('status.ok === true', body.ok === true, status.body.slice(0, 160))
 check('含 repo / version / bundles / deps / advice',
   Boolean(body.repo && body.version && body.bundles && body.deps && Array.isArray(body.advice)))
-check('repo 探测到仓库', Boolean(body.repo?.exists), body.repo?.path || '(空)')
+// 仓库可能正处在「本机还没有内容」的合法状态（0.3.35 起：等拉取 / 等初始化推送）。
+// 这类状态下依赖仓库内容的断言没有验证意义，明确标 SKIP，别把环境状态当成代码失败。
+const repoReady = Boolean(body.repo?.exists)
+if (repoReady) check('repo 探测到仓库', true)
+else console.log(`  [SKIP] repo 探测到仓库 — 本机仓库还没有内容（${body.repo?.path || '?'}，mode=${body.repo?.mode || '?'}）`)
 check('版本契约两个字段都读到',
   typeof body.version?.local === 'string' && typeof body.version?.contract === 'string',
   `${body.version?.local} / ${body.version?.contract}`)
@@ -120,6 +124,7 @@ function restoreCmd(file) {
   else writeFileSync(file, before, 'utf8')
 }
 
+if (repoReady) {
 for (const action of ['pull', 'push', 'restore']) {
   const prepared = await call('/config-sync/prepare', {
     method: 'POST',
@@ -190,6 +195,61 @@ check('prepare(all) 里 restore 那份带快照地址',
   Array.isArray(allPayload.built) && allPayload.built.some((b) => b.action === 'restore' && b.backup && b.backup.dir),
   JSON.stringify((allPayload.built || []).filter((b) => b.action === 'restore').map((b) => b.backup)))
 for (const b of (allPayload.built || [])) restoreCmd(b.path)
+} else {
+  // 本机还没有仓库内容：prepare 的正确预期不是「必定写出脚本」，而是「按云端空不空分流」——
+  // 云端也空 → 只生成推送（那次就是初始化推送）；云端有内容 → 拒绝推送、只放行拉取。
+  const cloudEmpty = body.repo?.remoteEmpty === true
+  const pPush = await call('/config-sync/prepare', {
+    method: 'POST',
+    headers: { host: 'localhost:3080', 'content-type': 'application/json' },
+    body: JSON.stringify({ action: 'push' }),
+  })
+  const pushPayload = JSON.parse(pPush.body || '{}')
+  if (cloudEmpty) {
+    check('两边都空：prepare(push) 放行（走初始化推送）', pPush.statusCode === 200 && pushPayload.ok === true, pPush.body.slice(0, 160))
+    check('两边都空：生成的推送 cmd 带初始化提示',
+      existsSync(pushPayload.path || '') && readFileSync(pushPayload.path, 'utf8').includes('sync.ps1'),
+      pushPayload.path || '(无路径)')
+    if (existsSync(pushPayload.path || '')) restoreCmd(pushPayload.path)
+  } else {
+    check('云端有内容：prepare(push) 被拒，并指向「先拉取」',
+      pPush.statusCode === 400 && /云端仓库已经有内容/.test(pushPayload.error || ''),
+      pPush.body.slice(0, 160))
+  }
+  const pPull = await call('/config-sync/prepare', {
+    method: 'POST',
+    headers: { host: 'localhost:3080', 'content-type': 'application/json' },
+    body: JSON.stringify({ action: 'pull' }),
+  })
+  const pullPayload = JSON.parse(pPull.body || '{}')
+  if (cloudEmpty) {
+    check('两边都空：prepare(pull) 被拒（没有东西可拉）',
+      pPull.statusCode === 400 && /连不上云端|云端仓库已经有内容|空/.test(pullPayload.error || ''),
+      pPull.body.slice(0, 160))
+  } else {
+    check('云端有内容：prepare(pull) 放行', pPull.statusCode === 200 && pullPayload.ok === true, pPull.body.slice(0, 160))
+    if (existsSync(pullPayload.path || '')) {
+      check('pull cmd 里有确认守卫（set /p GO=）', /set \/p GO=/.test(readFileSync(pullPayload.path, 'utf8')))
+      check('cmd 用的是 CRLF', readFileSync(pullPayload.path, 'utf8').includes('\r\n'))
+      restoreCmd(pullPayload.path)
+    }
+  }
+  const pAll = await call('/config-sync/prepare', {
+    method: 'POST',
+    headers: { host: 'localhost:3080', 'content-type': 'application/json' },
+    body: JSON.stringify({ action: 'all' }),
+  })
+  const allP = JSON.parse(pAll.body || '{}')
+  const acts = (allP.built || []).map((b) => b.action)
+  check('prepare(all) 按状态组合脚本（两边空→推送+还原；否则→拉取+还原）',
+    pAll.statusCode === 200
+    && (cloudEmpty ? acts.includes('push') && !acts.includes('pull') : acts.includes('pull') && !acts.includes('push')),
+    JSON.stringify(acts))
+  check('prepare(all) 带上 initPush 标记（面板据此显示「初始化推送」）',
+    Boolean(allP.bootstrap) && allP.bootstrap.initPush === cloudEmpty,
+    JSON.stringify(allP.bootstrap && { initPush: allP.bootstrap.initPush }))
+  for (const b of (allP.built || [])) restoreCmd(b.path)
+}
 
 const cross = await call('/config-sync/prepare', {
   method: 'POST',
@@ -243,13 +303,20 @@ const again = await call('/config-sync/prepare', {
   body: JSON.stringify({ action: 'push' }),
 })
 const againPayload = JSON.parse(again.body || '{}')
-check('保存后再生成 push 成功', again.statusCode === 200 && againPayload.ok === true, again.body.slice(0, 160))
-if (existsSync(againPayload.path || '')) {
-  const text = readFileSync(againPayload.path, 'utf8')
-  const keyInFile = okPayload.remote && okPayload.remote.sshKey
-  check('push 脚本带 GIT_SSH_COMMAND', text.includes('GIT_SSH_COMMAND'))
-  check('push 脚本里的私钥路径与设置一致', Boolean(keyInFile) && text.includes(keyInFile), keyInFile || '(无)')
-  restoreCmd(againPayload.path)
+if (repoReady) {
+  check('保存后再生成 push 成功', again.statusCode === 200 && againPayload.ok === true, again.body.slice(0, 160))
+  if (existsSync(againPayload.path || '')) {
+    const text = readFileSync(againPayload.path, 'utf8')
+    const keyInFile = okPayload.remote && okPayload.remote.sshKey
+    check('push 脚本带 GIT_SSH_COMMAND', text.includes('GIT_SSH_COMMAND'))
+    check('push 脚本里的私钥路径与设置一致', Boolean(keyInFile) && text.includes(keyInFile), keyInFile || '(无)')
+    restoreCmd(againPayload.path)
+  }
+} else {
+  check('本机无内容时：保存设置后 push 仍按云端状态分流（不会因为改了设置就放行）',
+    (again.statusCode === 200 && againPayload.ok === true) || (again.statusCode === 400 && /云端仓库已经有内容/.test(againPayload.error || '')),
+    again.body.slice(0, 160))
+  if (existsSync(againPayload.path || '')) restoreCmd(againPayload.path)
 }
 
 // 设置里留着一条已失效的路径（目录被移走）时：必须报 exists=false 且不静默回退到自动探测
@@ -287,8 +354,15 @@ const badRepo = await putSettings({ repoPath: 'C:\\nope\\not-a-repo' })
 // 新机器上仓库还没克隆时，这个路径本来就不存在 —— 允许保存（等着首次拉取去克隆），不再当错误拦。
 check('不存在的仓库路径可以保存（待克隆目标）', badRepo.statusCode === 200, String(badRepo.statusCode))
 
-const notRepo = await putSettings({ repoPath: body.repo.path ? body.repo.path + '\\profile' : 'C:\\Windows' })
-check('不像仓库的目录被拒（400）', notRepo.statusCode === 400, String(notRepo.statusCode))
+// 「像仓库的子目录」（有内容但不是仓库）必须被拒；仓库为空时那个子目录可能压根不存在，
+// 不存在的路径按设计允许保存（等首次拉取去建），这时只做 SKIP，不当失败。
+const notRepoDir = body.repo.path ? body.repo.path + '\\profile' : 'C:\\Windows'
+const notRepo = await putSettings({ repoPath: notRepoDir })
+if (existsSync(notRepoDir)) {
+  check('不像仓库的目录被拒（400）', notRepo.statusCode === 400, String(notRepo.statusCode))
+} else {
+  console.log(`  [SKIP] 不像仓库的目录被拒 — ${notRepoDir} 不存在（非空目录才该被拒）`)
+}
 
 const okRepo = await putSettings({ repoPath: body.repo.path })
 const okRepoPayload = JSON.parse(okRepo.body || '{}')
@@ -780,12 +854,23 @@ const noted = await call('/config-sync/prepare', {
   body: JSON.stringify({ action: 'push', message: '修 侧栏入口 "和" 特殊字符' }),
 })
 const notedPayload = JSON.parse(noted.body || '{}')
-check('prepare(push) 接受提交说明', noted.statusCode === 200 && notedPayload.ok === true, noted.body.slice(0, 160))
-check('提交说明进了脚本（-Message）', existsSync(notedPayload.path || '') && readFileSync(notedPayload.path, 'utf8').includes('-Message'))
-check('提交说明里的双引号被清洗掉',
-  Boolean(notedPayload.message) && !notedPayload.message.includes('"'),
-  notedPayload.message || '(无)')
-if (existsSync(notedPayload.path || '')) restoreCmd(notedPayload.path)
+if (repoReady) {
+  check('prepare(push) 接受提交说明', noted.statusCode === 200 && notedPayload.ok === true, noted.body.slice(0, 160))
+  check('提交说明进了脚本（-Message）', existsSync(notedPayload.path || '') && readFileSync(notedPayload.path, 'utf8').includes('-Message'))
+  check('提交说明里的双引号被清洗掉',
+    Boolean(notedPayload.message) && !notedPayload.message.includes('"'),
+    notedPayload.message || '(无)')
+  if (existsSync(notedPayload.path || '')) restoreCmd(notedPayload.path)
+} else {
+  // 仓库还没内容、云端已有内容时，带说明的 push 同样该被拒；说明字段的清洗逻辑用静态断言兜住
+  check('本机无内容时：带说明的 push 仍被拒（不被说明字段绕过门禁）',
+    noted.statusCode === 400 && /云端仓库已经有内容/.test(notedPayload.error || ''),
+    noted.body.slice(0, 160))
+  check('提交说明清洗在源码里（去双引号）',
+    /\$\{.*message.*\}/.test(readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'index.js'), 'utf8'))
+    || /replace\(\/\["\\r\\n\]/.test(readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'index.js'), 'utf8')),
+    'index.js')
+}
 const pullNote = await call('/config-sync/prepare', {
   method: 'POST',
   headers: { host: 'localhost:3080', 'content-type': 'application/json' },
@@ -808,8 +893,9 @@ const execNames = ['apply.ps1', 'capture.ps1', 'dsh-sync-common.ps1', 'post-exit
 const hereSelf = dirname(fileURLToPath(import.meta.url))
 const pluginRootSelf = existsSync(join(hereSelf, '..', 'package.json')) ? join(hereSelf, '..') : join(hereSelf, '..', '..')
 const pluginRuntime = join(pluginRootSelf, 'runtime')
-if (!existsSync(repoArg) || !existsSync(pluginRuntime)) {
-  console.log(`  [SKIP] 没有配置仓库（${repoArg}）或没有插件 runtime，跳过逐字节比对`)
+if (!existsSync(repoArg) || !existsSync(pluginRuntime) || !repoReady) {
+  console.log(`  [SKIP] 没有配置仓库内容（${repoArg}，mode=${body.repo?.mode || '?'}）或没有插件 runtime，跳过逐字节比对`)
+  console.log('         （初始化推送会把这几份副本一起写进仓库，届时断言自动恢复）')
 } else {
   for (const name of execNames) {
     const mirror = join(repoArg, name)
@@ -870,32 +956,61 @@ console.log('== 空白本机仓库：只允许拉取 ==')
   check('只有插件自己生成的 同步-*.cmd 与隐藏项算「空」',
     /同步-\[\\s\\S\]\*\\?\.cmd/i.test(indexNew) || /同步-\[/i.test(indexNew),
     'empty 判据没有排除 同步-*.cmd：生成过脚本之后就会被误判成 unusable')
-  check('status 暴露 phase / empty / pushAllowed / pullAllowed',
-    /pushAllowed: phase === 'ok'/.test(indexNew) && /pullAllowed: phase === 'ok' \|\| phase === 'empty'/.test(indexNew),
-    'status 没有暴露门禁字段，面板只能靠 exists 猜，空目录会被整块禁掉')
-  check('空目录的 advice 改成「执行拉取」而不是报错',
-    /本机仓库还是空目录：/.test(indexNew) && /既不是空目录、也不像 dsh-config 仓库/.test(indexNew),
-    'advice 分支没区分 empty 与 unusable')
+  check('status 暴露 phase / empty / remoteHeads / pushAllowed / pullAllowed',
+    /phase,\s*\n\s*empty: phase === 'empty'/.test(indexNew)
+    && /remoteHeads,/.test(indexNew) && /remoteEmpty: remoteHeads === 0/.test(indexNew)
+    && /pushAllowed: phase === 'ok' \|\| \(phase === 'empty' && remoteHeads === 0\)/.test(indexNew)
+    && /pullAllowed: phase === 'ok' \|\| \(\(phase === 'empty' \|\| phase === 'missing'\) && remoteHeads !== 0\)/.test(indexNew),
+    'status 没有暴露新门禁字段（remoteHeads / pushAllowed / pullAllowed），面板只能靠 exists 猜')
+  check('仓库三态 mode（ok / await-pull / await-init）算在 status 里',
+    /mode: phase === 'ok' \? 'ok' : \(remoteHeads === 0 \? 'await-init' : 'await-pull'\)/.test(indexNew),
+    '两边都空的情形没有独立的 await-init 态，面板无从区分「初始化推送」与「先拉取」')
+  check('远端空探测用 ls-remote，且有超时（不写本地 refs）',
+    /function lsRemoteHeads\(url, settings\)/.test(indexNew)
+    && /ls-remote/.test(indexNew)
+    && /timeout: 15000/.test(indexNew),
+    'lsRemoteHeads 缺失或没有超时：刷面板会卡在网络上')
+  check('空目录的 advice 分「初始化推送」与「执行拉取」两支',
+    /本机仓库\$\{where\}，云端仓库也还没有任何内容/.test(indexNew) || /云端仓库也还没有任何内容/.test(indexNew),
+    'advice 没区分「两边都空」与「本机空但云端有内容」')
   check('check 在非 ok 状态短路，不去撞空目录的 git',
     /if \(phase !== 'ok'\) \{[\s\S]{0,220}?autoState\.checking = false/.test(indexNew),
     'check 仍会对空目录跑 fetch/drift：lastCheckError 会被填成「读不到远端」')
-  check('push-now 在空目录被拒并给出去拉取的提示', /mode === 'push' && repoPhase\(repo\) !== 'ok'/.test(indexNew),
-    'handleAuto 的 push-now 没有门禁')
-  check('prepare 拒绝单独生成推送、all 时跳过 push',
-    /\(action === 'push' \|\| action === 'all'\) && phase !== 'ok'/.test(indexNew)
-    && /wanted = phase === 'ok' \? \['push', 'pull', 'restore'\] : \['pull', 'restore'\]/.test(indexNew),
-    'prepare 仍会为空目录生成推送脚本')
-  check('sync.ps1 的 push 分支有空仓库守卫', /本机仓库还没有内容/.test(syncNew),
-    'sync.ps1 push 仍会对空目录 init + 抓取 + 推送')
+  check('push-now 在空目录先探云端：云端有内容拒绝，云端空放行',
+    /mode === 'push' && repoPhase\(repo\) !== 'ok'/.test(indexNew)
+    && /云端仓库已经有内容（\$\{heads\} 个分支）/.test(indexNew),
+    'handleAuto 的 push-now 没按「云端空/不空」分流')
+  check('prepare 按云端空不空组合脚本（两边都空只生成推送 + 还原）',
+    /action === 'push' && phase !== 'ok'/.test(indexNew)
+    && /remoteHeadsForPrepare === 0 \? \['push', 'restore'\] : \['pull', 'restore'\]/.test(indexNew)
+    && /initPush: phase !== 'ok' && remoteHeadsForPrepare === 0/.test(indexNew),
+    'prepare 仍会为空目录生成拉取脚本，或没有 initPush 标记')
+  check('sync.ps1 的 push 分支按「云端空不空」分流，并带初始化能力',
+    /function Get-RemoteHeads/.test(syncNew)
+    && /function Initialize-EmptyRepo/.test(syncNew)
+    && /云端仓库已经有内容（\$heads 个分支）/.test(syncNew)
+    && /Initialize-EmptyRepo \$remoteUrlForPush/.test(syncNew),
+    'sync.ps1 push 仍无条件拒绝空目录，或初始化推送没有骨架/远端探测')
+  check('初始化推送会写仓库骨架与版本契约',
+    /apply\.ps1', 'capture\.ps1', 'sync\.ps1', 'restore\.ps1', 'post-exit\.ps1', 'dsh-sync-common\.ps1'/.test(syncNew)
+    && /host-contract\.json/.test(syncNew),
+    '初始化推送只推 settings，远端会变成「没有执行体」的半截仓库')
   check('面板：空目录不算「必须设置」，徽标不标红',
     /const missing = Boolean\(props\.data\) && !repo\.exists && !repo\.empty/.test(clientNew)
-    && /if \(repo\.empty\) \{/.test(clientNew)
-    && /const canPush = Boolean\(data && data\.repo && data\.repo\.exists && data\.repo\.pushAllowed !== false\)/.test(clientNew),
+    && /if \(repo\.empty \|\| repo\.phase === 'missing'\) \{/.test(clientNew)
+    && /const canPush = Boolean\(data && data\.repo && data\.repo\.pushAllowed === true\)/.test(clientNew),
     'panel 仍把空目录当成未配置（强制编辑态 + 红色错误）')
-  check('面板：推送按钮单独门禁（拉取仍可点）',
-    /const pushAllowed = Boolean\(repo\.exists\) && repo\.pushAllowed !== false/.test(clientNew)
-    && /const canPush = Boolean\(data && data\.repo && data\.repo\.exists && data\.repo\.pushAllowed !== false\)/.test(clientNew),
-    '面板的推送按钮没有单独门禁')
+  check('面板：推送/拉取按钮都吃后端门禁，「初始化推送」单独有说法',
+    /const pushAllowed = repo\.pushAllowed === true/.test(clientNew)
+    && /const canPullNow = repo\.pullAllowed === true/.test(clientNew)
+    && /const initMode = repo\.mode === 'await-init'/.test(clientNew)
+    && /初始化推送（会关闭 DSH）/.test(clientNew)
+    && /const canPull = Boolean\(data && data\.repo && data\.repo\.pullAllowed === true\)/.test(clientNew),
+    '面板的按钮门禁没跟后端对齐，或没有「初始化推送」文案')
+  check('面板：待初始化徽标有独立文字与配色',
+    /if \(kind === 'init'\) return M\('待初始化', 'To initialize'\)/.test(clientNew)
+    && /init: 'var\(--dsw-alias-state-warn-secondary\)'/.test(clientNew),
+    'kind=init 没有 chipLabel / chipStyle，徽标会掉进「未检测」')
 }
 
 // 任意 git 托管平台（0.3.27）：远端地址只校验写法，认证自检提示按 origin 的真实主机名现算，

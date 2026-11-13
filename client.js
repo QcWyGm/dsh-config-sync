@@ -179,6 +179,7 @@ window.__ModuleLoader__.load({
         ok: 'var(--dsw-alias-state-success-secondary)',
         warn: 'var(--dsw-alias-state-warn-secondary)',
         pull: 'var(--dsw-alias-state-warn-secondary)',
+        init: 'var(--dsw-alias-state-warn-secondary)',
         error: 'var(--dsw-alias-state-error-secondary)',
         idle: 'var(--dsw-alias-fill-l1)',
       }
@@ -223,9 +224,11 @@ window.__ModuleLoader__.load({
           ),
         }
       }
-      // 本机自身问题优先报完之后，才轮到「仓库还是空的」——空目录只是等首次拉取，不是错误
-      if (repo.empty) {
-        return { kind: 'pull', text: M('本机仓库是空目录：待从云端「拉取」', 'Local repo is an empty folder — pull it from the cloud') }
+      // 本机自身问题优先报完之后，才轮到「仓库还没内容」——空目录只是初始状态，不是错误
+      if (repo.empty || repo.phase === 'missing') {
+        return repo.mode === 'await-init'
+          ? { kind: 'init', text: M('本机与云端都还没有内容：待「初始化推送」', 'Local repo and cloud are both empty — Initialize push') }
+          : { kind: 'pull', text: M('本机仓库还没有内容：待从云端「拉取」', 'Local repo has no content yet — pull it from the cloud') }
       }
       if (version.local && version.contract && !version.match) {
         return {
@@ -257,6 +260,7 @@ window.__ModuleLoader__.load({
       if (kind === 'ok') return M('一致', 'In sync')
       if (kind === 'error') return M('有问题', 'Problem')
       if (kind === 'pull') return M('待拉取', 'To pull')
+      if (kind === 'init') return M('待初始化', 'To initialize')
       if (kind === 'warn') return M('待推送', 'To push')
       return M('未检测', 'Unchecked')
     }
@@ -586,12 +590,17 @@ window.__ModuleLoader__.load({
             )
             : (repo.empty ? M('（拉取之后才有得比）', '(available after the first pull)') : M('（不可用）', '(unavailable)')),
         }),
-        repo.empty
+        (repo.empty || repo.phase === 'missing')
           ? h('div', { style: { ...S.hint, color: 'var(--dsw-alias-state-warn-primary)' } },
-            M(
-              '空目录：点「拉取」会从云端把仓库内容拉到这个路径（自动 git init + fetch + checkout）；拉下来之前不支持推送。',
-              'Empty folder: Pull fetches the whole repo into this path (git init + fetch + checkout). Push is disabled until then.',
-            ))
+            repo.mode === 'await-init'
+              ? M(
+                '本机仓库和云端仓库都还没有内容：点「初始化推送」把本机配置作为初始内容写进仓库并推上去（自动 git init + 写仓库骨架 + capture + 提交 + 推送）。这时拉取没有东西可拉。',
+                'Both the local repo and the cloud are empty: Initialize push writes this machine\'s config in as the initial content (git init + repo skeleton + capture + commit + push). There is nothing to pull yet.',
+              )
+              : M(
+                '本机仓库还没有内容：点「拉取」会从云端把仓库内容拉到这个路径（自动 git init + fetch + checkout）；拉下来之前不支持推送。',
+                'The local repo has no content yet: Pull fetches the whole repo into this path (git init + fetch + checkout). Push is disabled until then.',
+              ))
           : null,
         h(Kv, { k: M('本机数据', 'Local data'), v: (() => {
           const local = props.data && props.data.local
@@ -1373,8 +1382,11 @@ window.__ModuleLoader__.load({
     function AutoCard(props) {
       const auto = (props.data && props.data.auto) || {}
       const repo = (props.data && props.data.repo) || {}
-      // 空目录（还没拉过）只允许「拉取」：推送按钮禁掉，并说明原因
-      const pushAllowed = Boolean(repo.exists) && repo.pushAllowed !== false
+      // 门禁由后端算（repo.pushAllowed / pullAllowed）；这里只管有没有路径、按钮要不要强调
+      const pushAllowed = repo.pushAllowed === true
+      const canPullNow = repo.pullAllowed === true
+      // 两边都空：这次推送就是「初始化推送」，按钮换个说法，别让人以为在推一个已有仓库
+      const initMode = repo.mode === 'await-init'
       const drift = auto.drift || null
       const [busy, setBusy] = react.useState('')
       const [err, setErr] = react.useState('')
@@ -1476,27 +1488,44 @@ window.__ModuleLoader__.load({
               'post-exit.ps1 is missing from both the plugin and the repo, so auto sync cannot queue — reinstall the plugin (the current package ships runtime/)'))
           : null,
         h('div', { style: S.actions },
-          h('button', { type: 'button', style: S.btnPrimary, disabled: Boolean(busy), onClick: () => act('pull-now') }, M('立即拉取（会关闭 DSH）', 'Pull now (closes DSH)')),
+          h('button', {
+            type: 'button',
+            style: canPullNow ? S.btnPrimary : { ...S.btnPrimary, opacity: 0.5, cursor: 'not-allowed' },
+            disabled: Boolean(busy) || !canPullNow,
+            title: canPullNow ? '' : M('云端还是空的：没有内容可拉，先「初始化推送」', 'The cloud is still empty — nothing to pull, initialize push first'),
+            onClick: () => act('pull-now'),
+          }, M('立即拉取（会关闭 DSH）', 'Pull now (closes DSH)')),
           h('button', {
             type: 'button',
             style: pushAllowed ? S.btnPrimary : { ...S.btnPrimary, opacity: 0.5, cursor: 'not-allowed' },
             disabled: Boolean(busy) || !pushAllowed,
-            title: pushAllowed ? '' : M('本机仓库还是空目录：先拉取', 'Local repo is empty — pull first'),
+            title: pushAllowed ? '' : M('云端已有内容：本机还是空的，先拉取', 'The cloud already has content — pull first'),
             onClick: () => act('push-now'),
-          }, M('立即推送（会关闭 DSH）', 'Push now (closes DSH)')),
+          }, initMode
+            ? M('初始化推送（会关闭 DSH）', 'Initialize push (closes DSH)')
+            : M('立即推送（会关闭 DSH）', 'Push now (closes DSH)')),
           pending ? h('button', { type: 'button', style: S.btn, disabled: Boolean(busy), onClick: () => act('cancel') }, M('取消排队', 'Cancel queue')) : null,
         ),
-        !pushAllowed
+        initMode
           ? h('div', { style: { ...S.hint, color: 'var(--dsw-alias-state-warn-primary)' } },
-            repo.empty
-              ? M(
-                '本机仓库还是空目录：先「立即拉取」把云端仓库拉下来，之后才能推送。',
-                'The local repo is still empty: run Pull first to fetch the cloud repo; push unlocks after that.',
-              )
-              : M(
-                '本机仓库不可用：先在「本机仓库」卡里设好路径，才能推送。',
-                'The local repo is unusable: set the path in the Local repo card before pushing.',
-              ))
+            M(
+              '本机仓库和云端仓库都还是空的：点「初始化推送」会把本机配置当作仓库的初始内容推上去（自动 git init + 写仓库骨架 + capture + 提交 + 推送）。这时没有东西可拉，拉取按钮是灰的。',
+              'Both the local repo and the cloud are empty: Initialize push uploads this machine\'s config as the repo\'s initial content (git init + repo skeleton + capture + commit + push). There is nothing to pull yet, so Pull stays disabled.',
+            ))
+          : null,
+        (!pushAllowed || !canPullNow)
+          ? h('div', { style: { ...S.hint, color: 'var(--dsw-alias-state-warn-primary)' } },
+            !pushAllowed && !initMode
+              ? (repo.empty || repo.remoteEmpty === false
+                ? M(
+                  '本机仓库还是空目录、云端已有内容：先「立即拉取」把云端仓库拉下来，之后才能推送。',
+                  'The local repo is empty while the cloud has content: run Pull first; push unlocks after that.',
+                )
+                : M(
+                  '本机仓库不可用：先在「本机仓库」卡里设好路径，才能推送。',
+                  'The local repo is unusable: set the path in the Local repo card before pushing.',
+                ))
+              : null)
           : null,
         msg ? h('div', { style: S.hint }, msg) : null,
         err ? h('div', { style: { ...S.hint, color: 'var(--dsw-alias-state-error-primary)' } }, err) : null,
@@ -1523,8 +1552,10 @@ window.__ModuleLoader__.load({
       // 门禁分三条：有路径就能生成还原脚本；拉取允许「真仓库 or 空目录」；推送只允许真仓库。
       // 空目录 = 新机器还没拉过，面板只放行「拉取」，推送按钮直接禁掉（后端也会再拦一次）。
       const hasRepoPath = Boolean(data && data.repo && data.repo.path)
-      const canPull = Boolean(data && data.repo && (data.repo.exists || data.repo.empty) && data.repo.pullAllowed !== false)
-      const canPush = Boolean(data && data.repo && data.repo.exists && data.repo.pushAllowed !== false)
+      // 门禁统一由后端算好（repo.pullAllowed / pushAllowed），面板只做呈现：
+      //   真仓库 → 推拉都行；本机空 + 云端有内容 → 只拉；本机空 + 云端也空 → 只「初始化推送」。
+      const canPull = Boolean(data && data.repo && data.repo.pullAllowed === true)
+      const canPush = Boolean(data && data.repo && data.repo.pushAllowed === true)
       // 云端仓库没配 = 推送/拉取禁用（还原只动本机快照，不拦）
       const noRemote = !data || !data.remote || !data.remote.configured
 
@@ -1678,9 +1709,13 @@ window.__ModuleLoader__.load({
       const cloudLine = (() => {
         const auto = (data && data.auto) || {}
         const repo = (data && data.repo) || {}
-        // 空目录时后端会把 check 短路掉（不算错误），这里也先判一次，
+        // 本机还没内容时后端会把 check 短路掉（不算错误），这里也先判一次，
         // 免得落到下面「lastCheckAt 有值但 lastCheckError 为空」的分支，被误显示成检查失败
-        if (repo.empty) return { kind: 'pull', text: M('本机仓库还是空目录：拉取一次就能和云端比对', 'Local repo is still empty — pull once to compare with the cloud') }
+        if (repo.empty || repo.phase === 'missing') {
+          return repo.mode === 'await-init'
+            ? { kind: 'init', text: M('本机与云端都还没有内容：初始化推送一次就能和云端比对', 'Local repo and cloud are both empty — initialize push once to compare') }
+            : { kind: 'pull', text: M('本机仓库还没有内容：拉取一次就能和云端比对', 'Local repo has no content yet — pull once to compare') }
+        }
         if (auto.checking || checking) return { kind: 'idle', text: M('云端检查中…', 'Checking the cloud…') }
         const drift = auto.drift
         if (drift) {
@@ -1920,10 +1955,13 @@ window.__ModuleLoader__.load({
             M('仓库路径还没配置：先在「本机仓库」卡里设好，否则脚本生成不出来。',
               'Repo path is not set: configure it in the Local repo card, otherwise scripts cannot be generated.'))
           : null,
-        data && data.repo && data.repo.empty
+        data && data.repo && (data.repo.phase === 'empty' || data.repo.phase === 'missing')
           ? h('div', { style: { ...S.footnote, color: 'var(--dsw-alias-state-warn-primary)' } },
-            M('本机仓库是空目录：现在只生成「拉取」（顺带可生成还原）。拉取会把云端仓库整个拉到这个路径，之后推送按钮才会放开。',
-              'The local repo is an empty folder: only Pull (plus Restore) can be generated now. Pull brings the whole cloud repo into this path; push unlocks after that.'))
+            data.repo.mode === 'await-init'
+              ? M('本机与云端都还没有内容：现在只生成「推送」（推送时自动初始化仓库并写骨架），拉取没有东西可拉。',
+                'Both the local repo and the cloud are empty: only Push can be generated (push initializes the repo and writes the skeleton); there is nothing to pull.')
+              : M('本机仓库还没有内容：现在只生成「拉取」（顺带可生成还原）。拉取会把云端仓库整个拉到这个路径，之后推送按钮才会放开。',
+                'The local repo has no content yet: only Pull (plus Restore) can be generated now. Pull brings the whole cloud repo into this path; push unlocks after that.'))
           : null,
         data && data.remote && !data.remote.configured
           ? h('div', { style: { ...S.footnote, color: 'var(--dsw-alias-state-error-primary)' } },
@@ -1936,8 +1974,9 @@ window.__ModuleLoader__.load({
               `${data.repo.ahead} local commit(s) not pushed: pushing publishes them, pulling overwrites local config.`))
           : null,
         h('div', { style: S.actions },
-          h('button', { type: 'button', style: S.btnPrimary, disabled: busy || !canPull || noRemote, onClick: () => prepare('all', note) },
-            canPush ? M('一键生成 推送 / 拉取 / 还原', 'Generate push / pull / restore') : M('一键生成 拉取 / 还原', 'Generate pull / restore')),
+          h('button', { type: 'button', style: S.btnPrimary, disabled: busy || (!canPull && !canPush) || noRemote, onClick: () => prepare('all', note) },
+            canPush && canPull ? M('一键生成 推送 / 拉取 / 还原', 'Generate push / pull / restore')
+              : (canPush ? M('一键生成 推送 / 还原', 'Generate push / restore') : M('一键生成 拉取 / 还原', 'Generate pull / restore'))),
           h('button', { type: 'button', style: S.btn, disabled: busy || !canPush || noRemote, onClick: () => prepare('push', note) }, M('只生成推送', 'Push only')),
           h('button', { type: 'button', style: S.btn, disabled: busy || !canPull || noRemote, onClick: () => prepare('pull') }, M('只生成拉取', 'Pull only')),
           h('button', { type: 'button', style: S.btn, disabled: busy || !hasRepoPath, onClick: () => prepare('restore') }, M('只生成还原', 'Restore only')),

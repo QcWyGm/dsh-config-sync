@@ -72,7 +72,9 @@ dsh plugin add https://raw.githubusercontent.com/QcWyGm/dsh-config-sync/main/rel
 - 仓库判据：目录里同时有 `apply.ps1` 与 `profile\package.json`（再有 `sync.ps1` 才算能推拉）。
 - 优先级：本机设置文件 → 插件配置 `repoPath` → `DSH_CONFIG_REPO` → 常见位置自动探测。**配置里填的空目录同样算有效答案**，不会被自动探测到的另一个仓库顶掉。
 - 四种状态（`status` 里的 `repo.phase`）：`ok` 真仓库、`empty` 空目录/待首次拉取、`missing` 目录不存在、`unusable` 目录里有别的东西却不像仓库。`repo.pushAllowed` / `repo.pullAllowed` 就按它算，面板按钮和宿主接口共用这一套口径。
-- **空目录只允许拉取（0.3.26 起）**：路径指向空白文件夹时，面板只放行「拉取」（+ 还原），推送按钮置灰并写明"先拉取"；宿主 `prepare(push)` 与 `auto(push-now)` 一律 400，「一键生成」自动降级成「拉取 / 还原」；`sync.ps1 push` 也在最前面拦住（`本机仓库还没有内容`）。拉取会把云端仓库整个拉下来：目录不存在就建，再 `git init` → 补 `origin` → `fetch` → `checkout -B <分支>`（用 init+fetch+checkout 而不是 clone，因为目录里可能已有插件生成的 `同步-*.cmd`）。
+- **空目录 + 云端有内容 → 只允许拉取（0.3.26 起，0.3.35 起加"云端"这一维）**：路径指向空白文件夹、云端又有东西时，面板只放行「拉取」（+ 还原），推送按钮置灰并写明"先拉取"；宿主 `prepare(push)` 与 `auto(push-now)` 一律 400，「一键生成」自动降级成「拉取 / 还原」。拉取会把云端仓库整个拉下来：目录不存在就建，再 `git init` → 补 `origin` → `fetch` → `checkout -B <分支>`（用 init+fetch+checkout 而不是 clone，因为目录里可能已有插件生成的 `同步-*.cmd`）。
+- **空目录 + 云端也空 → 只允许推送，而且就是「初始化推送」（0.3.35 起）**：面板把按钮改成「初始化推送」，拉取按钮置灰（没有东西可拉）。`status` 多了 `repo.remoteHeads`（云端分支数，`null`=判不了）、`repo.remoteEmpty` 与三态 `repo.mode`（`ok` / `await-pull` / `await-init`），宿主与面板都用它。执行时 `sync.ps1 push` 依次做：`git init` → 补 `origin` → **写仓库骨架**（把插件 runtime 的 `apply.ps1` / `capture.ps1` / `sync.ps1` / `restore.ps1` / `post-exit.ps1` / `dsh-sync-common.ps1` 拷进仓库根）→ 写 `profile\host-contract.json`（本机客户端版本）→ `capture` 抓本机配置 → 提交 → `push -u origin main`。骨架必须一起带上，否则远端会变成"只有 settings、没有执行体"的半截仓库，另一台 pull 下来跑不起来。
+- 云端有没有内容是 `git ls-remote --heads <远端>`（15 秒超时）现算的：**探不到（离线/认证失败）就按老规矩只允许拉取**，不在盲状态下开推送。云端已经有分支、本机却还是空目录时，`push` 一律拒绝并提示先拉取 —— 硬推会把本机状态写进一份正在使用的历史。
 - 只允许插件自己生成的 `同步-*.cmd` 与隐藏项（`.git` 等）算"空"；目录里已经有别的文件却不像仓库 → `unusable`，面板提示重新设路径，保存设置时也会拒。
 - 云端：远端地址优先读 `git remote get-url origin`，没有才回落设置文件；SSH 私钥只存**路径**、可留空交给 `.ssh\config`。
 - **没配过 = 强制设置**：卡片停在编辑态、不给「取消」，顶部红字、生成按钮禁用，宿主 `prepare` 也 400（远端缺失时 `还原` 不受影响）。
