@@ -995,10 +995,13 @@ console.log('== 跨机路径占位符与问题反馈 ==')
   check('workspace.json（DSH 工作区登记）进了同步范围',
     captureSrc.includes("storages\\workspace.json") && applySrc.includes("storages\\workspace.json"),
     '工作区登记表没同步')
-  check('面板有「本机路径」卡与保存按钮',
-    cli.includes("M('本机路径', 'Local paths')") && cli.includes("M('保存本机路径', 'Save paths')")
-      && cli.includes('callRoots'),
-    'client.js 缺本机路径卡')
+  check('面板有「本机路径」卡：只读展示 + 「修改」进编辑 + 保存',
+    cli.includes("M('本机路径', 'Local paths')") && cli.includes("M('修改', 'Edit')")
+      && cli.includes('callRoots') && cli.includes('setCustom') && cli.includes('addCustom'),
+    'client.js 缺本机路径卡的修改态')
+  check('本机路径卡默认只读（值用等宽字展示，token 作灰字说明）',
+    cli.includes('const isEditing = editing || forced') && cli.includes('{{ROOT:${k}}}'),
+    '只读态/自选目录没渲染')
   check('面板会列出待确认项（token + 文件 + 说明）',
     cli.includes('data.missing') && cli.includes('m.token'),
     '待确认清单没渲染')

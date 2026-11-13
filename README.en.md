@@ -6,6 +6,8 @@ A DSH plugin: it adds a **"Config Sync"** row to the sidebar (opening a full-pag
 
 ![panel](docs/panel.en.png)
 
+> The screenshot is from 0.3.14; the section layout is unchanged. Every card is now "read-only + Edit" - see "Consistent interaction" below.
+
 The UI is bilingual: it follows the client language (`zh-*` → Chinese, anything else → English), with no settings toggle. Only the generated `.cmd` scripts keep Chinese text, because they are local shell helpers.
 
 ## Install
@@ -14,7 +16,7 @@ The plugin is a standard DSH bundle; install it into the current profile:
 
 ```sh
 # Install from this repo's release package (no build needed: host, client and runtime scripts are already inside)
-dsh plugin add https://raw.githubusercontent.com/QcWyGm/dsh-config-sync/main/releases/dsh-config-sync-0.3.26.tgz
+dsh plugin add https://raw.githubusercontent.com/QcWyGm/dsh-config-sync/main/releases/dsh-config-sync-<version>.tgz   # latest on the Releases page
 ```
 
 Or add this repo's index under the official **Plugins → Discover → Index sources** (see "Using this repo as a market index source" below). **The third-party market plugin dshmarket does not read that index** — see that section for why.
@@ -54,7 +56,9 @@ The layout is "one status row + one metric strip + section cards", read top to b
 
 **Metric strip**: five cells at a glance — `App / contract` (turns orange when they disagree), `bundle` (red when something is unresolvable), `Dependencies` (red when something is missing), `Snapshots` (count) and `Last sync` (time, with `(+N)` for files written after it). A "to-do" card appears below only when there is something to fix.
 
-**Sections**: Overview (strip + to-do) → Local paths (since 0.3.30: cross-machine root confirmation and the pending list) → Sync targets (Local / Cloud repo) → Automation & plugin update → After exit → Restore backup → Sync content → Feedback (since 0.3.30). Two columns on wide screens, and each card keeps text to "one value line + one grey hint line" instead of long prose.
+**Sections**: Overview (strip + to-do) → Local paths (since 0.3.30: cross-machine root confirmation and the pending list; since 0.3.34 a read-only view with an Edit button) → Sync conflicts (only when there really are some) → Sync targets (Local / Cloud repo) → Automation & plugin update → After exit → Restore backup → Sync content → Feedback (since 0.3.31). Two columns on wide screens, and each card keeps text to "one value line + one grey hint line" instead of long prose.
+
+**Consistent interaction**: Local paths / Local repo / Cloud repo / Auto sync / Plugin update / Sync content all start **read-only** and unlock on Edit; Save commits, Cancel drops the draft. Only cards that were never configured (no repo, no remote) stay in edit mode with no Cancel - without those values nothing can be pushed, pulled or generated. The Local paths card is also forced into edit mode when no root was detected at all.
 
 **"To push" is not just git**: even with a clean `git status`, new sessions/materials may still sit in `~\.dsh` uncaptured. So `sync.ps1` writes `~\.dsh\config-sync-state.json` (`lastSyncAt`/`mode`/`head`) after a successful push/pull, and `status` returns an extra `local` block: it stats `sessions`, `skills`, `.agent-presets`, `mnemon`, the five profile files and registered workspace directories, counting anything whose **mtime is later than `lastSyncAt`** into `local.pending`, which turns the badge orange "To push". mtime only — no content reads, no capture; capped at 20,000 files / 1.5 s; copies and "save as" count too, and a false positive only costs one extra hint.
 
@@ -199,6 +203,14 @@ Two machines rarely share drive letters (one has `D:\DeepSeekHarness`, the other
 - When a root is missing on this machine, `apply.ps1` **skips that file instead of writing it** and records it in `<dshHome>\config-sync-pending-paths.json` (which token, which file, what folder to pick).
 - The panel's "Local paths" card lists those items; fill in the paths, save, then pull once more.
 - Confirmed values win over detection and are not asked again. **Not writing beats writing garbage** — a literal `{{ROOT:xxx}}` inside a config is read by plugins as a real path, and that error is far harder to trace than a skipped file.
+
+### How the Local paths card works (since 0.3.34: read-only + Edit)
+
+- **Read-only by default**: the three roots (`{{APP_ROOT}}` / `{{DSH_HOME}}` / `{{WORKSPACE_HOME}}`) show their current value in a monospace line with the placeholder as a grey hint underneath; custom folders (`{{ROOT:<key>}}`) render the same way.
+- Click **Edit** (top right) to turn them into inputs, which brings up Save and Cancel; a successful save returns to the read-only view - the same pattern as Local repo and Sync content.
+- In edit mode two extras appear: a **Remove** button next to each custom folder, and an **Add folder** row (key + path, key limited to letters, digits, `_ . -`) for roots that live elsewhere on this machine.
+- The chip in the card head is orange "N to confirm" while something is pending, green "Confirmed" when everything resolves; **Reload** is always available and re-reading detected values never overwrites what you confirmed.
+- If not a single root was detected, the card stays in edit mode - fill them in before saving.
 
 ## Feedback goes to GitHub Issues (since 0.3.31, token-free reading since 0.3.32)
 

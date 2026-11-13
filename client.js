@@ -82,12 +82,12 @@ window.__ModuleLoader__.load({
       sub: { fontSize: '12px', lineHeight: '18px', color: 'var(--dsw-alias-label-tertiary)', wordBreak: 'break-all' },
       chip: { fontSize: '12px', lineHeight: '18px', padding: '0 8px', borderRadius: '999px', whiteSpace: 'nowrap' },
       btn: {
-        fontSize: '12px', lineHeight: '20px', padding: '2px 10px', borderRadius: '6px', cursor: 'pointer',
+        fontSize: '12px', lineHeight: '22px', padding: '3px 11px', borderRadius: '6px', cursor: 'pointer',
         border: '1px solid var(--dsw-alias-border-l2)', background: 'transparent',
         color: 'var(--dsw-alias-label-primary)',
       },
       btnPrimary: {
-        fontSize: '12px', lineHeight: '20px', padding: '3px 12px', borderRadius: '6px', cursor: 'pointer',
+        fontSize: '12px', lineHeight: '22px', padding: '3px 13px', borderRadius: '6px', cursor: 'pointer',
         border: '1px solid var(--dsw-alias-button-primary-fill)',
         background: 'var(--dsw-alias-button-primary-fill)',
         color: 'var(--dsw-alias-label-primary-foreground)',
@@ -98,7 +98,7 @@ window.__ModuleLoader__.load({
         padding: '18px 22px 28px', background: 'var(--dsw-alias-bg-base)',
         color: 'var(--dsw-alias-label-primary)',
       },
-      pageInner: { maxWidth: '1120px', margin: '0 auto', display: 'flex', flexDirection: 'column', gap: '14px' },
+      pageInner: { maxWidth: '1120px', margin: '0 auto', display: 'flex', flexDirection: 'column', gap: '18px' },
       pageTitle: { fontSize: '18px', lineHeight: '26px', fontWeight: 600, color: 'var(--dsw-alias-label-primary)' },
       pageLead: { fontSize: '12px', lineHeight: '19px', color: 'var(--dsw-alias-label-tertiary)', margin: 0 },
       // 标题下的一行元信息：小灰点分隔，只放"一眼要看"的事实，长句一律不进这里
@@ -128,7 +128,7 @@ window.__ModuleLoader__.load({
       // 卡片底部的一行灰字（原先是整段解释，压缩成一句）
       footnote: { fontSize: '11px', lineHeight: '17px', color: 'var(--dsw-alias-label-tertiary)', overflowWrap: 'break-word' },
       // 卡片分组：每组一个小标题 + 自适应网格（宽屏两列，窄了自动回落单列，卡片等高）
-      section: { display: 'flex', flexDirection: 'column', gap: '8px' },
+      section: { display: 'flex', flexDirection: 'column', gap: '10px' },
       sectionHead: { display: 'flex', alignItems: 'baseline', gap: '8px', flexWrap: 'wrap' },
       sectionTitle: { fontSize: '13px', lineHeight: '20px', fontWeight: 600, color: 'var(--dsw-alias-label-primary)' },
       sectionHint: { fontSize: '11px', lineHeight: '18px', color: 'var(--dsw-alias-label-tertiary)' },
@@ -137,13 +137,13 @@ window.__ModuleLoader__.load({
         gap: '10px', alignItems: 'stretch',
       },
       card: {
-        display: 'flex', flexDirection: 'column', gap: '6px', padding: '12px 13px', minWidth: 0,
+        display: 'flex', flexDirection: 'column', gap: '9px', padding: '13px 14px', minWidth: 0,
         border: '1px solid var(--dsw-alias-border-l1)', borderRadius: '10px',
         background: 'var(--dsw-alias-settings-card-fill)',
       },
       cardTitle: { fontSize: '13px', lineHeight: '18px', fontWeight: 600, color: 'var(--dsw-alias-label-primary)' },
-      kvRow: { display: 'flex', gap: '8px', fontSize: '12px', lineHeight: '18px', alignItems: 'flex-start' },
-      kvKey: { minWidth: '92px', width: '92px', flexShrink: 0, color: 'var(--dsw-alias-label-tertiary)' },
+      kvRow: { display: 'flex', gap: '8px', fontSize: '12px', lineHeight: '18px', alignItems: 'flex-start', padding: '1px 0' },
+      kvKey: { minWidth: '100px', width: '100px', flexShrink: 0, color: 'var(--dsw-alias-label-tertiary)' },
       kvVal: { flex: 1, minWidth: 0, color: 'var(--dsw-alias-label-secondary)', overflowWrap: 'break-word' },
       advice: { fontSize: '12px', lineHeight: '19px', color: 'var(--dsw-alias-label-secondary)', margin: 0, paddingLeft: '18px', display: 'flex', flexDirection: 'column', gap: '2px' },
       actions: { display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' },
@@ -1988,6 +1988,9 @@ window.__ModuleLoader__.load({
                 : null,
             ] : h('span', null, summary.text),
           ),
+          h('div', { style: S.pageLead },
+            M('配置在本机、仓库、云端三处流转：改完立即生效；写入与还原的脚本统一在退出客户端后执行。',
+              'Configs flow between this machine, the repo and the cloud. Changes take effect at once; write and restore scripts run after the client quits.')),
           toast
             ? h('div', {
               style: {
@@ -2008,7 +2011,7 @@ window.__ModuleLoader__.load({
           Section(M('本机路径', 'Local paths'), M('每台机器只确认一次：仓库里的配置用占位符，落地时按这里的路径展开', 'Confirm once per machine: repo configs use placeholders, expanded with these paths'), [rootsCard]),
           Section(M('同步目标', 'Sync targets'), M('仓库与远端都是本机配置，改完立即生效', 'Repo and remote are local settings, applied at once'), [repoCard, remoteCard].filter(Boolean)),
           Section(M('自动化与插件更新', 'Automation & plugin update'), M('退出后自动做什么、插件自己怎么升级', 'What runs automatically after exit, and how the plugin upgrades'), [autoCard, updCard].filter(Boolean)),
-          Section(M('退出后执行', 'After exit'), null, [actionCard]),
+          Section(M('退出后执行', 'After exit'), M('生成脚本 → 退出客户端后跑一遍；写回、推送、重开窗口都在这一步', 'Generate the script → it runs once the client quits; writing back, pushing and reopening live here'), [actionCard]),
           // 「还原备份」跟在动作卡之后：先看怎么生成脚本，再挑具体退回到哪份快照
           Section(M('还原备份', 'Restore backup'), M('点快照 → 确认差异 → 排队还原（退出客户端后执行）', 'Pick a snapshot → confirm the diff → queued restore (runs after the client quits)'), [restoreCard].filter(Boolean)),
           // 「同步内容」放在整页最下面：它是"细项配置"，看清前面的状态与动作后才会来调整
@@ -2027,36 +2030,62 @@ window.__ModuleLoader__.load({
      */
     function RootsCard(props) {
       const [data, setData] = react.useState(null)
-      const [form, setForm] = react.useState(null)
       const [busy, setBusy] = react.useState(false)
       const [err, setErr] = react.useState('')
       const [msg, setMsg] = react.useState('')
+      const [editing, setEditing] = react.useState(false)
+      const [draft, setDraft] = react.useState(null)
+      const [newKey, setNewKey] = react.useState('')
+      const [newPath, setNewPath] = react.useState('')
+
+      const snap = (r) => ({
+        appRoot: (r && r.roots && r.roots.appRoot) || '',
+        dshHome: (r && r.roots && r.roots.dshHome) || '',
+        workspaceHome: (r && r.roots && r.roots.workspaceHome) || '',
+        custom: { ...((r && r.roots && r.roots.custom) || {}) },
+      })
 
       const load = async () => {
         setBusy(true); setErr(''); setMsg('')
         try {
           const r = await callRoots()
           setData(r)
-          setForm({
-            appRoot: (r.roots && r.roots.appRoot) || '',
-            dshHome: (r.roots && r.roots.dshHome) || '',
-            workspaceHome: (r.roots && r.roots.workspaceHome) || '',
-            custom: (r.roots && r.roots.custom) || {},
-          })
+          if (editing) setDraft(snap(r))
         } catch (e) {
           setErr(String((e && e.message) || e))
         } finally { setBusy(false) }
       }
       react.useEffect(() => { load() }, [])
 
-      const setField = (k, v) => setForm((f) => ({ ...(f || {}), [k]: v }))
-      const setCustom = (k, v) => setForm((f) => ({ ...(f || {}), custom: { ...((f && f.custom) || {}), [k]: v } }))
+      // 只读优先：进卡先只看不改，点「修改」才解锁；没探测到任何根时强制停在编辑态
+      const detected = snap(data)
+      const forced = !!data && !(detected.appRoot || detected.dshHome || detected.workspaceHome)
+      const isEditing = editing || forced
+
+      const startEdit = () => { setDraft(snap(data)); setErr(''); setMsg(''); setEditing(true) }
+      const cancelEdit = () => { setEditing(false); setDraft(null); setNewKey(''); setNewPath(''); setErr(''); setMsg('') }
+      const setField = (k, v) => setDraft((f) => ({ ...(f || {}), [k]: v }))
+      const setCustom = (k, v) => setDraft((f) => ({ ...(f || {}), custom: { ...((f && f.custom) || {}), [k]: v } }))
+      const delCustom = (k) => setDraft((f) => {
+        const c = { ...((f && f.custom) || {}) }
+        delete c[k]
+        return { ...(f || {}), custom: c }
+      })
+      const addCustom = () => {
+        const k = newKey.trim()
+        const p = newPath.trim()
+        if (!k || !p) return
+        setDraft((f) => ({ ...(f || {}), custom: { ...((f && f.custom) || {}), [k]: p } }))
+        setNewKey(''); setNewPath('')
+      }
       const save = async () => {
-        if (!form) return
+        if (!draft) return
         setBusy(true); setErr(''); setMsg('')
         try {
-          const r = await callRoots({ roots: form })
+          const r = await callRoots({ roots: draft })
           setMsg([r.note, ...((r.warns || []).map((w) => `⚠ ${w}`))].filter(Boolean).join(' '))
+          setEditing(false)
+          setDraft(null)
           await load()
           if (props && typeof props.onRootsSaved === 'function') props.onRootsSaved()
         } catch (e) {
@@ -2065,12 +2094,29 @@ window.__ModuleLoader__.load({
       }
 
       const missing = (data && data.missing) || []
-      const customKeys = form && form.custom ? Object.keys(form.custom) : []
       const rootRows = [
         { key: 'appRoot', label: M('客户端安装目录', 'Client install root'), token: '{{APP_ROOT}}', ph: 'D:\\DeepSeekHarness' },
         { key: 'dshHome', label: M('.dsh 目录', '.dsh folder'), token: '{{DSH_HOME}}', ph: 'C:\\Users\\<user>\\.dsh' },
         { key: 'workspaceHome', label: M('工作区根', 'Workspace root'), token: '{{WORKSPACE_HOME}}', ph: 'D:\\DeepSeekHarness\\workspace' },
       ]
+      const shown = isEditing ? draft : detected
+      const customKeys = shown ? Object.keys(shown.custom || {}) : []
+      const mono = { fontFamily: 'Consolas, ui-monospace, monospace', wordBreak: 'break-all' }
+
+      const rootRow = (row) => h('div', { key: row.key, style: S.kvRow },
+        h('div', { style: S.kvKey }, row.label),
+        isEditing
+          ? h('input', {
+            type: 'text', style: S.input, value: ((shown && shown[row.key]) || ''), spellCheck: false,
+            placeholder: row.ph,
+            onChange: (e) => setField(row.key, e.target.value),
+          })
+          : h('div', { style: S.kvVal },
+            h('div', { style: { ...mono, color: (shown && shown[row.key]) ? 'inherit' : 'var(--dsw-alias-text-tertiary, #888)' } },
+              (shown && shown[row.key]) || M('（没探测到，点「修改」填一个）', '(not detected - click Edit and fill one in)')),
+            h('div', { style: S.footnote }, row.token)),
+      )
+
 
       return h('div', { style: S.card },
         h('div', { style: S.cardHead },
@@ -2079,10 +2125,23 @@ window.__ModuleLoader__.load({
           missing.length
             ? h('span', { style: { ...S.chip, color: 'var(--dsw-alias-state-warn-primary)' } },
               M(`待确认 ${missing.length} 项`, `${missing.length} to confirm`))
-            : h('span', { style: { ...S.chip, color: 'var(--dsw-alias-state-success-primary, #2e7d32)' } },
-              M('已确认', 'Confirmed')),
-          h('button', { type: 'button', style: S.btn, disabled: busy, onClick: load },
-            busy ? M('读取中…', 'Loading…') : M('重新读取', 'Reload')),
+            : (data
+              ? h('span', { style: { ...S.chip, color: 'var(--dsw-alias-state-success-primary, #2e7d32)' } }, M('已确认', 'Confirmed'))
+              : null),
+          isEditing && forced
+            ? h('div', { style: { ...S.hint, flex: 1 } }, M('没探测到路径，先填好再保存', 'Nothing detected - fill these in first'))
+            : null,
+          h('div', { style: S.actions },
+            isEditing
+              ? h(react.Fragment, null,
+                h('button', { type: 'button', style: S.btnPrimary, disabled: busy || !draft, onClick: save },
+                  busy ? M('保存中…', 'Saving…') : M('保存', 'Save')),
+                forced ? null : h('button', { type: 'button', style: S.btn, disabled: busy, onClick: cancelEdit }, M('取消', 'Cancel')),
+              )
+              : h('button', { type: 'button', style: S.btn, disabled: !data || busy, onClick: startEdit }, M('修改', 'Edit')),
+            h('button', { type: 'button', style: S.btn, disabled: busy, onClick: load },
+              busy ? M('读取中…', 'Loading…') : M('重新读取', 'Reload')),
+          ),
         ),
         missing.length
           ? h('div', { style: { ...S.panel, gap: '4px' } },
@@ -2092,33 +2151,46 @@ window.__ModuleLoader__.load({
             missing.slice(0, 20).map((m, i) => h('div', { key: i, style: S.hint },
               `· ${m.token || '?'} — ${m.label || m.file || ''}${m.hint ? `：${m.hint}` : ''}`)))
           : null,
-        form
-          ? rootRows.map((row) => h('div', { key: row.key, style: S.kvRow },
-            h('div', { style: S.kvKey }, row.label),
-            h('input', {
-              type: 'text', style: S.input, value: form[row.key] || '', spellCheck: false,
-              placeholder: row.ph,
-              onChange: (e) => setField(row.key, e.target.value),
-            }),
-          ))
+        shown
+          ? rootRows.map(rootRow)
           : h('div', { style: S.hint }, M('读取中…', 'Loading…')),
-        form && customKeys.length
+        shown && customKeys.length
           ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: '4px' } },
             h('div', { style: S.footnote }, M('自选目录（插件装在别处时要指定）', 'Custom folders (needed when plugins live elsewhere)')),
             customKeys.map((k) => h('div', { key: `c-${k}`, style: S.kvRow },
-              h('div', { style: S.kvKey }, k),
-              h('input', {
-                type: 'text', style: S.input, value: form.custom[k] || '', spellCheck: false,
-                placeholder: M('这台机器上对应的绝对路径', 'Absolute path on this machine'),
-                onChange: (e) => setCustom(k, e.target.value),
-              }),
+              h('div', { style: S.kvKey }, `ROOT:${k}`),
+              isEditing
+                ? h('div', { style: { display: 'flex', gap: '8px', alignItems: 'flex-start' } },
+                  h('input', {
+                    type: 'text', style: S.input, value: (shown.custom && shown.custom[k]) || '', spellCheck: false,
+                    placeholder: M('这台机器上对应的绝对路径', 'Absolute path on this machine'),
+                    onChange: (e) => setCustom(k, e.target.value),
+                  }),
+                  h('button', { type: 'button', style: S.btn, disabled: busy, onClick: () => delCustom(k) }, M('删除', 'Remove')),
+                )
+                : h('div', { style: S.kvVal },
+                  h('div', { style: mono }, (shown.custom && shown.custom[k]) || M('（空）', '(empty)')),
+                  h('div', { style: S.footnote }, `{{ROOT:${k}}}`)),
             )))
           : null,
-        h('div', { style: S.actions },
-          h('button', { type: 'button', style: S.btnPrimary, disabled: busy || !form, onClick: save },
-            busy ? M('保存中…', 'Saving…') : M('保存本机路径', 'Save paths')),
-        ),
-        data && data.detected
+        isEditing
+          ? h('div', { style: S.kvRow },
+            h('div', { style: S.kvKey }, M('新增目录', 'Add folder')),
+            h('div', { style: { display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' } },
+              h('input', {
+                type: 'text', style: { ...S.input, maxWidth: '160px' }, value: newKey, spellCheck: false,
+                placeholder: M('键名，如 comfyui', 'key, e.g. comfyui'),
+                onChange: (e) => setNewKey(e.target.value.replace(/[^A-Za-z0-9_.-]/g, '')),
+              }),
+              h('input', {
+                type: 'text', style: { ...S.input, maxWidth: '320px' }, value: newPath, spellCheck: false,
+                placeholder: M('这台机器上的绝对路径', 'Absolute path on this machine'),
+                onChange: (e) => setNewPath(e.target.value),
+              }),
+              h('button', { type: 'button', style: S.btn, disabled: !newKey.trim() || !newPath.trim(), onClick: addCustom }, M('添加', 'Add')),
+            ))
+          : null,
+        data && data.detected && !isEditing
           ? h('div', { style: S.footnote },
             M(
               `自动探测：安装目录 ${data.detected.appRoot || '（没找到）'}；.dsh ${data.detected.dshHome || '?'}；工作区根 ${data.detected.workspaceHome || '（从工作区登记表推不出来）'}`,
