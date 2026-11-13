@@ -861,6 +861,18 @@ if (repoReady) {
     Boolean(notedPayload.message) && !notedPayload.message.includes('"'),
     notedPayload.message || '(无)')
   if (existsSync(notedPayload.path || '')) restoreCmd(notedPayload.path)
+} else if (body.repo?.remoteEmpty === true) {
+  // 两边都空：这次带说明的 push 就是初始化推送，放行；说明字段照样要清洗
+  check('两边都空：带说明的 push 放行（走初始化推送）',
+    noted.statusCode === 200 && notedPayload.ok === true, noted.body.slice(0, 160))
+  check('提交说明里的双引号被清洗掉',
+    Boolean(notedPayload.message) && !notedPayload.message.includes('"'),
+    notedPayload.message || '(无)')
+  if (existsSync(notedPayload.path || '')) restoreCmd(notedPayload.path)
+  check('提交说明清洗在源码里（去双引号）',
+    /\$\{.*message.*\}/.test(readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'index.js'), 'utf8'))
+    || /replace\(\/\["\\r\\n\]/.test(readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'index.js'), 'utf8')),
+    'index.js')
 } else {
   // 仓库还没内容、云端已有内容时，带说明的 push 同样该被拒；说明字段的清洗逻辑用静态断言兜住
   check('本机无内容时：带说明的 push 仍被拒（不被说明字段绕过门禁）',
@@ -877,10 +889,16 @@ const pullNote = await call('/config-sync/prepare', {
   body: JSON.stringify({ action: 'pull', message: '不该进拉取脚本' }),
 })
 const pullNotePayload = JSON.parse(pullNote.body || '{}')
-check('拉取脚本不吃提交说明',
-  existsSync(pullNotePayload.path || '') && !readFileSync(pullNotePayload.path, 'utf8').includes('不该进拉取脚本'),
-  pullNotePayload.path || '(无)')
-if (existsSync(pullNotePayload.path || '')) restoreCmd(pullNotePayload.path)
+if (pullNote.statusCode === 400) {
+  // 两边都空：拉取直接被拒（没有内容可拉），说明字段自然也进不了脚本
+  check('两边都空时带说明的拉取同样被拒（说明字段绕不过门禁）',
+    /没有内容可拉|连不上云端/.test(pullNotePayload.error || ''), pullNotePayload.error || '(无错误)')
+} else {
+  check('拉取脚本不吃提交说明',
+    existsSync(pullNotePayload.path || '') && !readFileSync(pullNotePayload.path, 'utf8').includes('不该进拉取脚本'),
+    pullNotePayload.path || '(无)')
+  if (existsSync(pullNotePayload.path || '')) restoreCmd(pullNotePayload.path)
+}
 
 // 配置仓库根目录那 6 个执行体，是「插件还没装 / 正在升级」时的兜底副本。
 // 它们一直靠人工同步，结果漂成半新半旧：sync/apply/common/post-exit 已升到 0.3.23，
@@ -956,41 +974,48 @@ console.log('== 空白本机仓库：只允许拉取 ==')
   check('只有插件自己生成的 同步-*.cmd 与隐藏项算「空」',
     /同步-\[\\s\\S\]\*\\?\.cmd/i.test(indexNew) || /同步-\[/i.test(indexNew),
     'empty 判据没有排除 同步-*.cmd：生成过脚本之后就会被误判成 unusable')
-  check('status 暴露 phase / empty / remoteHeads / pushAllowed / pullAllowed',
+  check('status 暴露 phase / remoteFiles / pushAllowed / pullAllowed',
     /phase,\s*\n\s*empty: phase === 'empty'/.test(indexNew)
-    && /remoteHeads,/.test(indexNew) && /remoteEmpty: remoteHeads === 0/.test(indexNew)
-    && /pushAllowed: phase === 'ok' \|\| \(phase === 'empty' && remoteHeads === 0\)/.test(indexNew)
-    && /pullAllowed: phase === 'ok' \|\| \(\(phase === 'empty' \|\| phase === 'missing'\) && remoteHeads !== 0\)/.test(indexNew),
-    'status 没有暴露新门禁字段（remoteHeads / pushAllowed / pullAllowed），面板只能靠 exists 猜')
-  check('仓库三态 mode（ok / await-pull / await-init）算在 status 里',
-    /mode: phase === 'ok' \? 'ok' : \(remoteHeads === 0 \? 'await-init' : 'await-pull'\)/.test(indexNew),
-    '两边都空的情形没有独立的 await-init 态，面板无从区分「初始化推送」与「先拉取」')
-  check('远端空探测用 ls-remote，且有超时（不写本地 refs）',
-    /function lsRemoteHeads\(url, settings\)/.test(indexNew)
-    && /ls-remote/.test(indexNew)
+    && /remoteFiles,/.test(indexNew) && /remoteEmpty: remoteFiles === 0/.test(indexNew)
+    && /pushAllowed: phase === 'ok' \|\| \(phase === 'empty' && remoteFiles === 0\)/.test(indexNew)
+    && /pullAllowed: phase === 'ok' \|\| \(\(phase === 'empty' \|\| phase === 'missing'\) && remoteFiles !== 0\)/.test(indexNew),
+    'status 没有暴露新门禁字段（remoteFiles / pushAllowed / pullAllowed），面板只能靠分支数猜')
+  check('仓库三态 mode（ok / await-pull / await-init）按文件数算',
+    /mode: phase === 'ok'[\s\S]{0,120}?remoteFiles === 0 \? 'await-init' : 'await-pull'/.test(indexNew),
+    'mode 还在看分支数：远端只剩空分支时会被判成 await-pull，拉取只能拉到空目录、死循环')
+  check('远端探测先数分支、再数分支树里的文件（有超时，不写本地 refs）',
+    /function probeRemote\(/.test(indexNew)
+    && /function remoteFileCount\(/.test(indexNew)
+    && /ls-remote --heads/.test(indexNew)
+    && /'ls-tree', '-r', '--name-only', 'FETCH_HEAD'/.test(indexNew)
     && /timeout: 15000/.test(indexNew),
-    'lsRemoteHeads 缺失或没有超时：刷面板会卡在网络上')
+    'probeRemote / remoteFileCount 缺失：判据退回分支数，「有分支但空树」又会被当成有内容')
   check('空目录的 advice 分「初始化推送」与「执行拉取」两支',
     /本机仓库\$\{where\}，云端仓库也还没有任何内容/.test(indexNew) || /云端仓库也还没有任何内容/.test(indexNew),
     'advice 没区分「两边都空」与「本机空但云端有内容」')
+  check('advice 单独说明「云端只剩空分支（历史被删空）」',
+    /云端仓库只有分支、里面一个文件都没有/.test(indexNew),
+    '远端只剩空分支时没有专门说法：用户会以为「云端有内容」而反复点拉取')
   check('check 在非 ok 状态短路，不去撞空目录的 git',
     /if \(phase !== 'ok'\) \{[\s\S]{0,220}?autoState\.checking = false/.test(indexNew),
     'check 仍会对空目录跑 fetch/drift：lastCheckError 会被填成「读不到远端」')
-  check('push-now 在空目录先探云端：云端有内容拒绝，云端空放行',
+  check('push-now 在空目录先探云端：有文件拒绝，判不了或没文件放行',
     /mode === 'push' && repoPhase\(repo\) !== 'ok'/.test(indexNew)
-    && /云端仓库已经有内容（\$\{heads\} 个分支）/.test(indexNew),
-    'handleAuto 的 push-now 没按「云端空/不空」分流')
-  check('prepare 按云端空不空组合脚本（两边都空只生成推送 + 还原）',
+    && /probe\.files === null/.test(indexNew)
+    && /云端仓库已经有内容（\$\{probe\.files\} 个文件）/.test(indexNew),
+    'handleAuto 的 push-now 没按「云端文件数」分流（分支数会把空分支当有内容）')
+  check('prepare 按云端文件数组合脚本（两边都空只生成推送 + 还原）',
     /action === 'push' && phase !== 'ok'/.test(indexNew)
-    && /remoteHeadsForPrepare === 0 \? \['push', 'restore'\] : \['pull', 'restore'\]/.test(indexNew)
-    && /initPush: phase !== 'ok' && remoteHeadsForPrepare === 0/.test(indexNew),
+    && /cloudEmptyForPrepare \? \['push', 'restore'\] : \['pull', 'restore'\]/.test(indexNew)
+    && /initPush: phase !== 'ok' && cloudEmptyForPrepare/.test(indexNew),
     'prepare 仍会为空目录生成拉取脚本，或没有 initPush 标记')
-  check('sync.ps1 的 push 分支按「云端空不空」分流，并带初始化能力',
-    /function Get-RemoteHeads/.test(syncNew)
+  check('sync.ps1 的 push 分支按「云端文件数」分流，并能覆盖空分支',
+    /function Get-RemoteFileCount/.test(syncNew)
     && /function Initialize-EmptyRepo/.test(syncNew)
-    && /云端仓库已经有内容（\$heads 个分支）/.test(syncNew)
+    && /云端仓库已经有内容（\$remoteFiles 个文件）/.test(syncNew)
+    && /--force-with-lease/.test(syncNew)
     && /Initialize-EmptyRepo \$remoteUrlForPush/.test(syncNew),
-    'sync.ps1 push 仍无条件拒绝空目录，或初始化推送没有骨架/远端探测')
+    'sync.ps1 push 仍按分支数拒绝，或空分支覆盖时没有 --force-with-lease（会被 non-fast-forward 拒）')
   check('初始化推送会写仓库骨架与版本契约',
     /apply\.ps1', 'capture\.ps1', 'sync\.ps1', 'restore\.ps1', 'post-exit\.ps1', 'dsh-sync-common\.ps1'/.test(syncNew)
     && /host-contract\.json/.test(syncNew),
@@ -1011,6 +1036,52 @@ console.log('== 空白本机仓库：只允许拉取 ==')
     /if \(kind === 'init'\) return M\('待初始化', 'To initialize'\)/.test(clientNew)
     && /init: 'var\(--dsw-alias-state-warn-secondary\)'/.test(clientNew),
     'kind=init 没有 chipLabel / chipStyle，徽标会掉进「未检测」')
+}
+
+// 0.3.36：判据从「云端有几个分支」换成「分支树里有几个文件」，外加推送/拉取两条体检报告。
+// 这一段不依赖配置仓库内容，仓库是空目录也照跑。
+console.log('')
+console.log('== 0.3.36：空分支判据 / 根外路径清单 / 覆盖体检 ==')
+{
+  const idx = readFileSync(join(pluginRootSelf, 'index.js'), 'utf8')
+  const cli = readFileSync(join(pluginRootSelf, 'client.js'), 'utf8')
+  const syn = existsSync(join(pluginRuntime, 'sync.ps1')) ? readFileSync(join(pluginRuntime, 'sync.ps1'), 'utf8') : ''
+  const cap = existsSync(join(pluginRuntime, 'capture.ps1')) ? readFileSync(join(pluginRuntime, 'capture.ps1'), 'utf8') : ''
+  const app = existsSync(join(pluginRuntime, 'apply.ps1')) ? readFileSync(join(pluginRuntime, 'apply.ps1'), 'utf8') : ''
+  check('remoteFileCount 用临时 bare 仓库浅取、只要树对象、探完就删',
+    /function remoteFileCount\(/.test(idx)
+    && /mkdtempSync|init --bare --quiet/.test(idx)
+    && /'--filter=blob:none'/.test(idx)
+    && /'ls-tree', '-r', '--name-only', 'FETCH_HEAD'/.test(idx)
+    && /rmSync/.test(idx),
+    'remoteFileCount 没有走临时目录 / 浅取 / 清理，判定会拖慢面板或留下垃圾目录')
+  check('sync.ps1 有 Get-RemoteFileCount，且「有分支但 0 文件」时用 --force-with-lease',
+    /function Get-RemoteFileCount/.test(syn)
+    && /\$remoteHadEmptyBranch/.test(syn)
+    && /--force-with-lease/.test(syn)
+    && /不丢数据/.test(syn),
+    '空分支覆盖没有 force-with-lease（会被 non-fast-forward 拒），或没有「不丢数据」的说明')
+  check('capture.ps1 推送后写根外绝对路径清单',
+    /function Write-OutsideRootReport/.test(cap)
+    && /config-sync-absolute-paths\.json/.test(cap)
+    && /Write-OutsideRootReport/.test(cap.split('function Write-OutsideRootReport')[1] || ''),
+    'capture 没有根外路径体检：换机器拉取才发现路径是死的')
+  check('apply.ps1 覆盖本机配置前比对并写覆盖清单',
+    /\$overwriteItems/.test(app)
+    && /config-sync-overwrite\.json/.test(app)
+    && /本机改动已先备份/.test(app)
+    && /先「推送」再「拉取」/.test(app),
+    'apply 整份覆盖前不比对：本机未推送的改动会被静默盖掉')
+  check('roots 接口带回 absolutePaths 与 overwrite 两份报告',
+    /absolutePathsPathOf/.test(idx) && /overwritePathOf/.test(idx)
+    && /absolutePaths: \{/.test(idx) && /overwrite: \{/.test(idx),
+    'GET /config-sync/roots 没带体检报告，面板无从提示')
+  check('面板在本机路径卡下渲染两条告警，并给「用探测值」回填',
+    /data\.absolutePaths && data\.absolutePaths\.total/.test(cli)
+    && /data\.overwrite && data\.overwrite\.total/.test(cli)
+    && /用探测值/.test(cli)
+    && /改动只影响之后的推送\/拉取/.test(cli),
+    '面板没有渲染根外路径 / 覆盖告警，或没有「用探测值」回填按钮')
 }
 
 // 任意 git 托管平台（0.3.27）：远端地址只校验写法，认证自检提示按 origin 的真实主机名现算，

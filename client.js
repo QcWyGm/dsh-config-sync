@@ -2145,11 +2145,20 @@ window.__ModuleLoader__.load({
       const rootRow = (row) => h('div', { key: row.key, style: S.kvRow },
         h('div', { style: S.kvKey }, row.label),
         isEditing
-          ? h('input', {
-            type: 'text', style: S.input, value: ((shown && shown[row.key]) || ''), spellCheck: false,
-            placeholder: row.ph,
-            onChange: (e) => setField(row.key, e.target.value),
-          })
+          ? h('div', { style: { display: 'flex', gap: '6px', alignItems: 'center', flex: 1 } },
+            h('input', {
+              type: 'text', style: S.input, value: ((shown && shown[row.key]) || ''), spellCheck: false,
+              placeholder: row.ph,
+              onChange: (e) => setField(row.key, e.target.value),
+            }),
+            // 填错想退回自动探测值：一键填回，免得手抄（appRoot 尤其不该手改）
+            (data && data.detected && data.detected[row.key] && data.detected[row.key] !== ((shown && shown[row.key]) || ''))
+              ? h('button', {
+                type: 'button', style: S.btn, disabled: busy,
+                title: M('填回自动探测到的目录', 'Fill in the auto-detected folder'),
+                onClick: () => setField(row.key, data.detected[row.key]),
+              }, M('用探测值', 'Detected'))
+              : null)
           : h('div', { style: S.kvVal },
             h('div', { style: { ...mono, color: (shown && shown[row.key]) ? 'inherit' : 'var(--dsw-alias-text-tertiary, #888)' } },
               (shown && shown[row.key]) || M('（没探测到，点「修改」填一个）', '(not detected - click Edit and fill one in)')),
@@ -2236,8 +2245,29 @@ window.__ModuleLoader__.load({
               `Detected: app root ${data.detected.appRoot || '(not found)'}; .dsh ${data.detected.dshHome || '?'}; workspace root ${data.detected.workspaceHome || '(could not infer from the workspace registry)'}`,
             ))
           : null,
+        data && data.absolutePaths && data.absolutePaths.total
+          ? h('div', { style: { ...S.panel, gap: '4px' } },
+            h('div', { style: { ...S.hint, color: 'var(--dsw-alias-state-warn-primary)' } },
+              M(`仓库里有 ${data.absolutePaths.total} 处绝对路径不在任何已确认根下：换台机器拉取后会指向不存在的目录。把对应目录加成自选目录、再推送一次，它们就会被换成占位符。`,
+                `${data.absolutePaths.total} absolute path(s) in the repo fall outside every confirmed root: on another machine they point at folders that do not exist. Add that folder as a custom root and push once to turn them into placeholders.`)),
+            data.absolutePaths.items.slice(0, 6).map((it, i) => h('div', { key: `ap-${i}`, style: { ...S.hint, fontFamily: 'Consolas, ui-monospace, monospace' } },
+              `· ${it.path} — ${it.file}`)))
+          : null,
+        data && data.overwrite && data.overwrite.total
+          ? h('div', { style: { ...S.panel, gap: '4px' } },
+            h('div', { style: { ...S.hint, color: 'var(--dsw-alias-state-warn-primary)' } },
+              M(`上次拉取覆盖了 ${data.overwrite.total} 份本机配置（覆盖前的版本已备份）。如果那些是你刚改的路径，得先「推送」再「拉取」才能保住。`,
+                `The last pull overwrote ${data.overwrite.total} local config file(s) (previous versions are backed up). If those were your own edits, push first and pull after, or they are lost.`)),
+            data.overwrite.items.slice(0, 6).map((it, i) => h('div', { key: `ov-${i}`, style: S.hint },
+              `· ${it.label || it.repo}${it.backup ? `（备份 ${it.backup}）` : ''}`)))
+          : null,
         data && data.file
           ? h('div', { style: S.footnote }, M(`存在：${data.file}（本机私有，不进仓库）`, `Stored at: ${data.file} (local only, never committed)`))
+          : null,
+        data
+          ? h('div', { style: S.footnote }, M(
+            '改动只影响之后的推送/拉取：已经落到本机的配置，要再拉取一次才会用上新路径。',
+            'Changes apply to the next push/pull: configs already applied on this machine pick up the new paths only on the next pull.'))
           : null,
         msg ? h('div', { style: S.hint }, msg) : null,
         err ? h('div', { style: { ...S.hint, color: 'var(--dsw-alias-state-error-primary)' } }, M(`失败：${err}`, `Failed: ${err}`)) : null,

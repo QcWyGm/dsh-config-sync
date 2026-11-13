@@ -850,6 +850,10 @@ if ((Test-Path -LiteralPath $ledgerSrc) -and (Test-SyncItemEnabled $Scope 'stora
 # 把 {{ROOT:xxx}} 字面量写进配置，插件读到会当成真实路径，报错比不写更难查。
 $roots = Get-SyncRoots $DshHome $AppRoot $WorkspaceHome
 $pendingItems = New-Object System.Collections.ArrayList
+# 覆盖前体检（0.3.36 起）：这一步是「整份覆盖」本机文件，本机若改了路径还没推送，改完会被盖回去。
+# 所以覆盖前把「本机现状（归一化）」和「仓库版本」比一次，不同的记成清单 —— 备份早就有，
+# 缺的一直是「告知」：不让人事后翻备份目录才发现自己刚改的东西没了。
+$overwriteItems = New-Object System.Collections.ArrayList
 if (Test-SyncGroupEnabled $Scope 'settings') {
 foreach ($m in $settingsMap) {
   if (-not (Test-SyncItemEnabled $Scope 'settings' ($m.Repo -replace '^settings\\', ''))) { continue }
@@ -866,6 +870,25 @@ foreach ($m in $settingsMap) {
     Warn ("跳过 " + $m.Repo + "：需要先确认路径 " + ($missing -join '、'))
     continue
   }
+  # 本机已有这份文件、且归一化后与仓库版本不同 → 本次会盖掉本机改动
+  if (Test-Path -LiteralPath $m.Src) {
+    $localRaw = ''
+    try { $localRaw = [IO.File]::ReadAllText($m.Src) } catch { $localRaw = '' }
+    if ($localRaw) {
+      $localNorm = ConvertTo-TokenText $localRaw $roots
+      if ($m.Repo -eq 'settings\our-free-model.json') {
+        foreach ($k in @('catalogSyncedAt', 'reloadedAt', 'reloadCount')) {
+          $localNorm = $localNorm -replace ('("' + $k + '"\s*:\s*)[0-9]+'), '${1}0'
+        }
+      }
+      $localNorm = ($localNorm -replace "`r`n", "`n").TrimEnd()
+      $repoNorm = ($txt -replace "`r`n", "`n").TrimEnd()
+      if ($localNorm -ne $repoNorm) {
+        $bkFile = Join-Path (Join-Path $BackupDir 'settings') (Split-Path -Leaf $m.Src)
+        [void]$overwriteItems.Add([pscustomobject][ordered]@{ repo = $m.Repo; src = $m.Src; label = $m.Label; backup = $bkFile })
+      }
+    }
+  }
   $dir = Split-Path -Parent $m.Src
   if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
   [IO.File]::WriteAllText($m.Src, $expanded, (New-Object Text.UTF8Encoding($false)))
@@ -877,6 +900,22 @@ if ($pendingItems.Count -gt 0) {
   Warn ("有 " + $pendingItems.Count + " 项配置等待确认路径，本次未写入。已记到 " + $pf + "，到面板「本机路径」选好目录，之后再拉取一次即可。")
 } elseif (Test-SyncGroupEnabled $Scope 'settings') {
   Clear-PendingPaths $DshHome
+}
+# 覆盖报告：本机这些文件在本次拉取里被仓库版本整份盖掉了（备份路径一并写进去，方便回退）
+$overwriteReport = Join-Path $DshHome 'config-sync-overwrite.json'
+if ($overwriteItems.Count -gt 0) {
+  $ovObj = [ordered]@{
+    at    = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
+    total = $overwriteItems.Count
+    items = @($overwriteItems)
+  }
+  [IO.File]::WriteAllText($overwriteReport, ($ovObj | ConvertTo-Json -Depth 5), (New-Object Text.UTF8Encoding($false)))
+  Warn ("有 " + $overwriteItems.Count + " 份配置被仓库版本覆盖（本机改动已先备份）：")
+  foreach ($it in @($overwriteItems | Select-Object -First 5)) { Warn ("  - " + $it.label + "：" + $it.repo + "（备份 " + $it.backup + "）") }
+  if ($overwriteItems.Count -gt 5) { Warn ("  …还有 " + ($overwriteItems.Count - 5) + " 份，清单：" + $overwriteReport) }
+  Warn "  想保留本机改动就先「推送」再「拉取」，别反过来。"
+} else {
+  if (Test-Path -LiteralPath $overwriteReport) { try { Remove-Item -LiteralPath $overwriteReport -Force } catch { } }
 }
 
 # ---------- 7.5. 还原记忆插件数据目录 mnemon ----------

@@ -207,6 +207,12 @@ dsh plugin add https://raw.githubusercontent.com/QcWyGm/dsh-config-sync/main/rel
 - 面板「本机路径」卡把这些项列出来，填好本机路径 → 保存 → 重新拉取一次就写进去。
 - 确认过的值优先于自动探测，之后不再问；根都对不上的情况下**宁可不写**——把 `{{ROOT:xxx}}` 字面量写进配置，插件读到会当真实路径，那种报错比「没写」难查得多。
 
+### 两条体检：推送后看根外路径，拉取前看你改没改（0.3.36 起）
+
+**推送之后（capture.ps1 末尾）**：扫一遍仓库里的 `settings\*.json`、`profile\*.yml`、`workspace\*.json`，把**不属于任何已确认根**的绝对路径抓出来——比如仓库里还写着 `F:\workspace-new`（本机根都在 `D:\` 下，这条换台机器就是死路径）。抓到就写 `~\.dsh\config-sync-absolute-paths.json`，面板「本机路径」卡列前几条，控制台也 `Warn` 一句。**不拦提交**：路径本来就可能是对的，只是提醒你它跨不了机器。要清掉就把那个目录加成「自选目录」（`{{ROOT:<key>}}`），再推送一次，占位符化之后就跟着机器走了。
+
+**拉取之前（apply.ps1 写 settings 前）**：铺配置是整份 `WriteAllText` 覆盖，你改完路径没推送就点拉取，改动会被静默盖回去（备份是有的，但没人会去翻 `~\.dsh\backups\config-<时间戳>\settings\`）。所以现在覆盖前先比一次：本机现状（归一化成占位符、CRLF 拉平成 LF、`our-free-model.json` 的 `catalogSyncedAt/reloadedAt/reloadCount` 一起置 0 对齐 capture 的写法）跟仓库版本不一样，就记进 `~\.dsh\config-sync-overwrite.json`，面板提示「有 N 份配置被仓库版本覆盖（本机改动已先备份）」，每条带备份路径。想保住本机改动：**先推送，再拉取**，别反过来。
+
 ### 「本机路径」卡怎么用（0.3.34 起：只读 + 修改）
 
 - **默认只读**：三行根（`{{APP_ROOT}}` / `{{DSH_HOME}}` / `{{WORKSPACE_HOME}}`）用等宽字显示当前值，下面一行灰字是它对应的占位符；自选目录（`{{ROOT:<key>}}`）同样展示。
@@ -337,8 +343,8 @@ https://raw.githubusercontent.com/QcWyGm/dsh-config-sync/main/market-index.json
 
 | 接口 | 说明 |
 |---|---|
-| `GET /config-sync/status` | 体检 JSON（含 `repo.source` / `repo.configured` / `repo.phase` / `repo.empty` / `repo.pushAllowed` / `repo.pullAllowed`、`remote.configured`、`remote.backupRoot` / `remote.backupRootCustom`、`backup.{root,defaultRoot,custom,count,latest,latestFiles,snapshots:[{name,dir,at,files,bytes,usable,plugins,bundles}]}`、`local.{lastSyncAt,pending,sample}`、`auto.lastResult`） |
-| `POST /config-sync/prepare` | `{action:'push'\|'pull'\|'restore'\|'restore-backup'\|'all', message?, backupDir?}`，生成对应 `.cmd`；`all` 返回 `built: [...]`（本机仓库为空时自动降级为 `['pull','restore']` 并回 `skipped: ['push']`）；`push` 在空目录上直接 400；`restore-backup` 必须给 `backupDir`（须是备份根之下、含 `profile\package.json` 的一份快照） |
+| `GET /config-sync/status` | 体检 JSON（含 `repo.source` / `repo.configured` / `repo.phase` / `repo.empty` / `repo.remoteHeads` / `repo.remoteFiles` / `repo.pushAllowed` / `repo.pullAllowed`、`remote.configured`、`remote.backupRoot` / `remote.backupRootCustom`、`backup.{root,defaultRoot,custom,count,latest,latestFiles,snapshots:[{name,dir,at,files,bytes,usable,plugins,bundles}]}`、`local.{lastSyncAt,pending,sample}`、`auto.lastResult`） |
+| `POST /config-sync/prepare` | `{action:'push'\|'pull'\|'restore'\|'restore-backup'\|'all', message?, backupDir?}`，生成对应 `.cmd`；`all` 返回 `built: [...]`（本机仓库为空时按云端文件数分流：都空 → `['push','restore']`、云端有内容 → `['pull','restore']`，另一个进 `skipped`）；空目录上 `push` 只在云端 0 文件时放行（那次就是初始化推送），`pull` 也只在云端有文件时放行；`restore-backup` 必须给 `backupDir`（须是备份根之下、含 `profile\package.json` 的一份快照） |
 | `POST /config-sync/settings` | `{repoPath?, remoteUrl?, sshKey?, autoPull?, autoPush?, autoRestart?, backupRoot?, clearBackupRoot?}`：校验 → 写设置 →（地址变了才动 git），失败回滚并 400；`backupRoot` 留空/`clearBackupRoot` = 回默认 `~\.dsh\backups`；空目录可以存，只有"有别的文件又不像仓库"才拒 |
 | `POST /config-sync/auto` | `{action:'check'\|'pull-now'\|'push-now'\|'restore-preview'\|'restore-now'\|'cancel', backupDir?, closeNow?, restart?}`；`check` 只读 fetch 比对（本机仓库为空时短路返回 `pendingPull: true` 而不是报错），`pull-now`/`push-now`/`restore-now` 都不带 `/F` 关闭客户端（走正常退出，配置能存下来）；`push-now` 在空目录上 400；`restore-preview` 只读算差异（`pluginsRemove` / `pluginsInstall` / `willRemove` / `willOverwrite` / `willWrite`），`restore-now` 才是排队「退出后时点还原」；`status` 里 `auto.pending` 带 `reason`（为什么排队） |
 | `GET/POST /config-sync/update` | `{action:'check'\|'install-live'\|'restart'\|'apply'}`：`check` 重新读清单（多源依次试）；`install-live` 运行中下载+校验+覆盖安装（不退出 DSH，回 `installed` 与 `restartRequired`）；`restart` 排队 relaunch 后关闭 DSH；`apply` 是「退出 DSH 后再安装」的兜底 |
@@ -346,7 +352,7 @@ https://raw.githubusercontent.com/QcWyGm/dsh-config-sync/main/market-index.json
 
 跨站请求 403。客户端只 `fetch` 这几条，不 import 任何 `@deepseek-ai/dsh-client-*`，样式只用 `--dsw-alias-*` token。
 
-路径：仓库按上面的优先级；客户端根 `config.appRoot` 优先，留空则由插件自身位置推出（插件装在 `<AppRoot>\dsh-config-sync-0.1.0`），换机不用改；`.dsh` 为 `config.dshHome` → `%DSH_HOME%` → `~\.dsh`。同步状态文件 `~\.dsh\config-sync-state.json` 由 `sync.ps1` 写，插件只读。
+路径：仓库按上面的优先级；客户端根 `config.appRoot` 优先，留空则由插件自身位置推出（插件装在 `<AppRoot>\dsh-config-sync-0.1.0`），换机不用改；`.dsh` 为 `config.dshHome` → `%DSH_HOME%` → `~\.dsh`。同步状态文件 `~\.dsh\config-sync-state.json` 由 `sync.ps1` 写，插件只读。本机私有文件：`config-sync-roots.json`（已确认的路径根）、`config-sync-pending-paths.json`（缺根跳过的项）、`config-sync-absolute-paths.json`（0.3.36：推送后扫出的根外绝对路径）、`config-sync-overwrite.json`（0.3.36：拉取覆盖了哪些本机配置 + 备份路径）。
 
 **边界**：`capture` 要读 `cordis.patch.yml`，DSH 运行时这个文件正被应用持有，抓到的是半截状态；`apply` 写完以后，DSH 退出时又会回写覆盖。所以边界固定为：判断该跑什么、把命令写好，退出 DSH 后双击跑。同步机制、目录结构、换机与排障的完整说明在配置仓库根 `README.md`，本文只讲插件自身。
 
@@ -364,6 +370,8 @@ https://raw.githubusercontent.com/QcWyGm/dsh-config-sync/main/market-index.json
 | 插件目录已存在就跳过部署，tgz 更新了本机还是旧代码 | `apply.ps1` 比归档内 `package.json` 的 version 与已部署目录的 version（0.3.29 起；之前比 mtime，被 git checkout 刷时间害得每轮误判），不同才改名 `.bak-<时间戳>` 备份后重新部署 |
 | 开了"退出时自动推送"却什么都不发生（无日志、无结果文件） | 两个叠因：①排队判据只看 `ahead > 0`，新会话还没 capture 时恒为 0 → 改成三个来源都算 + 每 2 分钟复查；②`spawn` 假成功（`detached` 起 powershell 当场退出 / `spawn` 失败只在 `error` 事件报）→ 改用 `Start-Process` 起独立进程 + 等 launcher 退出码 + 写 `auto-sync-launch.log` |
 | 空目录被当成"仓库坏了"，面板红字 + 推送按钮可点但必失败 | 0.3.26 起按 `repo.phase` 分四态：空目录只放行拉取，`prepare(push)` / `push-now` / `sync.ps1 push` 三层都拦住 |
+| 「云端到底有没有东西可拉」看分支数 → 远端 `main` 还在、树被删空了仍被判「有内容，只许拉取」，拉下来是空目录、状态不动，初始化推送入口永不出现（死循环，实测 Gitee 上就是这情形：98 个提交、最后 12 个全是"删除文件"、最新树 0 文件） | 0.3.36 起判据换成**分支树里的文件数**：`ls-remote --heads` 先数分支（0 个直接算空），有分支才临时 bare 仓库 `fetch --depth 1 --filter=blob:none` + `ls-tree -r` 数文件，探完删目录；`remoteFiles===0` 一律算「两边都空」→ 只放行推送，且 `sync.ps1` 用 `--force-with-lease` 覆盖那个空分支（树是空的，不丢数据） |
+| 拉取整份覆盖 settings，改完路径没推送就拉取 → 刚改的值被静默盖回去（只有备份目录，没有提示） | 0.3.36 起覆盖前比对（归一化成占位符 + CRLF 拉平 + `our-free-model.json` 三个时间戳字段一起置 0），不同就写 `config-sync-overwrite.json` 并在面板/控制台说「有 N 份被覆盖、本机改动已先备份」 |
 
 会话 header `cwd`、空快照兜底、`Get-FileHash` 缺失这几类问题由仓库里的 `apply.ps1` / `restore.ps1` / `dsh-sync-common.ps1` 处理，细节见根 `README.md` 第 5、10 节。
 

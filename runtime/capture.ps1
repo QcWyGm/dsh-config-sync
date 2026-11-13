@@ -857,4 +857,66 @@ if ($changed.Count -eq 0) {
   Say "另一台机器：powershell -File .\sync.ps1 pull"
 }
 
+# 7) 根外绝对路径体检（0.3.36 起）
+#    仓库里的配置本该只剩占位符；如果还留着「不属于任何已确认根」的绝对路径，
+#    换台机器 pull 下来就是一条死路径（比如 F:\workspace）。这里扫一遍记成清单，
+#    面板「本机路径」卡会把它列出来 —— 不拦提交，只让人看见。
+function Write-OutsideRootReport {
+  $rr = Get-SyncRoots $DshHome $AppRoot $WorkspaceHome
+  $norm = New-Object System.Collections.ArrayList
+  foreach ($v in @($rr.appRoot, $rr.dshHome, $rr.workspaceHome)) {
+    if ($v) { [void]$norm.Add((([string]$v).Replace('\', '/').TrimEnd('/')).ToLowerInvariant()) }
+  }
+  if ($rr.custom) {
+    if ($rr.custom -is [System.Collections.IDictionary]) {
+      foreach ($k in @($rr.custom.Keys)) {
+        $v = [string]$rr.custom[$k]
+        if ($v) { [void]$norm.Add((v.Replace('\', '/').TrimEnd('/')).ToLowerInvariant()) }
+      }
+    } else {
+      foreach ($p in @($rr.custom.PSObject.Properties)) {
+        $v = [string]$p.Value
+        if ($v) { [void]$norm.Add(($v.Replace('\', '/').TrimEnd('/')).ToLowerInvariant()) }
+      }
+    }
+  }
+  $seen = @{}
+  $items = New-Object System.Collections.ArrayList
+  $files = @(Get-ChildItem -LiteralPath $RepoRoot -Recurse -File -Force -ErrorAction SilentlyContinue |
+    Where-Object {
+      $_.FullName -notmatch '[\\/]\.git[\\/]' -and $_.Length -lt 4194304 -and
+      ($_.Extension -eq '.json' -or $_.Extension -eq '.jsonc' -or $_.Extension -eq '.yml' -or $_.Extension -eq '.yaml')
+    })
+  foreach ($f in $files) {
+    $txt = ''
+    try { $txt = [IO.File]::ReadAllText($f.FullName) } catch { continue }
+    foreach ($m in [regex]::Matches($txt, '[A-Za-z]:[\\/][^"\s,;:}{\[\]]+')) {
+      $raw = $m.Value
+      $p = $raw.Replace('\', '/')
+      $pn = $p.ToLowerInvariant()
+      $inside = $false
+      foreach ($r in $norm) { if ($r -and ($pn -eq $r -or $pn.StartsWith($r + '/') -or $pn.StartsWith($r + '\'))) { $inside = $true; break } }
+      if ($inside) { continue }
+      $rel = $f.FullName.Substring($RepoRoot.Length).TrimStart('\', '/').Replace('\', '/')
+      $key = $rel + '|' + $pn
+      if ($seen.ContainsKey($key)) { continue }
+      $seen[$key] = $true
+      if ($items.Count -lt 50) { [void]$items.Add([pscustomobject][ordered]@{ file = $rel; path = $p }) }
+    }
+  }
+  $reportPath = Join-Path $DshHome 'config-sync-absolute-paths.json'
+  if ($items.Count -eq 0) {
+    if (Test-Path -LiteralPath $reportPath) { try { Remove-Item -LiteralPath $reportPath -Force } catch { } }
+    return
+  }
+  $obj = [ordered]@{ at = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'); total = $items.Count; items = @($items) }
+  [IO.File]::WriteAllText($reportPath, ($obj | ConvertTo-Json -Depth 5), (New-Object Text.UTF8Encoding($false)))
+  Warn ("有 " + $items.Count + " 处绝对路径不在任何已确认根下：换机器拉取后会指向不存在的目录。")
+  Warn ("  清单：" + $reportPath + "（面板「本机路径」卡会列出来）")
+  foreach ($it in @($items | Select-Object -First 5)) { Warn ("  - " + $it.file + " → " + $it.path) }
+  if ($items.Count -gt 5) { Warn ("  …还有 " + ($items.Count - 5) + " 处") }
+}
+
+Write-OutsideRootReport
+
 exit 0

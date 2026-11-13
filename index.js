@@ -20,8 +20,8 @@ import { AsyncLocalStorage } from 'node:async_hooks'
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { createRequire } from 'node:module'
-import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
-import { homedir, hostname } from 'node:os'
+import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, readSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
+import { homedir, hostname, tmpdir } from 'node:os'
 import { basename, dirname, isAbsolute, join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -398,18 +398,21 @@ function git(repo, args) {
 }
 
 /**
- * 云端仓库有几个分支。只服务一处判断：本机还是空目录时，云端到底有没有东西可拉 ——
- * 0 表示空仓库（可以走「初始化推送」），null 表示判不了（离线/认证失败/没配地址）。
- * 判不了时宁可按老规矩只允许拉取，也不要在盲状态下开推送。
- * 用 ls-remote 而不是 fetch：纯查询，不写本地 refs，也不会在仓库目录里留下半截状态。
+ * 云端仓库到底有没有「可拉的内容」。
+ * 之前只看分支数（ls-remote --heads），结果踩了个大坑：远端 main 还在、树却被删空了，
+ * 分支数=1 → 判「有内容，只许拉取」，可拉下来是个空目录，状态永远停在 await-pull，
+ * 初始化推送的入口也永远不出现，人就被卡死。所以真正的判据是「分支指向的树里有没有文件」。
+ *
+ * 分两步，省网络：
+ *   1) ls-remote --heads 数分支 —— 0 个分支直接就是空仓库，不用再 fetch 了；
+ *   2) 有分支才探树：临时 bare 仓库 fetch --depth 1（优先 --filter=blob:none 只取树对象，
+ *      远端不支持就退回普通浅取），再 ls-tree 数文件。探测完删掉临时目录，不碰用户仓库。
+ * 返回 { heads, files }：files===null 表示判不了（离线/认证失败/超时），调用方按保守处理。
  */
-const lsRemoteCache = new Map()
-function lsRemoteHeads(url, settings) {
-  if (!url) return Promise.resolve(null)
-  // 短缓存：面板会定时刷 status，空目录状态下每次都实测一次 ls-remote（最坏 15 秒超时）会把刷新拖住。
-  // 10 秒内的同一个地址直接复用上次答案；探不到（null）也缓存，免得离线时反复等超时。
-  const hit = lsRemoteCache.get(url)
-  if (hit && Date.now() - hit.at < 10000) return Promise.resolve(hit.heads)
+const remoteProbeCache = new Map()
+const REMOTE_PROBE_TTL = 60000
+
+function gitProbeEnv(settings) {
   const key = (settings && settings.sshKey) || defaultSshKey()
   const hasKey = Boolean(key) && isFile(key)
   const coreSsh = readSshCommandFromGitConfig('')
@@ -417,13 +420,61 @@ function lsRemoteHeads(url, settings) {
   const env = { ...process.env }
   if (hasKey && coreSsh) env.GIT_SSH_COMMAND = coreSsh
   else if (hasKey && sshExe) env.GIT_SSH_COMMAND = `"${sshExe}" -i "${key}" -o BatchMode=yes -o StrictHostKeyChecking=accept-new`
+  return env
+}
+
+/** 跑一次 git，返回 { ok, out }；失败不抛。 */
+function runGit(args, env, timeout = 20000) {
   return new Promise((resolve) => {
-    execFile(resolveGitExe(), ['ls-remote', '--heads', url], { windowsHide: true, timeout: 15000, env }, (err, stdout) => {
-      const heads = err ? null : String(stdout || '').split('\n').filter((line) => line.includes('refs/heads/')).length
-      lsRemoteCache.set(url, { at: Date.now(), heads })
-      resolve(heads)
+    execFile(resolveGitExe(), args, { windowsHide: true, timeout, env }, (err, stdout) => {
+      resolve({ ok: !err, out: String(stdout || '') })
     })
   })
+}
+
+function lsRemoteHeads(url, settings) {
+  return probeRemote(url, settings).then((p) => (p ? p.heads : null))
+}
+
+/** 临时 bare 仓库里数一次远端某个分支的文件数；失败返回 null。 */
+async function remoteFileCount(url, settings, quiet) {
+  const env = gitProbeEnv(settings)
+  let dir = ''
+  try {
+    dir = mkdtempSync(join(tmpdir(), 'dcs-probe-'))
+    if (!(await runGit(['init', '--bare', '--quiet', dir], env, 15000)).ok) return null
+    // 只取树对象；远端不认 partial clone 时退回普通浅取
+    let fetched = await runGit(['-C', dir, 'fetch', '--depth', '1', '--no-tags', '--filter=blob:none', url, 'HEAD'], env, 45000)
+    if (!fetched.ok) fetched = await runGit(['-C', dir, 'fetch', '--depth', '1', '--no-tags', url, 'HEAD'], env, 45000)
+    if (!fetched.ok) return null
+    const tree = await runGit(['-C', dir, 'ls-tree', '-r', '--name-only', 'FETCH_HEAD'], env, 15000)
+    if (!tree.ok) return null
+    const files = tree.out.split('\n').filter((line) => line.trim()).length
+    return files
+  } catch {
+    return null
+  } finally {
+    if (dir) { try { rmSync(dir, { recursive: true, force: true }) } catch { } }
+  }
+}
+
+async function probeRemote(url, settings) {
+  if (!url) return null
+  const hit = remoteProbeCache.get(url)
+  if (hit && Date.now() - hit.at < REMOTE_PROBE_TTL) return hit.value
+  // 先数分支（便宜），0 个分支就不用 fetch 了
+  const headsEnv = gitProbeEnv(settings)
+  const heads = await new Promise((resolve) => {
+    execFile(resolveGitExe(), ['ls-remote', '--heads', url], { windowsHide: true, timeout: 15000, env: headsEnv }, (err, stdout) => {
+      resolve(err ? null : String(stdout || '').split('\n').filter((line) => line.includes('refs/heads/')).length)
+    })
+  })
+  let value = null
+  if (heads === null) value = { heads: null, files: null }
+  else if (heads === 0) value = { heads: 0, files: 0 }
+  else value = { heads, files: await remoteFileCount(url, settings, 'quiet') }
+  remoteProbeCache.set(url, { at: Date.now(), value })
+  return value
 }
 
 function readBundles(profileDir) {
@@ -738,9 +789,12 @@ async function inspect(config) {
   const advice = []
   // 本机仓库处在哪个阶段：空白目录 = 等首次拉取，是正常状态，不该报异常
   const phase = repoPhase(repo)
-  // 云端有没有内容：只在本地仓库还没就位时才探（真仓库不需要每次刷面板都打一次网络）
+  // 云端有没有「可拉的内容」：只在本地仓库还没就位时才探（真仓库不需要每次刷面板都打一次网络）
   const remoteProbeUrl = gitRemoteUrl || settings.remoteUrl || ''
-  const remoteHeads = (remoteProbeUrl && phase !== 'ok') ? await lsRemoteHeads(remoteProbeUrl, settings) : null
+  const remoteProbe = (remoteProbeUrl && phase !== 'ok') ? await probeRemote(remoteProbeUrl, settings) : null
+  const remoteHeads = remoteProbe ? remoteProbe.heads : null
+  // 分支指向的树里有几个文件 —— 这才是「有没有内容」的真判据：分支还在但树被删空，等同空中空
+  const remoteFiles = remoteProbe ? remoteProbe.files : null
   if (!appRoot) {
     advice.push(t(
       '定位不到客户端根目录：插件不在 <客户端根> 下（如 D:\\DeepSeekHarness\\dsh-config-sync-0.1.0），'
@@ -758,10 +812,20 @@ async function inspect(config) {
     const where = phase === 'missing'
       ? t(`目录还不存在（${repo}）`, `the folder does not exist yet (${repo})`)
       : t(`还是空目录（${repo}）`, `is still an empty folder (${repo})`)
-    if (remoteHeads === 0) {
+    if (remoteFiles === 0) {
       advice.push(t(
         `本机仓库${where}，云端仓库也还没有任何内容：点「初始化推送」把本机配置当作初始内容推上去（自动 git init + capture + 提交 + 推送）`,
         `The local repo ${where} and the cloud has nothing yet: use "Initialize push" to upload this machine's config as the initial content (git init + capture + commit + push).`,
+      ))
+    } else if (remoteFiles === null && remoteHeads === 0) {
+      advice.push(t(
+        `本机仓库${where}，云端连不上/判不了（离线或认证失败）：按老规矩先只允许拉取`,
+        `The local repo ${where} and the cloud cannot be determined (offline or auth failure): only Pull is allowed, as before.`,
+      ))
+    } else if (remoteHeads !== null && remoteHeads > 0 && remoteFiles === 0) {
+      advice.push(t(
+        `云端仓库只有分支、里面一个文件都没有（历史被删空了）：点「初始化推送」可以把本机配置重新推成初始内容`,
+        `The cloud repo has a branch but not a single file (its history was emptied): use "Initialize push" to upload this machine's config as the initial content again.`,
       ))
     } else {
       advice.push(t(
@@ -839,16 +903,21 @@ async function inspect(config) {
       empty: phase === 'empty',
       // 云端仓库的分支数：0=空仓库，null=没探成（离线/认证失败/真仓库时不探）
       remoteHeads,
-      remoteEmpty: remoteHeads === 0,
+      // 分支树里的文件数：0=有分支但内容为空（历史被删空也算），null=判不了
+      remoteFiles,
+      // 「云端有没有东西可拉」的真判据——不是分支数，是树里的文件数
+      remoteEmpty: remoteFiles === 0,
       // 仓库三态，面板据此决定强调哪个按钮：
       //   ok         真仓库，推送/拉取都行
       //   await-pull 本机空、云端有内容 → 只允许拉取
-      //   await-init 两边都空 → 只允许推送，而且这次推送就是「初始化推送」
-      mode: phase === 'ok' ? 'ok' : (remoteHeads === 0 ? 'await-init' : 'await-pull'),
-      // 推送：真仓库，或「空目录 + 云端也空」的首次推送（目录不存在时先让用户设好路径，不在这里放开）
-      pushAllowed: phase === 'ok' || (phase === 'empty' && remoteHeads === 0),
-      // 拉取：真仓库，或空目录/没建目录且云端有内容（sync.ps1 的 Initialize-RepoIfNeeded 会自动 init + fetch + checkout）
-      pullAllowed: phase === 'ok' || ((phase === 'empty' || phase === 'missing') && remoteHeads !== 0),
+      //   await-init 两边都空（含「云端只剩空分支」）→ 只允许推送，而且这次推送就是「初始化推送」
+      mode: phase === 'ok'
+        ? 'ok'
+        : (remoteFiles === 0 ? 'await-init' : 'await-pull'),
+      // 推送：真仓库，或「空目录 + 云端确实没文件」的首次推送（判不了时不放行，宁可按老规矩只拉）
+      pushAllowed: phase === 'ok' || (phase === 'empty' && remoteFiles === 0),
+      // 拉取：真仓库，或空目录/没建目录且云端确实有文件（sync.ps1 的 Initialize-RepoIfNeeded 会自动 init + fetch + checkout）
+      pullAllowed: phase === 'ok' || ((phase === 'empty' || phase === 'missing') && remoteFiles !== 0),
       // 路径是怎么来的：settings=本机设置（面板可改）、config=插件配置、env=环境变量、auto=自动探测、none=没配
       source: resolved.source,
       configured: Boolean(settings.repoPath || config?.repoPath),
@@ -2676,21 +2745,22 @@ async function handleAuto(req, res, config) {
 
     if (action === 'pull-now' || action === 'push-now') {
       const mode = action === 'pull-now' ? 'pull' : 'push'
-      // 推送的门禁：真仓库直接推；本机还是空的，只有「云端也空」才能推 —— 那次推送就是初始化推送。
-      // 云端已有内容时拒绝，让用户先拉取（否则本机状态会被写进一份已经在用的历史里）。
+      // 推送的门禁：真仓库直接推；本机还是空的，只有「云端确实没有文件」才能推 —— 那次推送就是初始化推送。
+      // 云端已有文件时拒绝，让用户先拉取（否则本机状态会被写进一份已经在用的历史里）。
+      // 注意判据是「树里有文件」而不是「有分支」：远端可能只剩一个空分支，那也是空仓库，可以初始化推送。
       if (mode === 'push' && repoPhase(repo) !== 'ok') {
         const url = (await git(repo, ['remote', 'get-url', 'origin'])) || settings.remoteUrl || ''
-        const heads = await lsRemoteHeads(url, settings)
-        if (heads === null) {
+        const probe = await probeRemote(url, settings)
+        if (!probe || probe.files === null) {
           throw new Error(t(
             `连不上云端、或还没有云端仓库地址（${url || '未配置'}）：初始化推送要先确认云端是空仓库`,
             `Cannot reach the cloud or no remote URL is set (${url || 'not set'}): initialize push needs to confirm the cloud repo is still empty.`,
           ))
         }
-        if (heads > 0) {
+        if (probe.files > 0) {
           throw new Error(t(
-            `云端仓库已经有内容（${heads} 个分支）：本机还是空的，先「拉取」把内容拉下来，再生成推送`,
-            `The cloud repo already has content (${heads} branch(es)): run Pull to fetch it first, then push.`,
+            `云端仓库已经有内容（${probe.files} 个文件）：本机还是空的，先「拉取」把内容拉下来，再生成推送`,
+            `The cloud repo already has content (${probe.files} file(s)): run Pull to fetch it first, then push.`,
           ))
         }
       }
@@ -2838,26 +2908,46 @@ async function handlePrepare(req, res, config) {
     const phase = repoPhase(repo)
     // 本机还没内容时，先问一次云端：云端也空 = 只能「初始化推送」，云端有内容 = 只能拉取。
     // 一次请求算清楚，下面 push 门禁、all 的脚本组合、bootstrap 说明都用这同一个答案。
+    // 判据是「云端分支树里有没有文件」——远端只剩空分支时也算空仓库（历史被删空就是这个样子）。
     const probeSettings = readSettings(dshHome)
+    let remoteFilesForPrepare = null
     let remoteHeadsForPrepare = null
     if (phase !== 'ok') {
       const probeUrl = (await git(repo, ['remote', 'get-url', 'origin'])) || probeSettings.remoteUrl || ''
-      remoteHeadsForPrepare = await lsRemoteHeads(probeUrl, probeSettings)
+      const probe = await probeRemote(probeUrl, probeSettings)
+      remoteFilesForPrepare = probe ? probe.files : null
+      remoteHeadsForPrepare = probe ? probe.heads : null
     }
     // 空白文件夹（或还没建）代表「本机还没有仓库内容」：能不能推，取决于云端有没有内容 ——
     //   云端也空 → 允许，这次推送就是「初始化推送」（sync.ps1 会 git init + 写骨架 + capture + 提交 + 推）
     //   云端有内容 → 拒绝，先拉取（硬推会把本机状态写进一份正在使用的历史）
     if (action === 'push' && phase !== 'ok') {
-      if (remoteHeadsForPrepare === null) {
+      if (remoteFilesForPrepare === null) {
         throw new Error(t(
           `连不上云端仓库（${probeSettings.remoteUrl || '还没配地址'}）：初始化推送要先确认云端是空仓库，请先确认地址与网络`,
           `Cannot reach the cloud repo (${probeSettings.remoteUrl || 'no URL configured'}): initialize push needs to confirm the cloud repo is empty — check the URL and network.`,
         ))
       }
-      if (remoteHeadsForPrepare > 0) {
+      if (remoteFilesForPrepare > 0) {
         throw new Error(t(
-          `云端仓库已经有内容（${remoteHeadsForPrepare} 个分支）：本机还是空的，先执行「拉取」把内容拉下来，之后才能推送`,
-          `The cloud repo already has content (${remoteHeadsForPrepare} branch(es)): run Pull first to bring it down, then push.`,
+          `云端仓库已经有内容（${remoteFilesForPrepare} 个文件）：本机还是空的，先执行「拉取」把内容拉下来，之后才能推送`,
+          `The cloud repo already has content (${remoteFilesForPrepare} file(s)): run Pull first to bring it down, then push.`,
+        ))
+      }
+    }
+    // 反过来：云端也空的时候不许生成拉取脚本 —— 拉下来只会得到一个空目录 + .git，
+    // 面板状态原地不动，人以为「同步过了」，实际什么都没下来。两边都空只走「推送（初始化）」。
+    if (action === 'pull' && phase !== 'ok') {
+      if (remoteFilesForPrepare === null) {
+        throw new Error(t(
+          '连不上云端仓库（' + (probeSettings.remoteUrl || '还没配地址') + '）：先确认地址与网络，再生成拉取脚本',
+          'Cannot reach the cloud repo (' + (probeSettings.remoteUrl || 'no URL configured') + '): check the URL and network before generating the pull script.',
+        ))
+      }
+      if (remoteFilesForPrepare === 0) {
+        throw new Error(t(
+          '云端仓库里一个文件都没有，没有内容可拉：本机和云端都空时请用「推送」（那次就是初始化推送）',
+          'The cloud repo has no file at all, so there is nothing to pull: when both sides are empty, use Push (that run initializes the repo).',
         ))
       }
     }
@@ -2891,16 +2981,18 @@ async function handlePrepare(req, res, config) {
       backupDir = resolveSnapshotDir(dshHome, body.backupDir)
     }
     const stateWithBackup = { ...state, backupDir }
+    // 「云端确实没有文件」——包括远端只剩空分支（历史被删空的现场）→ 都算可以初始化推送
+    const cloudEmptyForPrepare = remoteFilesForPrepare === 0
     const bootstrap = repoReady ? null : {
       repo,
-      initPush: phase !== 'ok' && remoteHeadsForPrepare === 0,
+      initPush: phase !== 'ok' && cloudEmptyForPrepare,
       note: t(
-        remoteHeadsForPrepare === 0
+        cloudEmptyForPrepare
           ? '本机仓库和云端仓库都还是空的：点「推送」即「初始化推送」——会 git init、写出仓库骨架（apply/capture/sync 等执行体与版本契约）并把本机配置作为初始内容提交推送'
           : (phase === 'empty'
             ? '本机仓库是空目录：点「拉取」会用插件自带的 runtime 从云端把仓库内容拉到这个路径（拉完就能正常推送/拉取）'
             : '本机还没有这个仓库（或还没克隆）：生成的三份脚本先用插件自带的 runtime，第一次执行拉取会自动从云端克隆到该目录'),
-        remoteHeadsForPrepare === 0
+        cloudEmptyForPrepare
           ? 'Both the local repo and the cloud are empty: Push becomes Initialize push — it runs git init, writes the repo skeleton (apply/capture/sync bodies plus the version contract) and commits this machine\'s config as the initial content.'
           : (phase === 'empty'
             ? 'The local repo folder is empty: Pull uses the bundled runtime to fetch the repo from the cloud into that path (after that, push/pull work normally).'
@@ -2911,8 +3003,8 @@ async function handlePrepare(req, res, config) {
       // 脚本怎么组合，跟门禁同一套口径：真仓库全给；两边都空只给「推送（初始化）+ 还原」；
       // 本机空云端有内容只给「拉取 + 还原」。面板上的「一键生成」按同一份规则显示按钮文案。
       const wanted = phase === 'ok' ? ['push', 'pull', 'restore']
-        : (remoteHeadsForPrepare === 0 ? ['push', 'restore'] : ['pull', 'restore'])
-      const skipped = phase === 'ok' ? [] : (remoteHeadsForPrepare === 0 ? ['pull'] : ['push'])
+        : (cloudEmptyForPrepare ? ['push', 'restore'] : ['pull', 'restore'])
+      const skipped = phase === 'ok' ? [] : (cloudEmptyForPrepare ? ['pull'] : ['push'])
       const built = wanted.map((a) => buildCmd(config, a, repo, appRoot, dshHome, state))
       sendJson(res, 200, { ok: true, action, built, bootstrap, skipped })
       return
@@ -2932,6 +3024,8 @@ async function handlePrepare(req, res, config) {
  */
 function rootsPathOf(dshHome) { return join(dshHome, 'config-sync-roots.json') }
 function pendingPathOf(dshHome) { return join(dshHome, 'config-sync-pending-paths.json') }
+function absolutePathsPathOf(dshHome) { return join(dshHome, 'config-sync-absolute-paths.json') }
+function overwritePathOf(dshHome) { return join(dshHome, 'config-sync-overwrite.json') }
 
 /** 工作区根：本机工作区一般建在同一层，取登记表里出现最多的那个父目录 */
 function guessWorkspaceHome(dshHome) {
@@ -2969,6 +3063,11 @@ async function handleRoots(req, res, config) {
       }
       const pending = readJson(pendingPathOf(dshHome)) || {}
       const missing = Array.isArray(pending.missing) ? pending.missing : []
+      // 两份体检报告（0.3.36 起）：推送时扫出的「根外绝对路径」、拉取时扫出的「被覆盖的本机配置」
+      const absReport = readJson(absolutePathsPathOf(dshHome)) || {}
+      const absItems = Array.isArray(absReport.items) ? absReport.items : []
+      const ovReport = readJson(overwritePathOf(dshHome)) || {}
+      const ovItems = Array.isArray(ovReport.items) ? ovReport.items : []
       sendJson(res, 200, {
         ok: true,
         roots: {
@@ -2993,6 +3092,20 @@ async function handleRoots(req, res, config) {
           label: String(m.label || ''),
           hint: String(m.hint || tokenHint(m.token)),
         })),
+        // 根外绝对路径：这些路径不在任何已确认根下，换机器拉取会指向不存在的目录
+        absolutePaths: {
+          at: String(absReport.at || ''),
+          total: absItems.length,
+          items: absItems.slice(0, 20).map((it) => ({ file: String(it.file || ''), path: String(it.path || '') })),
+        },
+        // 上次拉取覆盖了哪些本机配置（含备份路径）：本机有未推送改动时会出现
+        overwrite: {
+          at: String(ovReport.at || ''),
+          total: ovItems.length,
+          items: ovItems.slice(0, 20).map((it) => ({
+            repo: String(it.repo || ''), label: String(it.label || ''), src: String(it.src || ''), backup: String(it.backup || ''),
+          })),
+        },
         file: rootsPathOf(dshHome),
       })
     } catch (error) {

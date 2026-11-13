@@ -461,6 +461,34 @@ function Get-RemoteHeads([string]$RemoteUrl) {
   return @($out -split "`n" | Where-Object { $_ -match 'refs/heads/' }).Count
 }
 
+function Get-RemoteFileCount([string]$RemoteUrl, [int]$Heads = -2) {
+  # 「云端有没有可拉的内容」不能看分支数：远端 main 还在、树被删空了，照样是个空仓库。
+  # 真判据是分支树里的文件数。做法：临时 bare 仓库浅取一次再 ls-tree，探完删掉，不碰用户仓库。
+  # 返回 -1 = 判不了（连不上/认证失败/没配地址）。
+  if (-not $RemoteUrl) { return -1 }
+  $h = if ($Heads -eq -2) { Get-RemoteHeads $RemoteUrl } else { $Heads }
+  if ($h -lt 0) { return -1 }
+  if ($h -eq 0) { return 0 }
+  $tmp = Join-Path ([IO.Path]::GetTempPath()) ('dcs-probe-' + [Guid]::NewGuid().ToString('N').Substring(0, 10))
+  try {
+    & "$env:ComSpec" /c ('"' + $git + '" init --bare --quiet "' + $tmp + '" 2>&1') | Out-Null
+    if ($LASTEXITCODE -ne 0) { return -1 }
+    # 优先只取树对象（partial clone）；远端不认就退回普通浅取
+    $line = '"' + $git + '" -C "' + $tmp + '" fetch --depth 1 --no-tags --filter=blob:none "' + $RemoteUrl + '" HEAD 2>&1'
+    & "$env:ComSpec" /c $line | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+      $line = '"' + $git + '" -C "' + $tmp + '" fetch --depth 1 --no-tags "' + $RemoteUrl + '" HEAD 2>&1'
+      & "$env:ComSpec" /c $line | Out-Null
+      if ($LASTEXITCODE -ne 0) { return -1 }
+    }
+    $treeLine = '"' + $git + '" -C "' + $tmp + '" ls-tree -r --name-only FETCH_HEAD 2>nul'
+    $out = (@(& "$env:ComSpec" /c $treeLine) -join "`n")
+    return @($out -split "`n" | Where-Object { $_ -and ([string]$_).Trim() }).Count
+  } finally {
+    if (Test-Path -LiteralPath $tmp) { try { Remove-Item -LiteralPath $tmp -Recurse -Force } catch { } }
+  }
+}
+
 <#
   初始化推送：本机空目录 + 云端空仓库，把本机配置当作仓库的初始内容推上去。
   骨架要一起带进仓库 —— 历史仓库本来就有 apply.ps1 / capture.ps1 / dsh-sync-common.ps1 这几份副本，
@@ -589,6 +617,7 @@ if ($Action -eq 'push') {
   }
   if (-not $remoteUrlForPush) { $remoteUrlForPush = Get-SettingsRemoteUrl }
   $hasCommit = $false
+  $remoteHadEmptyBranch = $false
   if ($hasGit) {
     $probe = @(& "$env:ComSpec" /c ('"' + $git + '" -C "' + $RepoRoot + '" rev-parse --verify HEAD 2>nul'))
     $hasCommit = (($probe -join '').Trim().Length -gt 0)
@@ -604,15 +633,23 @@ if ($Action -eq 'push') {
         Die "已停止（未抓取、未提交、未推送）。请在面板「本机仓库」里重新设路径。"
       }
     }
-    $heads = Get-RemoteHeads $remoteUrlForPush
-    if ($heads -lt 0) {
+    $headsForPush = Get-RemoteHeads $remoteUrlForPush
+    $remoteFiles = Get-RemoteFileCount $remoteUrlForPush $headsForPush
+    if ($remoteFiles -lt 0) {
       Warn "连不上云端、或还没配云端地址（$remoteUrlForPush）：初始化推送要先确认云端是空仓库"
       Die "已停止（未抓取、未提交、未推送）。请先确认「云端仓库」里的地址能访问，再重跑。"
     }
-    if ($heads -gt 0) {
-      Warn "云端仓库已经有内容（$heads 个分支）：本机还是空的，应该先拉取，而不是推送"
+    if ($remoteFiles -gt 0) {
+      Warn "云端仓库已经有内容（$remoteFiles 个文件）：本机还是空的，应该先拉取，而不是推送"
       Warn "硬推会把本机状态写进一份正在使用的历史里；新机器请点「立即拉取」"
       Die "已停止（未抓取、未提交、未推送）。"
+    }
+    # 远端已经有分支、但树里一个文件都没有（历史被删空过）：这次推送要覆盖那个空分支。
+    # 树是空的，没有任何数据可丢，所以用 --force-with-lease（仍带远端 ref 校验，比 --force 安全）。
+    if ($headsForPush -gt 0) {
+      $remoteHadEmptyBranch = $true
+      Say ""
+      Say ("  云端已有 $headsForPush 个分支，但里面没有任何文件（历史被删空）——本次推送会覆盖这个空分支，不丢数据")
     }
     Initialize-EmptyRepo $remoteUrlForPush
   } else {
@@ -672,11 +709,13 @@ if ($Action -eq 'push') {
   $bs = Get-BranchUpstream
   $branch = $bs.Branch
   $upstream = $bs.Upstream
+  # 覆盖「有分支但空树」的远端：本地是全新历史，和远端没有共同祖先，不加 force 会被 non-fast-forward 拒。
+  $forceFlag = if ($remoteHadEmptyBranch) { ' --force-with-lease' } else { '' }
   if ($upstream) {
-    $pushLine = '"' + $git + '" -C "' + $RepoRoot + '" push 2>&1'
+    $pushLine = '"' + $git + '" -C "' + $RepoRoot + '" push' + $forceFlag + ' 2>&1'
   } else {
     Say "  当前分支 $branch 还没有 upstream，推送时一并建立 origin/$branch"
-    $pushLine = '"' + $git + '" -C "' + $RepoRoot + '" push -u origin "' + $branch + '" 2>&1'
+    $pushLine = '"' + $git + '" -C "' + $RepoRoot + '" push' + $forceFlag + ' -u origin "' + $branch + '" 2>&1'
   }
   & "$env:ComSpec" /c $pushLine | Write-Host
   if ($LASTEXITCODE -ne 0) { Die "git push 失败（网络/认证）。改动已提交在本地，修好网络后重跑：git -C `"$RepoRoot`" push；若是 GIT_SSH_COMMAND 问题，先确认它第一个词是 ssh.exe 本体" }
