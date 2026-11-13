@@ -27,6 +27,15 @@
       },
       "versions": [
         {
+          "version": "0.3.28",
+          "publishTimestamp": 1794540554,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/QcWyGm/dsh-config-sync",
+            "commit": "164b533de40eeb71579c36c1957804f898279a74"
+          }
+        },
+        {
           "version": "0.3.27",
           "publishTimestamp": 1794538977,
           "source": {
@@ -43,7 +52,8 @@
             "url": "https://github.com/QcWyGm/dsh-config-sync",
             "commit": "7eaa2a369fae6c1c0c11f60034dea772c3a1f35d"
           }
-        },        {
+        },
+        {
           "version": "0.3.25",
           "publishTimestamp": 1794497666,
           "source": {
@@ -51,7 +61,8 @@
             "url": "https://github.com/QcWyGm/dsh-config-sync",
             "commit": "20aa3671d0f01d82f5c5c805cfa23e8d0536d2df"
           }
-        },        {
+        },
+        {
           "version": "0.3.24",
           "publishTimestamp": 1794494566,
           "source": {
@@ -59,7 +70,8 @@
             "url": "https://github.com/QcWyGm/dsh-config-sync",
             "commit": "201da72e66d771458e3f954f9f751d6cb06f2f34"
           }
-        },        {
+        },
+        {
           "version": "0.3.23",
           "publishTimestamp": 1794491867,
           "source": {
@@ -67,7 +79,8 @@
             "url": "https://github.com/QcWyGm/dsh-config-sync",
             "commit": "f08c79f43c2e73e98cdfddde893311c5a18f0281"
           }
-        },        {
+        },
+        {
           "version": "0.3.22",
           "publishTimestamp": 1794490814,
           "source": {
@@ -84,7 +97,8 @@
             "url": "https://github.com/QcWyGm/dsh-config-sync",
             "commit": "741ad9acf2e27e3d99f5f49d01478ac2c924f2fb"
           }
-        },        {
+        },
+        {
           "version": "0.3.20",
           "publishTimestamp": 1794489194,
           "source": {
@@ -92,7 +106,8 @@
             "url": "https://github.com/QcWyGm/dsh-config-sync",
             "commit": "7dfefb46350bd2361bb57ede74ca4263ea8f0fe5"
           }
-        },        {
+        },
+        {
           "version": "0.3.18",
           "publishTimestamp": 1794488206,
           "source": {
