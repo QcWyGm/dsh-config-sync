@@ -16,8 +16,8 @@
         "zh": "配置同步"
       },
       "description": {
-        "en": "Inspect the state of a DSH config repo versus this machine, and generate post-exit push/pull/restore scripts.",
-        "zh": "在 DSH 面板里查看配置仓库与本机的同步状态，并生成退出后执行的推送/拉取/还原脚本。"
+        "zh": "多机 DSH 配置同步：本机与云端仓库的差异一目了然——改了哪些文件、提交领先还是落后、哪些会话和技能还没同步，一键生成退出后执行的推送、拉取、还原脚本。拉取被本地改动挡住时两侧都留底、逐项选保留哪边；每次应用前自动备份，配置快照、插件备份、会话备份都能一键还原，装坏的插件也能整份回滚。仅限 Windows（脚本为 PowerShell）。",
+        "en": "Multi-machine DSH config sync: see exactly how this machine differs from the cloud config repo — changed files, commits ahead or behind, sessions and skills not synced yet — then generate the push, pull and restore scripts that run after the client exits. A blocked pull keeps both sides and lets you pick file by file; every apply snapshots the profile first, and config snapshots, plugin backups and session backups all restore in one click, including rolling back a broken plugin install. Windows only (the scripts are PowerShell)."
       },
       "icon": "https://raw.githubusercontent.com/QcWyGm/dsh-config-sync/main/docs/panel.png",
       "author": "QcWyGm",
@@ -26,6 +26,15 @@
         "url": "https://github.com/QcWyGm/dsh-config-sync"
       },
       "versions": [
+        {
+          "version": "0.3.49",
+          "publishTimestamp": 1794671288,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/QcWyGm/dsh-config-sync",
+            "commit": "1abf25209013e845ce83d6951863a48b7a0afc22"
+          }
+        },
         {
           "version": "0.3.48",
           "publishTimestamp": 1794668425,
