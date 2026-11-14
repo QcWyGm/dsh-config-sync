@@ -793,6 +793,7 @@ window.__ModuleLoader__.load({
       const [made, setMade] = react.useState(null)
       const [confirm, setConfirm] = react.useState(null)   // { snap, preview }：确认环节
       const [queued, setQueued] = react.useState(null)     // restore-now 的排队结果
+      const [manual, setManual] = react.useState(null)     // 认不出类型时的「手动还原」指引
 
       const startEdit = () => { setRoot(remote.backupRootCustom ? (remote.backupRoot || '') : ''); setErr(''); setMsg(''); setEditing(true) }
       const cancelEdit = () => { setEditing(false); setErr(''); setMsg('') }
@@ -855,6 +856,37 @@ window.__ModuleLoader__.load({
         return `${v} B`
       }
 
+      /**
+       * 快照类型。备份根 ~\.dsh\backups 是**三用途共用**的：
+       *   配置快照（能回到某个时间点）/ 插件本体备份（能回滚插件）/ 会话目录备份（能还原会话）
+       * 0.3.49 起三类都给还原入口；认不出类型的（冲突对照、手工拷来的）给手动还原指引 —— 不留死路。
+       */
+      const KIND_ZH = { profile: '配置', plugin: '插件', session: '会话', other: '其它' }
+      const KIND_EN = { profile: 'config', plugin: 'plugin', session: 'session', other: 'other' }
+      const kindOf = (s) => ((s && s.kind) || 'profile')
+      const kindLabel = (k) => M(KIND_ZH[k] || KIND_ZH.other, KIND_EN[k] || KIND_EN.other)
+      const kindBadge = (k) => h('span', {
+        style: {
+          ...S.hint,
+          padding: '0 5px', borderRadius: '4px', lineHeight: '16px',
+          border: '1px solid var(--dsw-alias-border-l1)',
+          color: k === 'other' ? 'var(--dsw-alias-label-secondary)' : 'var(--dsw-alias-label-primary)',
+        },
+      }, kindLabel(k))
+      const snapSummary = (s) => {
+        const k = kindOf(s)
+        if (k === 'profile') return M(`${s.plugins || 0} 个插件`, `${s.plugins || 0} plugins`)
+        const n = Number(s.entries || 0)
+        if (k === 'plugin') return M(`插件本体 ${n} 项`, `plugin files, ${n} items`)
+        if (k === 'session') return M(`${n} 个会话目录`, `${n} session folders`)
+        return M(`认不出类型，${n} 项`, `unrecognised, ${n} items`)
+      }
+      // 「手动还原」指引里的目标位置：认不出类型时按内容猜不到，索性把三类常见落点都摆出来
+      const manualTargets = () => [
+        M('插件本体 → 插件安装目录（如 D:\\DeepSeekHarness\\dsh-config-sync-0.1.0）', 'Plugin files → the plugin install folder (e.g. D:\\DeepSeekHarness\\dsh-config-sync-0.1.0)'),
+        M('会话目录（--xxx--）→ ~\\.dsh\\sessions', 'Session folders (--xxx--) → ~\\.dsh\\sessions'),
+        M('配置五件套（package.json / pnpm-lock.yaml / cordis.yml…）→ ~\\.dsh\\profiles\\desktop', 'Config files (package.json / pnpm-lock.yaml / cordis.yml…) → ~\\.dsh\\profiles\\desktop'),
+      ]
       const rows = snapshots.length
         ? h('div', { style: { maxHeight: '260px', overflowY: 'auto', display: 'flex', flexDirection: 'column' } },
           snapshots.map((s) => h('div', {
@@ -866,18 +898,26 @@ window.__ModuleLoader__.load({
             },
           },
           h('div', { style: { display: 'flex', flexDirection: 'column', gap: '2px', minWidth: 0, flex: 1 } },
-            h('div', {
-              style: { fontSize: '12px', lineHeight: '18px', color: 'var(--dsw-alias-label-primary)', fontFamily: 'Consolas, ui-monospace, monospace', wordBreak: 'break-all' },
-            }, s.name),
+            h('div', { style: { display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' } },
+              kindBadge(kindOf(s)),
+              h('div', {
+                style: { fontSize: '12px', lineHeight: '18px', color: 'var(--dsw-alias-label-primary)', fontFamily: 'Consolas, ui-monospace, monospace', wordBreak: 'break-all' },
+              }, s.name)),
             h('div', { style: S.hint },
-              M(
-                `${when(s.at)} · ${rel(s.at)}${s.plugins ? ` · ${s.plugins} 个插件` : ''}${s.files ? ` · ${s.files} 个文件 / ${size(s.bytes)}` : ''}${s.usable === false ? ' · 没有 profile 文件，不能还原' : ''}`,
-                `${when(s.at)} · ${rel(s.at)}${s.plugins ? ` · ${s.plugins} plugins` : ''}${s.files ? ` · ${s.files} files / ${size(s.bytes)}` : ''}${s.usable === false ? ' · no profile files, cannot restore' : ''}`,
-              )),
+              `${when(s.at)} · ${rel(s.at)} · ${snapSummary(s)}`
+              + (kindOf(s) !== 'profile' && s.entryNames && s.entryNames.length
+                ? M('（含 ', ' (contains ') + s.entryNames.slice(0, 3).join('、') + (Number(s.entries) > 3 ? '…' : '') + M('）', ')')
+                : '')),
           ),
-          s.usable === false
-            ? h('button', { type: 'button', style: { ...S.btn, opacity: 0.5, cursor: 'not-allowed' }, disabled: true }, M('不可还原', 'Unusable'))
-            : h('button', { type: 'button', style: S.btn, disabled: busy, onClick: () => askRestore(s) }, M('立即还原', 'Restore now')),
+          kindOf(s) === 'other'
+            // 认不出类型的备份也给入口：弹一段「手动还原」指引（路径 + 里面有什么 + 该拷到哪）
+            ? h('button', { type: 'button', style: S.btn, disabled: busy, onClick: () => setManual(s) }, M('手动还原', 'How to restore'))
+            : (s.usable === false
+              ? h('button', { type: 'button', style: { ...S.btn, opacity: 0.5, cursor: 'not-allowed' }, disabled: true }, M('空备份', 'Empty backup'))
+              : h('button', { type: 'button', style: S.btn, disabled: busy, onClick: () => askRestore(s) },
+                kindOf(s) === 'plugin' ? M('回滚插件', 'Roll back plugin')
+                  : (kindOf(s) === 'session' ? M('还原会话', 'Restore sessions') : M('立即还原', 'Restore now')),
+              )),
           )))
         : h('div', { style: S.hint }, backup.exists
           ? M('这个备份目录下还没有快照（apply.ps1 每次拉取/落地之前都会打一份）', 'No snapshots in this backup folder yet (apply.ps1 makes one before every pull/apply)')
@@ -905,17 +945,54 @@ window.__ModuleLoader__.load({
       const pvOverwrite = pv.willOverwrite || []
       const pvWrite = pv.willWrite || []
 
-      const confirmBlock = confirm
+      const confirmKind = confirm ? kindOf(confirm.snap) : 'profile'
+      const boxStyle = {
+        display: 'flex', flexDirection: 'column', gap: '5px',
+        padding: '9px 11px', borderRadius: '8px',
+        border: '1px solid var(--dsw-alias-border-l1)',
+        background: 'var(--dsw-alias-bg-module-platform)',
+      }
+      const confirmTitle = !confirm ? '' : (confirmKind === 'plugin'
+        ? M(`确认把插件回滚到 ${confirm.snap.name}？`, `Roll the plugin back to ${confirm.snap.name}?`)
+        : (confirmKind === 'session'
+          ? M(`确认还原会话备份 ${confirm.snap.name}？`, `Restore session backup ${confirm.snap.name}?`)
+          : M(`确认还原到 ${confirm.snap.name}？`, `Restore to ${confirm.snap.name}?`)))
+      const confirmPrimary = confirmKind === 'plugin'
+        ? M('确认回滚插件', 'Confirm plugin rollback')
+        : (confirmKind === 'session' ? M('确认还原会话', 'Confirm session restore') : M('确认还原', 'Confirm restore'))
+
+      // 插件 / 会话备份的确认块：只讲「写到哪、写几个、先备份到哪」，不给 willRemove —— 它们不是时点回退
+      const kindConfirmBlock = (confirm && confirmKind !== 'profile')
+        ? h('div', { style: boxStyle },
+          h('div', { style: { ...S.cardTitle, fontSize: '13px' } }, confirmTitle),
+          h('div', { style: S.hint }, M(
+            `备份时间 ${when(confirm.snap.at)}（${rel(confirm.snap.at)}）· ${snapSummary(confirm.snap)}`,
+            `Backup ${when(confirm.snap.at)} (${rel(confirm.snap.at)}) · ${snapSummary(confirm.snap)}`,
+          )),
+          listBox(M(`将写回到：${pv.target || ''}`, `Writing back into: ${pv.target || ''}`), pv.source ? [pv.source] : [], 'var(--dsw-alias-label-secondary)'),
+          listBox(M(`会写回 ${Number(pv.total || 0)} 项`, `Writing back ${Number(pv.total || 0)} item(s)`), pv.items || []),
+          h('div', { style: S.hint }, pv.note || ''),
+          h('div', { style: S.hint }, M(
+            `动手前先整份备份当前位置到 ${pv.backupTo || 'backups\\<自动命名>'}，不满意还能再退回来。`,
+            `The current location is copied to ${pv.backupTo || 'backups\\<auto-named>'} first, so you can undo it.`,
+          )),
+          h('div', { style: { ...S.hint, color: 'var(--dsw-alias-state-warning-primary)' } }, M(
+            '确认后：客户端正常退出 → 弹出进度窗口执行 → 完成后自动重启客户端。',
+            'After confirming: the client closes normally, a progress window runs it, then the client restarts automatically.',
+          )),
+          h('div', { style: S.actions },
+            h('button', { type: 'button', style: S.btnPrimary, disabled: busy, onClick: doRestore },
+              busy ? M('排队中…', 'Queuing…') : confirmPrimary),
+            h('button', { type: 'button', style: S.btn, disabled: busy, onClick: () => setConfirm(null) }, M('取消', 'Cancel')),
+          ),
+        )
+        : null
+
+      const confirmBlock = (confirm && confirmKind === 'profile')
         ? h('div', {
-          style: {
-            display: 'flex', flexDirection: 'column', gap: '5px',
-            padding: '9px 11px', borderRadius: '8px',
-            border: '1px solid var(--dsw-alias-border-l1)',
-            background: 'var(--dsw-alias-bg-module-platform)',
-          },
+          style: boxStyle,
         },
-        h('div', { style: { ...S.cardTitle, fontSize: '13px' } },
-          M(`确认还原到 ${confirm.snap.name}？`, `Restore to ${confirm.snap.name}?`)),
+        h('div', { style: { ...S.cardTitle, fontSize: '13px' } }, confirmTitle),
         h('div', { style: S.hint }, M(
           `快照时间 ${when(confirm.snap.at)}（${rel(confirm.snap.at)}）· ${confirm.snap.files || 0} 个文件 · ${size(confirm.snap.bytes)} · ${confirm.snap.plugins || 0} 个插件`,
           `Snapshot ${when(confirm.snap.at)} (${rel(confirm.snap.at)}) · ${confirm.snap.files || 0} files · ${size(confirm.snap.bytes)} · ${confirm.snap.plugins || 0} plugins`,
@@ -949,6 +1026,36 @@ window.__ModuleLoader__.load({
             busy ? M('排队中…', 'Queuing…') : M('确认还原', 'Confirm restore')),
           h('button', { type: 'button', style: S.btn, disabled: busy, onClick: () => setConfirm(null) }, M('取消', 'Cancel')),
         ),
+        )
+        : null
+
+      /**
+       * 认不出类型的备份也不是死路：弹出「手动还原」指引 ——
+       * 备份位置、里面有什么、按内容对照目标位置、拷之前先另存。
+       * 不硬猜目标：猜错一次就是把 profile 覆盖成插件包（0.3.48 前那类误判的教训）。
+       */
+      const manualBlock = manual
+        ? h('div', { style: boxStyle },
+          h('div', { style: { ...S.cardTitle, fontSize: '13px' } }, M(`手动还原：${manual.name}`, `Manual restore: ${manual.name}`)),
+          h('div', {
+            style: { ...S.hint, fontFamily: 'Consolas, ui-monospace, monospace', wordBreak: 'break-all' },
+          }, M(`备份位置：${manual.dir}`, `Backup path: ${manual.dir}`)),
+          h('div', { style: { ...S.hint, color: 'var(--dsw-alias-state-warning-primary)' } }, M(
+            '这份备份认不出类型，自动还原不知道该写回哪，按下面三步手动拷：',
+            'This backup cannot be classified, so there is no automatic target. Copy it by hand:',
+          )),
+          h('div', { style: S.hint }, M('1. 先完全退出 DSH —— 配置、插件、会话在运行时都被客户端持有。', '1. Quit DSH completely — config, plugins and sessions are held while it runs.')),
+          h('div', { style: S.hint }, M('2. 打开上面的备份目录，按里面的内容对照目标位置：', '2. Open the backup folder and match its contents to a target:')),
+          manualTargets().map((line, i) => h('div', { key: 'mt' + i, style: { ...S.hint, paddingLeft: '12px' } }, line)),
+          manual.entryNames && manual.entryNames.length
+            ? h('div', {
+              style: { ...S.hint, paddingLeft: '12px', fontFamily: 'Consolas, ui-monospace, monospace', wordBreak: 'break-all' },
+            }, M('这份里看到：', 'Contains: ') + manual.entryNames.join('  ·  '))
+            : null,
+          h('div', { style: S.hint }, M('3. 拷之前把目标位置现有文件另存一份；拷完重启客户端。', '3. Back up the target first, then copy and restart the client.')),
+          h('div', { style: S.actions },
+            h('button', { type: 'button', style: S.btn, disabled: busy, onClick: () => setManual(null) }, M('知道了', 'Got it')),
+          ),
         )
         : null
 
@@ -998,6 +1105,8 @@ window.__ModuleLoader__.load({
         ),
         rows,
         confirmBlock,
+        kindConfirmBlock,
+        manualBlock,
         queuedBlock,
         lastRestoreBlock,
         made
@@ -1014,8 +1123,10 @@ window.__ModuleLoader__.load({
         err ? h('div', { style: { ...S.footnote, color: 'var(--dsw-alias-state-error-primary)' } }, M(`操作失败：${err}`, `Failed: ${err}`)) : null,
         msg ? h('div', { style: { ...S.footnote, color: 'var(--dsw-alias-state-success-primary)' } }, msg) : null,
         h('div', { style: S.footnote }, M(
-          '留空 = 默认 ~\\.dsh\\backups；只能选该目录下的快照。「立即还原」= 回到该时间点：配置写回，快照之后新增的文件与插件一并撤走（移进 backups\\manual-<时间戳> 的 rollback 备份，可再还原）。',
-          'Empty = default ~\\.dsh\\backups; only snapshots inside it are offered. "Restore now" rolls back to that point: config is written back and anything added afterwards is moved into the rollback folder under backups\\manual-<timestamp>, so it can be restored again.',
+          '留空 = 默认 ~\\.dsh\\backups；只能选该目录下的备份。备份根里混着三类：配置快照（回到该时间点，之后新增的文件与插件移进 rollback，可再还原）· 插件备份（回滚插件本体）· 会话备份（把会话目录写回）。'
+          + '认不出类型的给「手动还原」指引（路径 + 里面有什么 + 该拷到哪）。每类动手前都先把当前位置整份备份，不留糊涂账。',
+          'Empty = default ~\\.dsh\\backups; only backups inside it are offered. Three kinds share this folder: config snapshots (roll back to that point; later additions move into the rollback folder and stay restorable), plugin backups (roll the plugin itself back), session backups (write session folders back).'
+          + ' Anything unrecognised gets a manual restore hint (path, contents, and where to copy). Every kind backs up the current state first.',
         )),
       )
     }

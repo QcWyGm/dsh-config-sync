@@ -38,6 +38,8 @@ const ROUTE_CONFLICT = '/config-sync/conflict'
 const ROUTE_ROOTS = '/config-sync/roots'
 const ROUTE_FEEDBACK = '/config-sync/feedback'
 const SETTINGS_NAME = 'dsh-config-sync.json'
+/** 本插件自己的安装目录（插件根，含 runtime\ 与 index.js）—— 插件备份还原时的目标。 */
+const PLUGIN_ROOT = fileURLToPath(new URL('.', import.meta.url)).replace(/[\\/]+$/, '')
 
 /**
  * 双语：面板是中文还是英文，跟客户端语言走（客户端每个请求都带 accept-language）。
@@ -605,6 +607,51 @@ function missingDeps(deps, profileDir) {
 }
 
 /**
+ * 读快照根上的 package.json（没有或读不动就 null）。
+ * 不用 isFile 单独判：Windows 上目录同名也会让 isFile 真，读一次最省事也最准。
+ */
+function readSnapshotPkg(dir) {
+  try { return JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8')) } catch { return null }
+}
+
+/**
+ * 一份备份快照到底是「哪一类备份」。
+ *
+ * 备份根 ~\.dsh\backups 是**多用途共用**的，不只是配置快照：
+ *   profile  apply / restore 打的整份配置快照     顶层 package.json，name = dsh-profile-<名字>，带 dependencies
+ *   plugin   插件自更新前打的插件本体备份          顶层 package.json，name = dsh-config-sync（带 dsh 字段），
+ *                                                  或只有一个 dsh-config-sync-<ver>\ 子目录（半截残留）
+ *   session  修会话前的会话目录备份                顶层全是 --<路径编码>-- 目录
+ *   other    冲突对照 / 手工拷来的 / 认不出来的     只给手动还原指引
+ *
+ * 为什么不能只看「有没有 package.json」：插件包自己也带 package.json，
+ * 按那个判据会把插件备份当成配置快照，还原时把插件的 package.json 写进 profile，依赖清单直接丢。
+ */
+function classifySnapshot(name, dir) {
+  const pkg = readSnapshotPkg(dir)
+  const pkgName = String((pkg && pkg.name) || '')
+  // profile 优先：profile 的 package.json 里**也有** dsh 字段（dsh.profile.bundles），
+  // 拿 dsh 判插件会把整份配置快照误判成插件备份 —— 实测 config-* / manual-* 全部中招。
+  if (pkg && (/^dsh-profile-/i.test(pkgName) || (pkg.dsh && pkg.dsh.profile))) return 'profile'
+  if (pkg && pkgName === PACKAGE_ID) return 'plugin'
+  if (pkg && pkg.dependencies) return 'profile'
+  if (pkg && pkg.dsh) return 'plugin'
+  let entries = []
+  try { entries = readdirSync(dir, { withFileTypes: true }) } catch { return 'other' }
+  if (entries.length) {
+    // 会话目录在 sessions 下是 --<路径编码>--，原样被拷进快照
+    if (entries.every((e) => e.isDirectory() && /^--.*--$/.test(e.name))) return 'session'
+    if (entries.some((e) => e.isFile() && e.name === 'client.js') || entries.some((e) => e.isDirectory() && e.name === 'runtime')) return 'plugin'
+    if (entries.length === 1 && entries[0].isDirectory() && /^dsh-config-sync/i.test(entries[0].name)) return 'plugin'
+  }
+  // 名字兜底：目录名本身就是产出来源（空目录 / 半截残留也认得出是哪类）
+  if (/^plugin-/i.test(name)) return 'plugin'
+  if (/^session/i.test(name)) return 'session'
+  if (/^config-|^manual-/i.test(name)) return 'profile'
+  return 'other'
+}
+
+/**
  * 还原会用到的快照。规则与 restore.ps1 保持一致：不加 -BackupDir 时取
  * 「备份根」下按修改时间最新的一份；备份根默认 <DshHome>\backups，可在面板里改。
  * 返回的不只是"最新一份"：面板要列出所有快照让人挑，所以带上全量列表（最多 60 份）。
@@ -625,9 +672,9 @@ function inspectBackup(dshHome, rootOverride) {
       // 列表只给「名字 + 时间 + 插件数 + 能不能还原」，体积交给资源管理器。
       let plugins = 0
       let bundles = 0
-      // 只有落过 profile 的快照能用来还原配置（新机器首次拉取时 apply 会留下空快照）
-      const hasProfile = isFile(join(dir, 'package.json'))
-      // 快照里装了哪些插件（依赖数 + bundles 数）：面板要显示"23 个插件"，也是算差异的依据
+      // 先分类，再决定怎么解析：只有 profile 快照的 package.json 才有「插件数」这层含义
+      const kind = classifySnapshot(name, dir)
+      const hasProfile = kind === 'profile' && isFile(join(dir, 'package.json'))
       if (hasProfile) {
         try {
           const pkg = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8'))
@@ -635,13 +682,40 @@ function inspectBackup(dshHome, rootOverride) {
           bundles = Array.isArray(pkg?.dsh?.profile?.bundles) ? pkg.dsh.profile.bundles.length : 0
         } catch { }
       }
-      all.push({ name, dir, at: st.mtimeMs, files: null, bytes: null, hasProfile, plugins, bundles })
+      // 非 profile 快照：顶层条目数就是「里面有几个东西」，面板上直接给个数（不递归，不拖慢刷新）
+      let entries = null
+      let entryNames = null
+      if (!hasProfile) {
+        try {
+          const list = readdirSync(dir, { withFileTypes: true })
+          entries = list.length
+          entryNames = list.slice(0, 6).map((e) => e.name)
+        } catch { }
+      }
+      all.push({ name, dir, at: st.mtimeMs, files: null, bytes: null, hasProfile, plugins, bundles, kind, entries, entryNames })
     } catch { }
   }
   all.sort((a, b) => b.at - a.at)
   if (!all.length) return { ...empty, exists: true }
   const usable = all.filter((x) => x.hasProfile)
   const latestPick = usable[0] || all[0]
+  const shape = (x) => ({
+    name: x.name,
+    dir: x.dir,
+    at: x.at,
+    files: x.files,
+    bytes: x.bytes,
+    // usable = 能一键还原。
+    //   profile：必须有 package.json（otherwise 那是空快照）
+    //   plugin / session：里面得真有东西（空目录还原只会得到一个空动作）
+    //   other：认不出类型 → 不给自动还原，面板改给「手动还原」指引
+    usable: x.kind === 'profile' ? x.hasProfile : (x.kind === 'plugin' || x.kind === 'session') ? (Number(x.entries || 0) > 0) : false,
+    kind: x.kind,
+    entries: x.entries,
+    entryNames: x.entryNames,
+    plugins: x.plugins,
+    bundles: x.bundles,
+  })
   return {
     root,
     defaultRoot,
@@ -651,8 +725,8 @@ function inspectBackup(dshHome, rootOverride) {
     latestAt: latestPick.at,
     count: all.length,
     latestFiles: latestPick.files,
-    candidates: all.slice(0, 8).map((x) => ({ name: x.name, dir: x.dir, at: x.at, files: x.files, bytes: x.bytes, usable: x.hasProfile, plugins: x.plugins, bundles: x.bundles })),
-    snapshots: all.slice(0, 60).map((x) => ({ name: x.name, dir: x.dir, at: x.at, files: x.files, bytes: x.bytes, usable: x.hasProfile, plugins: x.plugins, bundles: x.bundles })),
+    candidates: all.slice(0, 8).map(shape),
+    snapshots: all.slice(0, 60).map(shape),
   }
 }
 
@@ -745,8 +819,58 @@ function restorePreview(dshHome, snapshotDir, config) {
 }
 
 /**
- * 校验「要还原哪一份快照」：存在、在备份根之下、且带 profile 文件。
- * prepare（生成 cmd）与 restore-now（直接排队）共用，避免两处判断漂移。
+ * 插件备份 / 会话备份的还原预览。
+ *
+ * 这两类不是「回到某个时间点的 profile」，所以不复用 restorePreview 的差异口径：
+ *   plugin   把快照里的插件文件写回当前插件安装目录（先整份备份当前插件）
+ *   session  把快照里的 --<路径编码>-- 会话目录写回 ~\.dsh\sessions（先备份当前同名目录）
+ * 面板只需要「写到哪、写几个东西、先备份到哪」，不要给一堆 willRemove 让人误以为是时点回退。
+ */
+function restorePreviewForKind(snap, dshHome) {
+  const kind = snap.kind
+  if (kind === 'plugin') {
+    // 半截备份会多一层 dsh-config-sync-<ver>\：真正要写回的是里面的内容
+    let srcRoot = snap.dir
+    let entries = []
+    try { entries = readdirSync(srcRoot, { withFileTypes: true }) } catch { }
+    if (entries.length === 1 && entries[0].isDirectory() && /^dsh-config-sync/i.test(entries[0].name)) {
+      srcRoot = join(srcRoot, entries[0].name)
+      try { entries = readdirSync(srcRoot, { withFileTypes: true }) } catch { entries = [] }
+    }
+    return {
+      snapshot: snap.dir,
+      kind: 'plugin',
+      target: PLUGIN_ROOT,
+      source: srcRoot,
+      items: entries.slice(0, 40).map((e) => (e.isDirectory() ? e.name + '\\' : e.name)),
+      total: entries.length,
+      backupTo: join(dshHome, 'backups', `plugin-<当前版本>-<时间戳>`),
+      note: t(
+        '会把这份插件备份的文件写回当前插件安装目录，覆盖前先把当前插件整份备份成 plugin-<版本>-<时间戳>；还原后客户端重启才生效',
+        'This plugin backup will be written back into the current plugin folder. The current plugin is copied to plugin-<version>-<timestamp> first; the client must restart to pick it up.',
+      ),
+    }
+  }
+  let dirs = []
+  try { dirs = readdirSync(snap.dir, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name) } catch { }
+  return {
+    snapshot: snap.dir,
+    kind: 'session',
+    target: join(dshHome, 'sessions'),
+    items: dirs.slice(0, 40),
+    total: dirs.length,
+    backupTo: join(dshHome, 'backups', 'session-<时间戳>'),
+    note: t(
+      '会把这份备份里的会话目录写回 ~\\.dsh\\sessions，同名目录先整份备份成 session-<时间戳> 再覆盖；写回的是会话历史文件，不影响配置与插件',
+      'These session folders will be written back into ~\\.dsh\\sessions. Any folder with the same name is copied to session-<timestamp> first. Only conversation history is touched — config and plugins are not.',
+    ),
+  }
+}
+
+/**
+ * 校验「要还原哪一份快照」：存在、在备份根之下、能认出类型、按类型具备还原条件。
+ * prepare（生成 cmd）、restore-preview、restore-now 共用，避免三处判断漂移。
+ * 返回 { dir, kind }：kind = profile | plugin | session。
  */
 function resolveSnapshotDir(dshHome, backupDirRaw) {
   const backupDir = String(backupDirRaw || '').trim()
@@ -758,13 +882,22 @@ function resolveSnapshotDir(dshHome, backupDirRaw) {
   if (rel.startsWith('..') || rel === '' || isAbsolute(rel)) {
     throw new Error(t(`只能在备份根 ${root} 下选快照，不接受 ${backupDir}`, `Only snapshots under ${root} can be restored; refusing ${backupDir}`))
   }
-  if (!isFile(join(backupDir, 'package.json'))) {
+  const kind = classifySnapshot(basename(backupDir), backupDir)
+  if (kind === 'other') {
     throw new Error(t(
-      `这份快照里没有 profile 文件（package.json），还原会失败：${backupDir}`,
-      `That snapshot has no profile files (package.json) and cannot be restored: ${backupDir}`,
+      `这份备份认不出是哪一类（不是配置快照、插件备份或会话备份），不能自动还原：${backupDir}`
+      + '。请按面板「还原备份」里的手动还原指引，把里面的文件拷到对应位置',
+      `Cannot tell what this backup is (not a config snapshot, plugin backup or session backup), so it cannot be restored automatically: ${backupDir}`
+      + '. Follow the manual restore hint shown on the Restore card and copy the files into place yourself.',
     ))
   }
-  return backupDir
+  if (kind === 'profile' && !isFile(join(backupDir, 'package.json'))) {
+    throw new Error(t(
+      `这份配置快照里没有 profile 文件（package.json），还原会失败：${backupDir}`,
+      `This config snapshot has no profile files (package.json) and cannot be restored: ${backupDir}`,
+    ))
+  }
+  return { dir: backupDir, kind }
 }
 
 /**
@@ -1183,7 +1316,11 @@ function buildCmd(config, action, repo, appRoot, dshHome, state = {}) {
     const picked = String(state.backupDir || '')
     const pickedSnap = picked ? (backup.snapshots || []).find((s) => s.dir === picked) : null
     const backupArg = (picked || backup.latest) ? [`-BackupDir "${picked || backup.latest}"`] : []
-    const allArgs = [...common, ...backupArg]
+    // 指定的是插件备份 / 会话备份时，restore.ps1 要按类型走不同分支（默认 profile）
+    const kind = pickedSnap ? pickedSnap.kind : ''
+    const kindArg = kind && kind !== 'profile' ? [`-SnapshotKind "${kind}"`] : []
+    const pluginArg = kind === 'plugin' ? [`-PluginDir "${pluginRoot()}"`] : []
+    const allArgs = [...common, ...backupArg, ...kindArg, ...pluginArg]
     const dry = `${PS_EXE} -File "${restorePs1}" ${allArgs.join(' ')} -DryRun`
     const real = `${PS_EXE} -File "${restorePs1}" ${allArgs.join(' ')}`
     const backupLines = (picked || backup.latest)
@@ -1195,8 +1332,13 @@ function buildCmd(config, action, repo, appRoot, dshHome, state = {}) {
         `echo ${echoSafe(`备份快照：${backup.root}（生成脚本时这里还没有快照）`)}`,
         `echo ${echoSafe('执行时由 restore.ps1 自动取该目录下最新一份；若那时仍为空，会提示你先跑一次拉取。')}`,
       ]
+    const whatItDoes = kind === 'plugin'
+      ? t('把当前插件回滚到这份插件备份（先把当前插件整份备份，再覆盖）', 'Roll the plugin back to this plugin backup (the current plugin is copied aside first, then overwritten)')
+      : (kind === 'session'
+        ? t('把会话目录还原成这份会话备份（先把当前同名目录备份，再覆盖）', 'Restore the session folders from this backup (folders with the same name are copied aside first, then overwritten)')
+        : t('把本机 profile 退回到下面这个快照（先自保、再回退、再核对/重装依赖）。', 'Roll the local profile back to this snapshot (copy the current state aside, restore, then verify/reinstall dependencies).'))
     const text = [
-      ...cmdHead('把本机 profile 退回到下面这个快照（先自保、再回退、再核对/重装依赖）。'),
+      ...cmdHead(whatItDoes),
       ...backupLines,
       'echo.',
       'echo 要换成别的快照或仓库某提交，编辑本文件，把 -BackupDir 改掉或换成 -FromCommit。',
@@ -1221,7 +1363,10 @@ function buildCmd(config, action, repo, appRoot, dshHome, state = {}) {
     const fileName = pickedSnap ? `同步-还原-${pickedSnap.name}.cmd` : '同步-还原.cmd'
     const path = join(repo, fileName)
     writeFileSync(path, text, 'utf8')
-    return { action, label: t('还原（本机 → 快照）', 'Restore (machine → snapshot)'), path, command: real,
+    const label = kind === 'plugin'
+      ? t('还原（插件 → 备份版本）', 'Restore (plugin → backup)')
+      : (kind === 'session' ? t('还原（会话 → 备份）', 'Restore (sessions → backup)') : t('还原（本机 → 快照）', 'Restore (machine → snapshot)'))
+    return { action, label, path, command: real,
       backup: { dir: picked || backup.latest, root: backup.root, at: pickedSnap ? pickedSnap.at : backup.latestAt, count: backup.count, files: pickedSnap ? pickedSnap.files : backup.latestFiles } }
   }
 
@@ -2827,22 +2972,29 @@ async function handleAuto(req, res, config) {
     }
 
     if (action === 'restore-preview') {
-      const backupDir = resolveSnapshotDir(dshHome, body.backupDir)
-      sendJson(res, 200, { ok: true, action, preview: restorePreview(dshHome, backupDir, config) })
+      const snap = resolveSnapshotDir(dshHome, body.backupDir)
+      const preview = snap.kind === 'profile'
+        ? { ...restorePreview(dshHome, snap.dir, config), kind: 'profile' }
+        : restorePreviewForKind(snap, dshHome)
+      sendJson(res, 200, { ok: true, action, preview })
       return
     }
 
     if (action === 'restore-now') {
       // 直接排队「退出后还原」：和 pull-now 一条流水线，只是执行体换成 restore.ps1。
       // 面板点它之前会先弹确认框（预览差异），确认之后才走到这里。
-      const backupDir = resolveSnapshotDir(dshHome, body.backupDir)
+      // 类型决定 restore.ps1 走哪条分支：profile（时点回退）/ plugin（插件回滚）/ session（会话还原）。
+      const snap = resolveSnapshotDir(dshHome, body.backupDir)
       const restart = body.restart !== false && settings.autoRestart !== false
+      const extraArgs = ['-BackupDir', snap.dir]
+      if (snap.kind !== 'profile') extraArgs.push('-SnapshotKind', snap.kind)
+      if (snap.kind === 'plugin') extraArgs.push('-PluginDir', PLUGIN_ROOT)
       const started = await spawnWatcher({
         mode: 'restore', repo, appRoot, dshHome, restart,
-        extraArgs: ['-BackupDir', backupDir],
+        extraArgs,
       })
       if (!started.ok) throw new Error(started.error)
-      autoState.pending = { mode: 'restore', at: Date.now(), restart, watcherPid: started.pid, closeRequested: false, backupDir }
+      autoState.pending = { mode: 'restore', at: Date.now(), restart, watcherPid: started.pid, closeRequested: false, backupDir: snap.dir, snapshotKind: snap.kind }
       let closed = false
       if (body.closeNow !== false) {
         closed = closeDsh()
@@ -3085,11 +3237,14 @@ async function handlePrepare(req, res, config) {
     // 「还原备份」点某一行：备份目录必须是备份根之下真实存在的一份快照 ——
     // 面板传来的路径直接拼进 cmd，所以这里既校验存在，也校验不含引号/换行，避免生成出跑不起来的脚本。
     let backupDir = ''
+    let snapshotKind = ''
     if (action === 'restore-backup') {
-      // 与 restore-now 共用同一套校验：存在、在备份根之下、带 profile 文件
-      backupDir = resolveSnapshotDir(dshHome, body.backupDir)
+      // 与 restore-now 共用同一套校验：存在、在备份根之下、能认出类型（profile / plugin / session）
+      const snap = resolveSnapshotDir(dshHome, body.backupDir)
+      backupDir = snap.dir
+      snapshotKind = snap.kind
     }
-    const stateWithBackup = { ...state, backupDir }
+    const stateWithBackup = { ...state, backupDir, snapshotKind }
     // 「云端确实没有文件」——包括远端只剩空分支（历史被删空的现场）→ 都算可以初始化推送
     const cloudEmptyForPrepare = remoteFilesForPrepare === 0
     const bootstrap = repoReady ? null : {

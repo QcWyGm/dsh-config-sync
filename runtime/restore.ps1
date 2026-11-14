@@ -30,6 +30,11 @@ param(
   [switch]$WithMnemon,
   # 时点还原：把快照之后新增的文件 / 插件一并撤走（不是真删，移进 manual-<时间戳>\rollback，可再还原）
   [switch]$RollbackToPoint,
+  # 备份类型：profile=配置快照（时点回退，默认）；plugin=插件本体备份（回滚插件）；session=会话目录备份
+  [ValidateSet('profile', 'plugin', 'session')]
+  [string]$SnapshotKind = 'profile',
+  # plugin 还原的目标：当前插件安装目录（面板会传 <插件根>，不传就按 AppRoot 下最新的 dsh-config-sync* 探测）
+  [string]$PluginDir = '',
   [switch]$DryRun,
   [switch]$Force
 )
@@ -91,12 +96,120 @@ if ($proc -and -not $Force) {
   Die "DeepSeek Harness 仍在运行（PID: $(($proc.Id) -join ',')）。请完全退出（含托盘）后重试，或加 -Force 强制继续。"
 }
 if (-not (Test-Path -LiteralPath $RepoRoot)) { Warn "仓库目录不存在：$RepoRoot（仅 -FromCommit 需要它）" }
-if (-not (Test-Path -LiteralPath $ProfileDir)) {
+if ($SnapshotKind -eq 'profile' -and -not (Test-Path -LiteralPath $ProfileDir)) {
   if ($DryRun) { Say "  profile 目录不存在（还原时会新建）：$ProfileDir" }
   else {
     New-Item -ItemType Directory -Path $ProfileDir -Force | Out-Null
     Warn "profile 目录原本不存在，已新建：$ProfileDir"
   }
+}
+
+# ---------- 0. 插件备份 / 会话备份：不走 profile 那套时点回退，各自单独一条分支 ----------
+<#
+  备份根 ~\.dsh\backups 里混着三类东西（配置快照 / 插件本体备份 / 会话目录备份）。
+  0.3.49 起后两类也有还原入口：先整份备份当前状态，再写回，绝不物理删除。
+  为什么必须在 DSH 退出后跑：插件目录与 sessions 在客户端运行时被持有，边跑边写会被回写覆盖。
+#>
+function Get-PluginTarget([string]$explicit) {
+  if ($explicit -and (Test-Path -LiteralPath $explicit)) { return $explicit }
+  if ($AppRoot) {
+    $cands = @(Get-ChildItem -LiteralPath $AppRoot -Directory -Filter 'dsh-config-sync*' -ErrorAction SilentlyContinue |
+      Where-Object { -not $_.Name.EndsWith('.old') } | Sort-Object LastWriteTime -Descending)
+    if ($cands.Count -gt 0) { return $cands[0].FullName }
+  }
+  return ''
+}
+
+<#
+  目录合并复制：Copy-Item -Recurse 碰到"目标已有同名目录"时，会把整个源目录塞进去（得到 runtime\runtime），
+  实测插件回滚后 runtime\sync.ps1 根本没被覆盖。这里逐层走：同名目录递归合并，文件逐份覆盖。
+#>
+function Copy-Tree([string]$src, [string]$dst) {
+  if (-not (Test-Path -LiteralPath $dst)) { New-Item -ItemType Directory -Path $dst -Force | Out-Null }
+  foreach ($item in @(Get-ChildItem -LiteralPath $src -Force)) {
+    $to = Join-Path $dst $item.Name
+    if ($item.PSIsContainer) { Copy-Tree $item.FullName $to }
+    else { Copy-Item -LiteralPath $item.FullName -Destination $to -Force }
+  }
+}
+
+if ($SnapshotKind -eq 'plugin' -or $SnapshotKind -eq 'session') {
+  if (-not $BackupDir) { Die "-SnapshotKind $SnapshotKind 必须同时给 -BackupDir（哪一份备份）。面板上点该行还原时会自动带上。" }
+  if (-not (Test-Path -LiteralPath $BackupDir)) { Die "备份目录不存在：$BackupDir" }
+  $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+
+  if ($SnapshotKind -eq 'plugin') {
+    $target = Get-PluginTarget $PluginDir
+    if (-not $target) { Die "找不到要回滚的插件目录：请传 -PluginDir（例如 <客户端根>\dsh-config-sync-0.1.0）" }
+    Say "来源：插件备份 $BackupDir"
+    Say "目标：插件目录 $target"
+
+    # 插件安装失败的半截备份会多一层 dsh-config-sync-<ver>\：真正要写回的是里面的内容
+    $srcRoot = $BackupDir
+    $kids = @(Get-ChildItem -LiteralPath $srcRoot -Force -ErrorAction SilentlyContinue)
+    if ($kids.Count -eq 1 -and $kids[0].PSIsContainer -and $kids[0].Name -match '^dsh-config-sync') {
+      $srcRoot = $kids[0].FullName
+      $kids = @(Get-ChildItem -LiteralPath $srcRoot -Force -ErrorAction SilentlyContinue)
+      Say "备份里只有一层安装目录，取其内容：$srcRoot"
+    }
+    if ($kids.Count -eq 0) { Die "这份备份里没有任何文件：$BackupDir" }
+
+    $ver = 'unknown'
+    $pkgPath = Join-Path $target 'package.json'
+    if (Test-Path -LiteralPath $pkgPath) {
+      try { $ver = (Get-Content -LiteralPath $pkgPath -Raw -Encoding utf8 | ConvertFrom-Json).version } catch { }
+    }
+    $bk = Join-Path $DshHome ('backups\plugin-' + $ver + '-' + $stamp)
+    Say "先把当前插件备份到 $bk（回滚错了还能再回滚回来）"
+    if ($DryRun) {
+      foreach ($item in $kids) { Say ("  将写回 " + $item.Name) }
+      Ok "预览完成（未写任何文件）"
+      exit 0
+    }
+    New-Item -ItemType Directory -Path $bk -Force | Out-Null
+    # 当前插件整份留底（不删、只拷；用 Copy-Tree 才不会因为同名目录出现 runtime\runtime）
+    foreach ($item in @(Get-ChildItem -LiteralPath $target -Force)) {
+      $to = Join-Path $bk $item.Name
+      if ($item.PSIsContainer) { Copy-Tree $item.FullName $to }
+      else { Copy-Item -LiteralPath $item.FullName -Destination $to -Force }
+    }
+    $n = 0
+    foreach ($item in $kids) {
+      $to = Join-Path $target $item.Name
+      if ($item.PSIsContainer) { Copy-Tree $item.FullName $to }
+      else { Copy-Item -LiteralPath $item.FullName -Destination $to -Force }
+      $n++
+    }
+    Ok ("已把插件回滚到 {0} 的内容（{1} 个顶层条目）；当前插件已备份到 {2}" -f $BackupDir, $n, $bk)
+    Warn '重启客户端后生效（面板上的「退出后还原」会自动重启）'
+    exit 0
+  }
+
+  # session：把 --<路径编码>-- 会话目录写回 ~\.dsh\sessions
+  $sessions = Join-Path $DshHome 'sessions'
+  $dirs = @(Get-ChildItem -LiteralPath $BackupDir -Directory -Force -ErrorAction SilentlyContinue)
+  if ($dirs.Count -eq 0) { Die "这份备份里没有会话目录（顶层应为 --xxx-- 目录）：$BackupDir" }
+  Say "来源：会话备份 $BackupDir"
+  Say ("目标：会话目录 {0}（共 {1} 个会话目录）" -f $sessions, $dirs.Count)
+  $bk = Join-Path $DshHome ('backups\session-' + $stamp)
+  if ($DryRun) {
+    foreach ($d in $dirs) { Say ("  将写回 " + $d.Name) }
+    Ok "预览完成（未写任何文件）"
+    exit 0
+  }
+  if (-not (Test-Path -LiteralPath $sessions)) { New-Item -ItemType Directory -Path $sessions -Force | Out-Null }
+  New-Item -ItemType Directory -Path $bk -Force | Out-Null
+  $n = 0
+  foreach ($d in $dirs) {
+    $existing = Join-Path $sessions $d.Name
+    # 目标已存在：先整份留底（不删除，只多一份拷贝）
+    if (Test-Path -LiteralPath $existing) { Copy-Tree $existing (Join-Path $bk $d.Name) }
+    Copy-Tree $d.FullName $existing
+    $n++
+  }
+  Ok ("已把 {0} 个会话目录写回 {1}；同名目录先前的状态已备份到 {2}" -f $n, $sessions, $bk)
+  Warn '重启客户端后可在这台机器的会话列表里看到还原后的会话'
+  exit 0
 }
 
 # ---------- 1. 确定还原来源 ----------

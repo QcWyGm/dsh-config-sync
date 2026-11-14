@@ -820,16 +820,20 @@ if (prevScope === null) { try { unlinkSync(scopeFile) } catch { } } else writeFi
     clientSrc.includes("action: 'restore-preview'") && clientSrc.includes("action: 'restore-now'")
     && clientSrc.includes('askRestore') && clientSrc.includes('doRestore')
     && clientSrc.includes('pvRemovePlugins') && clientSrc.includes('pvRemoveFiles'), 'client.js')
-  check('控件：快照行显示相对时间与插件数',
-    clientSrc.includes('const rel = (at)') && clientSrc.includes('${s.plugins ? ` · ${s.plugins} 个插件`'), 'client.js')
+  check('控件：快照行显示相对时间、类型徽章与内容摘要',
+    clientSrc.includes('const rel = (at)') && clientSrc.includes('kindBadge') && clientSrc.includes('snapSummary'), 'client.js')
+  check('控件：三类备份各有还原入口，认不出类型的给手动还原指引（不留死路）',
+    clientSrc.includes("kindOf(s) === 'plugin' ? M('回滚插件'") && clientSrc.includes("M('还原会话', 'Restore sessions')")
+    && clientSrc.includes("M('手动还原', 'How to restore')") && clientSrc.includes('manualTargets'), 'client.js')
 
   // 0.3.25 起「还原」与「立即拉取」共用一条流水线：面板排队 → 客户端退出 → 可见进度窗口执行 → 自动重启
   const restoreScript = [join(pluginRoot, 'runtime', 'restore.ps1'), join(repoRoot, 'restore.ps1')].find((p) => existsSync(p)) || ''
   const restoreSrc = restoreScript ? readFileSync(restoreScript, 'utf8') : ''
-  check('post-exit 有 restore 分支：执行体是 restore.ps1，且必须带 -RollbackToPoint',
+  check('post-exit 有 restore 分支：执行体是 restore.ps1，profile 带 -RollbackToPoint、其它类型带 -SnapshotKind',
     postExitSrc.includes("if ($Mode -eq 'restore')")
     && postExitSrc.includes("Find-PluginScript 'restore.ps1'")
-    && postExitSrc.includes('RollbackToPoint = $true'), postExit || 'post-exit.ps1')
+    && postExitSrc.includes('RollbackToPoint')
+    && postExitSrc.includes("$rargs['SnapshotKind'] = $SnapshotKind"), postExit || 'post-exit.ps1')
   check('post-exit 的 restore 分支沿用同一套返回码判据（哨兵 -1 + 没跑完即失败）',
     /if \(\$Mode -eq 'restore'\)[\s\S]{0,3000}?\$LASTEXITCODE = -1/.test(postExitSrc)
     && /if \(\$Mode -eq 'restore'\)[\s\S]{0,3500}?执行体没有正常跑完/.test(postExitSrc),
@@ -846,9 +850,19 @@ if (prevScope === null) { try { unlinkSync(scopeFile) } catch { } } else writeFi
     restoreSrc.includes('(Get-Item -LiteralPath $ProfileDir -Force).FullName'), 'restore.ps1')
   check('备份列表带插件数（面板要显示 N 个插件）',
     indexSrc.includes('plugins = Object.keys(pkg?.dependencies') && indexSrc.includes('plugins: x.plugins'), 'index.js')
-  check('restore-now 复用 spawnWatcher，并把快照目录带进执行体',
-    /action === 'restore-now'[\s\S]{0,900}?spawnWatcher\(\{[\s\S]{0,220}?mode: 'restore'/.test(indexSrc)
-    && indexSrc.includes("extraArgs: ['-BackupDir', backupDir]"), 'index.js')
+  check('restore-now 复用 spawnWatcher，并把快照目录与类型带进执行体',
+    /action === 'restore-now'[\s\S]{0,1200}?spawnWatcher\(\{[\s\S]{0,240}?mode: 'restore'/.test(indexSrc)
+    && indexSrc.includes("const extraArgs = ['-BackupDir', snap.dir]")
+    && indexSrc.includes("extraArgs.push('-SnapshotKind', snap.kind)")
+    && indexSrc.includes("extraArgs.push('-PluginDir', PLUGIN_ROOT)"), 'index.js')
+  check('restore.ps1 支持 -SnapshotKind 三型（profile / plugin / session）',
+    restoreSrc.includes("ValidateSet('profile', 'plugin', 'session')")
+    && restoreSrc.includes("$SnapshotKind -eq 'plugin'")
+    && restoreSrc.includes("$SnapshotKind -eq 'session'")
+    && restoreSrc.includes('function Copy-Tree'), 'restore.ps1')
+  check('快照分类不能只看 package.json（profile 也带 dsh 字段）',
+    indexSrc.includes('function classifySnapshot') && indexSrc.includes('/^dsh-profile-/i.test(pkgName)')
+    && indexSrc.includes("pkgName === PACKAGE_ID"), 'index.js')
   check('restore-preview 与 prepare 共用同一套快照校验（口径不漂移）',
     indexSrc.includes('function resolveSnapshotDir')
     && (indexSrc.match(/resolveSnapshotDir\(dshHome, body\.backupDir\)/g) || []).length >= 2, 'index.js')

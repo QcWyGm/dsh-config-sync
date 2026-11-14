@@ -30,6 +30,9 @@ param(
   [string]$LogFile,
   # ---- 仅 -Mode restore 用：还原到哪份快照 ----
   [string]$BackupDir = '',
+  # 备份类型：profile（配置快照，默认）/ plugin（插件本体备份）/ session（会话目录备份）
+  [ValidateSet('profile', 'plugin', 'session')]
+  [string]$SnapshotKind = 'profile',
   # ---- 仅 -Mode update 用：插件自身更新 ----
   [string]$PluginDir = '',
   [string]$UpdateVersion = '',
@@ -620,11 +623,17 @@ if ($Mode -eq 'restore') {
     RepoRoot = $RepoRoot
     DshHome = $DshHome
     Force = $true
-    # 时点还原：快照之后新增的文件、插件一并撤走（先移进 manual 备份，能再还原）
-    RollbackToPoint = $true
+  }
+  # 只有 profile 快照是「时点还原」：插件/会话备份只做「备份当前 → 写回」，不撤走任何东西
+  if ($SnapshotKind -eq 'profile') { $rargs['RollbackToPoint'] = $true }
+  else {
+    $rargs['SnapshotKind'] = $SnapshotKind
+    Log ("备份类型：{0}" -f $SnapshotKind)
   }
   if ($AppRoot) { $rargs['AppRoot'] = $AppRoot }
   if ($BackupDir) { $rargs['BackupDir'] = $BackupDir }
+  # 插件回滚要知道写回哪个目录：优先面板传的 $PluginDir，否则交给 restore.ps1 自己按 AppRoot 探测
+  if ($SnapshotKind -eq 'plugin' -and $PluginDir) { $rargs['PluginDir'] = $PluginDir }
 
   # 返回码可信性与 sync 分支同一套规矩：压哨兵 → try/catch 记日志 → 没跑完即失败
   $LASTEXITCODE = -1
@@ -646,10 +655,20 @@ if ($Mode -eq 'restore') {
   }
   Log ("restore.ps1 还原退出码：{0}" -f $code)
 
+  $okText = switch ($SnapshotKind) {
+    'plugin' { '插件已回滚到所选备份；回滚前的插件整份留在 backups\plugin-<版本>-<时间戳>，可再回滚一次' }
+    'session' { '会话目录已还原到所选备份；同名目录先前的状态留在 backups\session-<时间戳>' }
+    default { '配置已还原到所选快照；快照之后新增的文件与插件已移入 manual 备份，随时可再还原' }
+  }
+  $failText = switch ($SnapshotKind) {
+    'plugin' { '插件回滚失败：详见日志；回滚前的插件状态已整份留在 backups\plugin-<版本>-<时间戳>' }
+    'session' { '会话还原失败：详见日志；同名目录先前的状态已留在 backups\session-<时间戳>' }
+    default { '还原失败：详见日志；还原前的状态已整份留在 backups\manual-<时间戳>，可再还原一次' }
+  }
   if ($code -ne 0) {
-    Write-Result $false $code '还原失败：详见日志；还原前的状态已整份留在 backups\manual-<时间戳>，可再还原一次' $false
+    Write-Result $false $code $failText $false
   } else {
-    Write-Result $true 0 '配置已还原到所选快照；快照之后新增的文件与插件已移入 manual 备份，随时可再还原' $false
+    Write-Result $true 0 $okText $false
   }
   if ($Restart) { RestartClient -SkipWatermark:($code -ne 0) }
   if ($code -ne 0) { Finish 5 '还原失败，请打开日志核对' }

@@ -281,7 +281,13 @@ dsh plugin add https://raw.githubusercontent.com/QcWyGm/dsh-config-sync/main/rel
 - **时点还原 = 回到那个时间点**：快照之后新增的文件移进 `backups\manual-<时间戳>\rollback\files`；之后装上的插件，junction 只删链接（不穿进链接删实体）、实体目录移进 `rollback\plugins`；每项写进 `rollback\rollback-manifest.json`，全部可再还原。动手前先把当前配置另存 `manual-<时间戳>`。
 - **谁算「快照之后装上的插件」**：以还原后 `package.json` 的 `dependencies` 为准，`node_modules` 里不在其中的直接子目录（含 `@scope/包`）撤走。
 - **地址可自己改**：点「修改」填绝对路径（如 `D:\DSH备份`），存在 `~\.dsh\dsh-config-sync.json` 的 `backupRoot`；「恢复默认」清回 `~\.dsh\backups`。
-- **只认能用的快照**：没有 `profile\package.json` 的（新机器首次拉取时本机无配置可备份）标「不可还原」置灰，宿主 `restore-backup` / `restore-preview` / `restore-now` 同一套校验。
+- **三类备份各有还原入口（0.3.49 起）**：备份根 `~\.dsh\backups` 是多用途共用的，面板按内容分成三类，每类都能一键还原：
+  - **配置快照**（`config-*` / `manual-*`，顶层 `package.json` 且 `name: dsh-profile-*`）→「立即还原」，做时点回退。
+  - **插件备份**（`plugin-<版本>-*`，含 `runtime\` / `client.js` 或只有一层 `dsh-config-sync-<版本>\`）→「回滚插件」：先把当前插件整份备份成 `plugin-<当前版本>-<时间戳>`，再用目录合并复制写回插件安装目录（`Copy-Tree` 逐层合并，不会出现 `runtime\runtime`；这点 0.3.49 实测踩过）。
+  - **会话备份**（`session-corrupt-*`，顶层全是 `--<路径编码>--`）→「还原会话」：把会话目录写回 `~\.dsh\sessions`，同名目录先整份留底到 `backups\session-<时间戳>`。
+  - **认不出类型的**（冲突对照、手工拷来的）→「手动还原」：弹出备份路径、里面有什么、以及三类常见目标位置，按提示手动拷；不再有「不可还原」的死按钮。
+- **分类判据不能只看有没有 `package.json`**：profile 的 `package.json` 里**也有** `dsh` 字段（`dsh.profile.bundles`），拿 `dsh` 判插件会把整份配置快照误判成插件备份（实测 `config-*`/`manual-*` 8+2 份全中招）。现在顺序是：`name: dsh-profile-*` 或 `dsh.profile` → 配置；`name: dsh-config-sync` → 插件；再按顶层内容和目录名前缀兜底。空目录（半截安装残留）标「空备份」不给按钮。
+- **只认能用的快照**：配置快照没有 `profile\package.json` 的（新机器首次拉取时本机无配置可备份）标「空备份」置灰；宿主 `restore-backup` / `restore-preview` / `restore-now` 共用 `resolveSnapshotDir` 同一套校验，认不出类型会直接拒绝并提示走手动还原。
 - **只在这个目录里选**：面板传来的必须是备份根之下真实存在的一份快照（越界、相对路径、含引号换行直接报错）。
 
 ## 插件配置跟得走
