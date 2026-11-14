@@ -1,9 +1,9 @@
 {
-  "version": "0.3.44",
+  "version": "0.3.45",
   "releasedAt": "2026-11-14",
-  "notes": "0.3.44：工作区与会话的路径也按「原机器位置 → 本机位置」推断。补齐了 session_projcache 的 record.identity.cwd：以前只改会话日志首帧的 cwd，projcache 仍指着源机目录，所以工作区能列出来、点开历史会话却回不到正确目录。现在 apply 用工作区登记表的 sessionIds 反查该工作区在本机的落点，改写 projcache 里那一个字符串（其余字节不动、幂等）；推断不出来就不改，留给面板提示。推送侧报告分两组：配置文件里的路径 / 工作区与会话记录里的路径，面板分两段列出，都能逐条采纳。",
-  "notesEn": "0.3.44: workspace and session paths now follow \"original machine location -> this machine location\". It fills the gap in session_projcache's record.identity.cwd: only the first frame of the session log was rewritten before, so projcache still pointed at the source machine and a workspace listed fine while its history could not return to the right folder. Apply now looks each workspace up through the registry's sessionIds, finds where that workspace lives here, and rewrites that single string (nothing else changes, idempotent); when it cannot be inferred nothing is touched and the panel reports it. The push report is split into two groups - paths in config files, paths in workspace/session records - and the panel lists them separately, each accept-able.",
-  "tgz": "releases/dsh-config-sync-0.3.44.tgz",
-  "sha256":"bd299546a9896537cd9e337f3120d51525b3876a8e58c6272202f90418d8ae4a",
-  "minClient": "0.2.2-rc.2"
+  "notes": "0.3.45：修掉 0.3.44 里「工作区与会话跟机器走」实际不生效的两个问题。① apply.ps1 第 4 步只按会话目录映射判断要不要跑，仓库里只有 session_projcache、没有 sessions 数据时整段被跳过，projcache 的 cwd 从未被改写；现在 projcache 有活也会跑。② fix-session-cwd.mjs 用「改动前后长度相等」当成「内容没变」，两台机器路径长度一样时（D:\\DeepSeekHarness ↔ E:\\DeepSeekHarness）必然误判，文件里的 cwd 仍指源机而结果报「本就正确」；现在按内容判等。两处在隔离环境（两台假机 + 本地裸库）从零跑通 A 推 B 拉的全链路时抓出来，修后 projFixed=1、拉取完成 cwd 正确指向本机。README 同步重写并精简，新增「从零开始：让第二台机器跑起来」与实测记录。",
+  "notesEn": "0.3.45: fixes two reasons the 0.3.44 \"workspaces and sessions follow the machine\" feature did not actually work. (1) Step 4 of apply.ps1 only checked the session directory map, so when the repo carried session_projcache but no sessions data the whole block was skipped and the projcache cwd was never rewritten; it now also runs when there is projcache work. (2) fix-session-cwd.mjs treated \"the rebuilt text has the same length as the original\" as \"nothing changed\", so two machines with equally long paths (D:\\DeepSeekHarness vs E:\\DeepSeekHarness) always misjudged: the file kept the source machine cwd while the result reported \"already correct\"; it now compares content. Both were found by a from-scratch run in an isolated environment (two fake clients + a local bare repo) covering push on A and pull on B; after the fix projFixed=1 and the cwd points at the local machine. The README was rewritten and trimmed, with a new \"From scratch: bring up the second machine\" section and the test log.",
+  "tgz": "releases/dsh-config-sync-0.3.45.tgz",
+  "minClient": "0.2.2-rc.2",
+  "sha256": "fdea5013717a73dd94718c11c2c5c52eec56396920f80a3faca40db7493b4c79"
 }

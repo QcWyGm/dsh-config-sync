@@ -10,6 +10,83 @@ A DSH plugin: it adds a **"Config Sync"** row to the sidebar (opening a full-pag
 
 The UI is bilingual: it follows the client language (`zh-*` → Chinese, anything else → English), with no settings toggle. Only the generated `.cmd` scripts keep Chinese text, because they are local shell helpers.
 
+> `README.md` (Chinese) is the trimmed, current reference; this English file mirrors the older per-version notes and keeps the same facts.
+
+## From scratch: bring up the second machine
+
+Two commands per machine: the source machine pushes once, the target machine pulls once. The order below is what the isolated end-to-end run actually walked through on 2026-11-14 (two fake clients + a local bare repo, main machine untouched).
+
+```
+Source A                          Remote (Gitee / GitHub / …)       Target B
+──────────────────────────────    ────────────────────────────    ─────────────────────────────
+1 install the plugin                                               1 install the SAME client version
+2 set local repo + remote URL                                      2 launch it once so profiles\desktop exists
+3 first push = "initial push"   ──►  skeleton + configs  ──►        3 install the plugin, set the same repo/remote
+   (writes the 6 runtime scripts)                                  4 first pull (it overwrites local configs)
+                                                                   5 start the client: workspaces + sessions are there
+```
+
+### Prerequisites (each one was actually hit)
+
+| Item | Requirement | When missing |
+|---|---|---|
+| Client version | Same on both machines (checked via `profile\host-contract.json`) | `version mismatch` in the pull log; only `-AllowVersionDrift` forces it |
+| Target `.dsh` | The client must have run at least once, so `profiles\<profile>` exists | `[X] target profile does not exist (DSH never installed here?)` → pull aborts |
+| Node / Electron runner | Ships with the client (`<AppRoot>\node.exe` or `DeepSeek Harness.exe`) | `no usable built-in runtime`, session cwd is not rewritten → **the session list stays empty** |
+| Repo skeleton | Written automatically by the source machine's initial push | A repo with only `settings\` and no `apply.ps1` cannot run on B; redo the initial push |
+| git | Installed on both (in PATH or a common location) | `git.exe not found` |
+
+### Source A: first push (initial push)
+
+Set **Local repo** (an empty folder or an existing repo) and **Cloud repo** (the remote URL), then press the initial-push button (it reads "initial push" when both sides are empty).
+
+It runs: `git init` → add `origin` → **copy the plugin's 6 runtime scripts (`apply.ps1`, `capture.ps1`, `sync.ps1`, `restore.ps1`, `post-exit.ps1`, `dsh-sync-common.ps1`) plus `tools\fix-session-cwd.mjs` into the repo root** → write `profile\host-contract.json` → `capture` → commit → `push -u origin main`.
+
+Command-line equivalent:
+
+```powershell
+pwsh -File runtime\sync.ps1 push -RepoRoot <repo> -DshHome <~\.dsh> -AppRoot <client root> `
+  -WorkspaceHome <workspace root> -ProfileName desktop -SkipInstall -Force
+```
+
+Real output of the isolated first push (15 files, commit `3fa3780`): the 6 scripts + `tools/fix-session-cwd.mjs`, `profile/{package.json,cordis.patch.yml,host-contract.json}`, `settings/dsh-workspaces.json`, `workspace/workspace-registry.json`, `workspace/default-workspace/notes.md`, `conversations/session-index.json`, `conversations/session_projcache/s1.json`.
+
+### Target B: first pull
+
+1. Install the **same** client version and **launch it once** (only to create `profiles\desktop`; you can quit right away).
+2. Install the plugin, set **Local repo** (an empty folder is fine) and **Cloud repo** (same URL).
+3. Press pull. It first reports "local is N commits ahead / N uncommitted" and asks for confirmation (it overwrites local configs).
+4. After it finishes, check three things: workspaces are listed, opening an old session lands in the right workspace, plugin dependencies are complete.
+
+```powershell
+pwsh -File runtime\sync.ps1 pull -RepoRoot <repo> -DshHome <~\.dsh> -AppRoot <client root> `
+  -WorkspaceHome <workspace root> -ProfileName desktop -SkipInstall -Force
+```
+
+`-SkipInstall` skips `pnpm install` (required offline / in isolation); `-Force` bypasses the "DSH is running" guard (on a real machine quit the client properly instead).
+
+Real output of the isolated pull (`pull_rc=0`):
+
+```
+[OK] host versions match (app = 0.2.2)
+[OK] workspace "default-workspace" restored → <B>\app\workspace\SquadLink (1 file, byte-exact)
+[OK] workspace registry merged by id → <B>\home\storages\workspace.json (1 workspace)
+[OK] session projcache cwd aligned to this machine: fixed 1
+[OK] session data restored: 1 written, 1 backed up
+[OK] all 0 plugin dependencies in place
+```
+
+### The five things that trip up a from-scratch run
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `-AppRoot mismatch, switched to D:\DeepSeekHarness` | `Resolve-DshAppRoot` only accepts a folder containing `resources\app.asar` or `resources\app\package.json`; a fake/portable client falls back to the registry install | make sure the folder passed to `-AppRoot` has one of those |
+| `[X] stopped (nothing captured, nothing committed)` | `DeepSeek Harness.exe` is running, so `cordis.patch.yml` may be half-written | quit fully (tray included), or use `-Force` |
+| `target profile does not exist` | the target `.dsh` was never initialised by the client | install the same client version and launch it once |
+| `no usable built-in runtime` | no `node.exe` / client binary under `<AppRoot>` | install the full client, otherwise session cwd is not rewritten and the session list is empty |
+| workspace files arrived but custom keys in `~\.dsh\settings.json` did not | plugin configs are a **whitelist** (13 files), `settings.json` is never copied whole | check whether the config belongs to that whitelist |
+
+
 ## Install
 
 The plugin is a standard DSH bundle; install it into the current profile:
@@ -430,3 +507,16 @@ A fake cloud bare repo + fake client root + a standalone `.dsh` holding only `pr
 **Sync boundary**: workspace materials and sessions travel along, but the **default workspace (`default-workspace`) is not synced** (its directory name is encoded from each machine's `WorkspaceHome`, so the target cannot recognise it and just leaves an empty workspace with "empty history"); `models/`, `*.whl`, `*.safetensors` and any file over 100 MB stay out of the repo either. See sections 4 and 5 of the config repo's root `README.md`.
 
 The six issues found in the previous review round (git identity, cross-machine session directories overwriting each other, hard-coded `origin/main`, the finishing message, duplicated logic, dead code) are **all fixed and verified**; the mapping table is in section 12 of the config repo's root `README.md`.
+### 2026-11-14: two machines, from scratch (isolated)
+
+A bare remote (`git init --bare -b main`), two fake client roots (`A\app`, `B\app`) and their own `.dsh` folders. Nothing on the main machine was touched; the run can be repeated.
+
+| Step | Result |
+|---|---|
+| A: first push | skeleton written (6 runtime scripts + `tools\fix-session-cwd.mjs` + version contract); capture produced 8 changes; 15 files committed and pushed to the bare `main` (`push_rc=0`) |
+| Placeholders on the repo side | `workspace\workspace-registry.json` stores `{{APP_ROOT}}/workspace/SquadLink` |
+| B: first pull, client never launched | `[X] target profile does not exist` (`pull_rc=1`) — **install the client and launch it once first** |
+| B: pull after creating the profile | `pull_rc=0`: workspace restored to `B\app\workspace\SquadLink` (byte-exact), registry merged into B's `storages\workspace.json` (path is the B path), 1 bundle resolvable |
+| No Node runner | log says `no usable built-in runtime`; session cwd stays untouched (session list would be empty); adding a usable `node.exe` made the fix take effect |
+| `settings.json` semantics | custom keys in `~\.dsh\settings.json` are **not** synced (whitelist of 13 files only) |
+| **Two bugs found by this run** | ① `fix-session-cwd.mjs` compared `next.length === text.length` to mean "nothing changed" — with equal-length paths on two machines (`D:\...` vs `E:\...`) it always misjudged, reporting `projAlreadyOk=1` while the file still pointed at the source machine; changed to `next === text`. ② step 4 of `apply.ps1` only checked `$cwdMap`, so when the repo had projcache but no sessions the whole block (including the projcache fix) was skipped; changed to `$cwdMap.Count -gt 0 -or $projMap.Count -gt 0`. After both fixes: `projFixed=1` and the cwd points at the local machine |

@@ -531,7 +531,9 @@ function Sync-ConversationApply {
   }
   # 会话是增量数据：只覆盖/新增，不删本机多出的会话文件
   # 4) 会话文件头部的 cwd 必须改成本机路径，否则 DSH 判 corrupt、整个会话层起不来
-  if ($cwdMap.Count -gt 0) {
+  #    projcache 也要一起改：只按 $cwdMap 判断会让「仓库里只有 projcache、没有 sessions」的
+  #    情况整段跳过（隔离环境实测：工作区还原了，会话 cwd 仍指源机）。两处任一有活就得跑。
+  if ($cwdMap.Count -gt 0 -or $projMap.Count -gt 0) {
     $specPath = Join-Path ([IO.Path]::GetTempPath()) ('dsh-session-cwd-{0}.json' -f $stamp)
     $specJson = [ordered]@{ home = $DshHome; dirs = $cwdMap; projcache = $projMap } | ConvertTo-Json -Depth 4 -Compress
     [IO.File]::WriteAllText($specPath, $specJson, (New-Object Text.UTF8Encoding($false)))

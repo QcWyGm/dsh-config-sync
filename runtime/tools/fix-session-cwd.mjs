@@ -141,7 +141,10 @@ if (Object.keys(projMap).length && fs.existsSync(projDir)) {
       const to = JSON.stringify(target);
       if (from === to) { result.projAlreadyOk++; continue; }
       const next = text.slice(0, m.index) + '"cwd": ' + to + text.slice(m.index + m[0].length);
-      if (next.length === text.length) { result.projAlreadyOk++; continue; }
+      // 只在「内容真的没变」时算已正确。早先这里用 next.length === text.length 判等，
+      // 两台机器路径长度相同时（D:\DeepSeekHarness → E:\DeepSeekHarness 这种）会把
+      // 该改的文件误判成「本就正确」，cwd 就留在源机路径上（隔离环境实测抓到）。
+      if (next === text) { result.projAlreadyOk++; continue; }
       fs.writeFileSync(file, next, 'utf8');
       const check = JSON.parse(fs.readFileSync(file, 'utf8'));
       if (check.record.identity.cwd !== target) throw new Error('写回后校验失败');
