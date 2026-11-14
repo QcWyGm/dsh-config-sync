@@ -38,6 +38,9 @@ $ErrorActionPreference = 'Stop'
 if (-not $RepoRoot) { $RepoRoot = $PSScriptRoot }
 . (Join-Path $PSScriptRoot 'dsh-sync-common.ps1')
 
+# 本动作的未同步清单从这里起算（pull 也要清：上一轮 push 的清单不能挂到这次拉取头上）
+Reset-SyncNotices $DshHome $Action
+
 # git 位置探测统一在 dsh-sync-common.ps1 里（Get-GitExe），这里只决定找不到时怎么报
 $git = Get-GitExe
 if (-not $git) { Die "找不到 git.exe。请先安装 Git 并加入 PATH。" }
@@ -682,7 +685,7 @@ if ($Action -eq 'push') {
     Warn "建议完全退出（含托盘）后重跑；确认要继续可加 -Force"
     Die "已停止（未抓取、未提交）。"
   }
-  $captureArgs = @{ RepoRoot = $RepoRoot; DshHome = $DshHome; ProfileName = $ProfileName; AppRoot = $AppRoot; WorkspaceHome = $WorkspaceHome }
+  $captureArgs = @{ RepoRoot = $RepoRoot; DshHome = $DshHome; ProfileName = $ProfileName; AppRoot = $AppRoot; WorkspaceHome = $WorkspaceHome; NoResetNotices = $true }
   if ($WorkspaceOnly) { $captureArgs['WorkspaceOnly'] = $true }
   if ($SkipWorkspace) { $captureArgs['SkipWorkspace'] = $true }
   & (Join-Path $PSScriptRoot 'capture.ps1') @captureArgs
@@ -693,6 +696,47 @@ if ($Action -eq 'push') {
   Initialize-CommitIdentity
   & $git -C $RepoRoot add -A
   $pending = @(& $git -C $RepoRoot diff --cached --name-only)
+
+  # ---------- 单文件上限预检（提交前） ----------
+  # capture 已在源头挡掉 workspace 里 >100MB 的资料，但仓库目录里仍可能有别处来的大文件
+  # （手工放的、旧版本留下的、其它插件写的），`git add -A` 会照样收进索引，然后 push 被
+  # 服务端 pre-receive 拒掉 —— 而旧版把这种拒收统称成「网络/认证」，把排查带偏。
+  # 这里在提交前把超限文件从索引撤回（文件留在磁盘不动），其余内容照常提交、照常推送。
+  $pushHardLimit = 95MB   # 100MB 是 Gitee/GitHub/GitLab 的判定线，留 5MB 余量，别卡边界
+  $pushWarnLimit = 50MB
+  if ($pending.Count -gt 0) {
+    $tooLarge = @()
+    foreach ($rel in $pending) {
+      $full = Join-Path $RepoRoot $rel
+      if (-not (Test-Path -LiteralPath $full)) { continue }   # 删除项没有体积
+      try { $len = [long](Get-Item -LiteralPath $full -Force).Length } catch { continue }
+      if ($len -ge $pushHardLimit) { $tooLarge += [pscustomobject]@{ Rel = [string]$rel; Bytes = $len } }
+      elseif ($len -ge $pushWarnLimit) {
+        Warn ('文件偏大（{0:N1} MB，接近 100 MB 上限）：{1}' -f ($len / 1MB), $rel)
+      }
+    }
+    if ($tooLarge.Count -gt 0) {
+      $excludeFile = Join-Path $RepoRoot '.git\info\exclude'
+      $excludeDir = Split-Path -Parent $excludeFile
+      if (-not (Test-Path -LiteralPath $excludeDir)) { New-Item -ItemType Directory -Path $excludeDir -Force | Out-Null }
+      foreach ($o in $tooLarge) {
+        $relPath = [string]$o.Rel
+        & $git -C $RepoRoot reset -q -- $relPath 2>$null
+        $exLine = '/' + $relPath.Replace([string][char]92, '/')
+        try {
+          $cur = if (Test-Path -LiteralPath $excludeFile) { Get-Content -LiteralPath $excludeFile -Raw -Encoding utf8 } else { '' }
+          if ($cur -notmatch [regex]::Escape($exLine)) {
+            Add-Content -LiteralPath $excludeFile -Value $exLine -Encoding utf8
+          }
+        } catch { }
+        Warn ('超过单文件上限（{0:N1} MB ≥ {1:N0} MB），已从本次提交剔除：{2}' -f ($o.Bytes / 1MB), ($pushHardLimit / 1MB), $relPath)
+        Add-SyncNotice -Kind 'too-large' -Path $relPath -Bytes $o.Bytes -Reason ('{0:N1} MB ≥ 单文件上限 {1:N0} MB，未提交也未推送' -f ($o.Bytes / 1MB), ($pushHardLimit / 1MB))
+      }
+      Warn '这些文件仍留在磁盘，只是不进仓库；已写进 .git\info\exclude，下次 add 不会再收进来。'
+      $pending = @(& $git -C $RepoRoot diff --cached --name-only)
+    }
+  }
+
   if ($pending.Count -eq 0) {
     Ok "仓库与仓库文件一致，没有需要提交的改动"
   } else {
@@ -726,6 +770,34 @@ if ($Action -eq 'push') {
   $bs = Get-BranchUpstream
   $branch = $bs.Branch
   $upstream = $bs.Upstream
+
+  # ---------- 历史里已有的超限文件：只报告，不改写历史 ----------
+  # 远端拒收看的是「这次要推上去的所有对象」，而不只是工作区。索引预检只能挡住本次新增的，
+  # 早先某个提交已经把大文件写进历史时，怎么 add / reset 都没用 —— 必须先让用户知道这条死路。
+  $histTooLarge = @()
+  $eapHist = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
+  $treeOut = @(& $git -C $RepoRoot ls-tree -r -l HEAD 2>$null)
+  $ErrorActionPreference = $eapHist
+  foreach ($line in $treeOut) {
+    if ($line -match '^\d+\s+blob\s+[0-9a-f]+\s+(\d+)\t(.+)$') {
+      $sz = [long]$Matches[1]
+      if ($sz -ge $pushHardLimit) { $histTooLarge += [pscustomobject]@{ Rel = [string]$Matches[2]; Bytes = $sz } }
+    }
+  }
+  if ($histTooLarge.Count -gt 0) {
+    Warn ('历史提交里有 {0} 个超限文件：远端会拒收整次推送（不是网络问题）' -f $histTooLarge.Count)
+    foreach ($o in @($histTooLarge | Select-Object -First 5)) {
+      Warn ('  - {0}（{1:N1} MB）' -f $o.Rel, ($o.Bytes / 1MB))
+    }
+    if ($histTooLarge.Count -gt 5) { Warn ('  …还有 {0} 个' -f ($histTooLarge.Count - 5)) }
+    foreach ($o in $histTooLarge) {
+      Add-SyncNotice -Kind 'history' -Path $o.Rel -Bytes $o.Bytes -Reason ('历史提交里已有（{0:N1} MB），远端会拒收整次推送' -f ($o.Bytes / 1MB))
+    }
+    Warn '处理办法：①面板「初始化推送」到一份新的空仓库（配置同步不需要旧历史，最省事）；'
+    Warn '          ②git filter-repo 把大文件从历史里摘掉再推（改写历史，需 force）。'
+  }
+
   # 覆盖「有分支但空树」的远端：本地是全新历史，和远端没有共同祖先，不加 force 会被 non-fast-forward 拒。
   $forceFlag = if ($remoteHadEmptyBranch) { ' --force-with-lease' } else { '' }
   if ($upstream) {
@@ -734,8 +806,58 @@ if ($Action -eq 'push') {
     Say "  当前分支 $branch 还没有 upstream，推送时一并建立 origin/$branch"
     $pushLine = '"' + $git + '" -C "' + $RepoRoot + '" push' + $forceFlag + ' -u origin "' + $branch + '" 2>&1'
   }
-  & "$env:ComSpec" /c $pushLine | Write-Host
-  if ($LASTEXITCODE -ne 0) { Die "git push 失败（网络/认证）。改动已提交在本地，修好网络后重跑：git -C `"$RepoRoot`" push；若是 GIT_SSH_COMMAND 问题，先确认它第一个词是 ssh.exe 本体" }
+  # 输出要捕获再打印：旧版直接 Write-Host 之后只看退出码，远端那句
+  # 「File xxx is 123MB; this exceeds ... limit」被淹没，失败结论却写成「网络/认证」。
+  $eapPush = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
+  $pushOut = (& "$env:ComSpec" /c $pushLine 2>&1 | Out-String)
+  $pushCode = $LASTEXITCODE
+  $ErrorActionPreference = $eapPush
+  foreach ($l in ($pushOut -split "`r?`n")) {
+    if ($l -and $l.Trim()) { Say ('  ' + $l.TrimEnd()) }
+  }
+  if ($pushCode -ne 0) {
+    $remoteOversized = @()
+    foreach ($l in ($pushOut -split "`r?`n")) {
+      if ($l -match 'File\s+(.+?)\s+is\s+([\d.]+)\s*MB.*exceeds.*limit') {
+        $remoteOversized += [pscustomobject]@{ Rel = [string]$Matches[1]; Mb = [double]$Matches[2] }
+      }
+    }
+    foreach ($o in $remoteOversized) {
+      Add-SyncNotice -Kind 'too-large' -Path $o.Rel -Bytes ([long]($o.Mb * 1MB)) -Reason ('远端拒收：{0} MB 超过单文件上限' -f $o.Mb)
+    }
+    $quotaHit = [bool]($pushOut -match 'exceeds .*quota|repository size|total repository size|仓库容量|容量上限')
+    $networkHit = [bool]($pushOut -match 'Could not read from remote|Permission denied|publickey|Host key verification|Could not resolve host|timed out|Connection refused|Operation timed out')
+    $rejectedHit = [bool]($pushOut -match '\[remote rejected\]|pre-receive hook declined')
+
+    if ($remoteOversized.Count -gt 0 -or $histTooLarge.Count -gt 0) {
+      # 有具体文件名（远端报的）或历史预检命中：这是「文件超限」，不是网络
+      $names = if ($remoteOversized.Count -gt 0) { $remoteOversized } else { $histTooLarge }
+      $list = @($names | Select-Object -First 5 | ForEach-Object {
+          $mb = if ($_.Bytes) { $_.Bytes / 1MB } else { $_.Mb }
+          '  - ' + $_.Rel + '（' + ('{0:N1}' -f $mb) + ' MB）'
+        })
+      $msg = ("git push 被远端拒绝：{0} 个文件超过单文件上限（不是网络/SSH 问题）。" -f $names.Count) +
+             "`n" + ($list -join "`n") +
+             "`n      处理：①面板「初始化推送」到一份新的空仓库（配置同步不需要旧历史，最省事）；" +
+             "②git filter-repo 把这些文件从历史摘掉再推（改写历史，需 force）。" +
+             "`n      这些文件本身不进仓库，本地原件不动。"
+      Die $msg
+    }
+    if ($quotaHit) {
+      Die ("git push 被远端拒绝：仓库总量超限（Gitee 免费仓库 1GB）。当前仓库里有过多大文件或历史提交。" +
+           "`n      处理：面板「初始化推送」到新仓库，或按上面的历史清理办法瘦身。")
+    }
+    if ($rejectedHit) {
+      Die ("git push 被远端拒绝（remote rejected / pre-receive hook declined），原因见上面 remote: 那几行。" +
+           "`n      改动已提交在本地，处理完远端限制后重跑 git -C `"$RepoRoot`" push 即可。")
+    }
+    if ($networkHit) {
+      Die "git push 失败（网络/认证）。改动已提交在本地，修好网络后重跑：git -C `"$RepoRoot`" push；若是 GIT_SSH_COMMAND 问题，先确认它第一个词是 ssh.exe 本体"
+    }
+    Die ("git push 失败（原因见上面 remote: 那几行，既不是文件超限也不是已知的网络/认证特征）。" +
+         "改动已提交在本地，修好后再重跑。")
+  }
   Ok "已推送：$(& $git -C $RepoRoot log -1 --oneline)"
   Write-SyncState 'push'
   Say "另一台机器执行：pwsh -File sync.ps1 pull"
@@ -829,7 +951,7 @@ if ($reportAfter) {
 }
 
 Say ""
-$applyArgs = @{ RepoRoot = $RepoRoot; DshHome = $DshHome; ProfileName = $ProfileName; AppRoot = $AppRoot; WorkspaceHome = $WorkspaceHome }
+$applyArgs = @{ RepoRoot = $RepoRoot; DshHome = $DshHome; ProfileName = $ProfileName; AppRoot = $AppRoot; WorkspaceHome = $WorkspaceHome; NoResetNotices = $true }
 if ($WorkspaceOnly) { $applyArgs['WorkspaceOnly'] = $true }
 if ($SkipWorkspace) { $applyArgs['SkipWorkspace'] = $true }
 if ($SkipInstall) { $applyArgs['SkipInstall'] = $true }

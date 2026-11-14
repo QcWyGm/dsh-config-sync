@@ -50,12 +50,16 @@ param(
   [switch]$ReplaceWorkspaceRegistry,
   [switch]$AllowVersionDrift,
   [switch]$ForceBundles,
-  [string]$WorkspaceHome = $(Join-Path $env:USERPROFILE 'Documents\deepseek-harness')
+  [string]$WorkspaceHome = $(Join-Path $env:USERPROFILE 'Documents\deepseek-harness'),
+  # sync.ps1 调起本脚本时必须传，否则会抹掉父进程已攒下的未同步清单
+  [switch]$NoResetNotices
 )
 
 $ErrorActionPreference = 'Stop'
 if (-not $RepoRoot) { $RepoRoot = $PSScriptRoot }
 . (Join-Path $PSScriptRoot 'dsh-sync-common.ps1')
+
+if (-not $NoResetNotices) { Reset-SyncNotices $DshHome 'pull' }
 
 # 客户端可能被卸载重装到别的盘：传进来的 -AppRoot 先校验，对不上就自动定位（注册表 → 常见位置）。
 $resolvedRoot = Resolve-DshAppRoot $AppRoot
@@ -156,7 +160,11 @@ function Sync-WorkspaceApply {
       if (-not $rel) { continue }
       # 老仓库里可能还留着模型权重/whl 这类大文件：不铺到本机（本机自己那份才是原件）
       if (Test-WorkspaceIgnored $rel) { continue }
-      if ($f.Length -gt $wsMaxFileBytes) { Warn ('仓库里这个文件过大，跳过不还原：{0}' -f $rel); continue }
+      if ($f.Length -gt $wsMaxFileBytes) {
+        Warn ('仓库里这个文件过大，跳过不还原：{0}' -f $rel)
+        Add-SyncNotice -Kind 'too-large' -Path $rel -Bytes ([long]$f.Length) -Reason ('仓库里这份 {0:N1} MB > 100 MB，未还原到本机' -f ($f.Length / 1MB))
+        continue
+      }
       $repoRels[$rel] = $f.FullName
     }
     # 备份本机现有资料（覆盖前的完整快照）
@@ -550,11 +558,17 @@ function Sync-ConversationApply {
         $line = ([IO.File]::ReadAllText($resultPath)).Trim()
         $r = $line | ConvertFrom-Json -ErrorAction Stop
         if (@($r.failed).Count -gt 0) {
-          foreach ($fe in @($r.failed)) { Warn ('会话头部修正失败：{0}（{1}）' -f $fe.file, $fe.error) }
+          foreach ($fe in @($r.failed)) {
+            Warn ('会话头部修正失败：{0}（{1}）' -f $fe.file, $fe.error)
+            Add-SyncNotice -Kind 'failed' -Path ([string]$fe.file) -Reason ('会话头部修正失败：' + [string]$fe.error)
+          }
           Warn ('有 {0} 个会话文件没能修正，DSH 里这些会话可能显示为损坏' -f @($r.failed).Count)
         }
         if (@($r.projFailed).Count -gt 0) {
-          foreach ($fe in @($r.projFailed)) { Warn ('会话 projcache 的 cwd 没改成：{0}（{1}）' -f $fe.file, $fe.error) }
+          foreach ($fe in @($r.projFailed)) {
+            Warn ('会话 projcache 的 cwd 没改成：{0}（{1}）' -f $fe.file, $fe.error)
+            Add-SyncNotice -Kind 'failed' -Path ([string]$fe.file) -Reason ('会话 projcache 的 cwd 未修正：' + [string]$fe.error)
+          }
         }
         Ok ('会话头部 cwd 已对齐本机路径：修正 {0} 个、本就正确 {1} 个（目录 {2} 个）' -f $r.fixed, $r.alreadyOk, $cwdMap.Count)
         Ok ('会话 projcache 的 cwd 已对齐本机路径：修正 {0} 个、本就正确 {1} 个（会话 {2} 个）' -f ([int]$r.projFixed), ([int]$r.projAlreadyOk), $projMap.Count)

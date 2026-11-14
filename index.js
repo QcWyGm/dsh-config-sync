@@ -1318,7 +1318,8 @@ function autoScript(dshHome, repo) {
 /**
  * 上次「退出后自动同步」的结果（post-exit.ps1 落的盘）。
  * 只读，读不到/坏掉都返回 null，绝不影响客户端启动。
- * 字段：{ mode, ok, at(ms), code, message, restored, log }
+ * 字段：{ mode, ok, at(ms), code, message, restored, log, notices }
+ * notices：本次没同步成的文件清单（post-exit 从 sync-notices.json 带过来）
  */
 function readAutoResult(dshHome) {
   try {
@@ -1334,8 +1335,48 @@ function readAutoResult(dshHome) {
       message: String(j.message || ''),
       restored: j.restored === true,
       log: String(j.log || ''),
+      notices: readNoticeList(dshHome, j.notices),
     }
   } catch { return null }
+}
+
+/**
+ * 未同步文件清单：优先用结果文件里带的那份；结果文件里没有（比如面板刷新时这次还没跑完）
+ * 就回落到 ~/.dsh/sync-notices.json。两种情况都做裁剪，避免一个几万文件的仓库把 /status 撑爆。
+ */
+function readNoticeList(dshHome, fromResult) {
+  const KINDS = ['history', 'too-large', 'failed', 'skipped']
+  let raw = fromResult
+  if (!raw || !Array.isArray(raw.items)) {
+    try {
+      const file = join(dshHome, 'sync-notices.json')
+      if (isFile(file)) raw = JSON.parse(readFileSync(file, 'utf8').replace(/^\uFEFF/, ''))
+    } catch { raw = null }
+  }
+  if (!raw || !Array.isArray(raw.items) || !raw.items.length) return null
+  const items = raw.items
+    .filter((it) => it && it.path)
+    .slice(0, 30)
+    .map((it) => ({
+      kind: KINDS.includes(it.kind) ? it.kind : 'skipped',
+      path: String(it.path),
+      bytes: Number(it.bytes) || 0,
+      reason: String(it.reason || ''),
+    }))
+  const byKind = {}
+  for (const k of KINDS) byKind[k] = 0
+  for (const it of raw.items) {
+    const k = KINDS.includes(it && it.kind) ? it.kind : 'skipped'
+    byKind[k] += 1
+  }
+  return {
+    at: Number(raw.at) || 0,
+    mode: String(raw.mode || ''),
+    total: Number(raw.total) || raw.items.length,
+    byKind,
+    items,
+    truncated: (Number(raw.total) || raw.items.length) > items.length,
+  }
 }
 
 /** 只读探询：fetch 一次再比 HEAD 与 origin/<branch>。任何失败都返回 null，绝不影响客户端启动。 */

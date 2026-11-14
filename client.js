@@ -1562,6 +1562,61 @@ window.__ModuleLoader__.load({
           : null,
         msg ? h('div', { style: S.hint }, msg) : null,
         err ? h('div', { style: { ...S.hint, color: 'var(--dsw-alias-state-error-primary)' } }, err) : null,
+        noticesBlock(auto.lastResult && auto.lastResult.notices),
+      )
+    }
+
+    /**
+     * 未同步文件常驻区块：只在上次同步确实有文件没同步成时出现。
+     * 用常驻而不是 toast，是因为「跳过一个大文件」不会造成失败提示，
+     * 只弹一次 5 秒等于没告诉人；面板这块一直挂着，直到下一次同步清掉。
+     */
+    function noticesBlock(notices) {
+      if (!notices || !notices.total) return null
+      const kindLabel = (k) => ({
+        'too-large': M('超过单文件上限', 'Over size cap'),
+        history: M('历史里的超限文件', 'Oversized in history'),
+        failed: M('失败', 'Failed'),
+        skipped: M('跳过', 'Skipped'),
+      }[k] || k)
+      const rows = (notices.items || []).map((it, i) => h('div', {
+        key: `notice-${i}`,
+        style: { display: 'flex', gap: '6px', alignItems: 'baseline', fontSize: '11.5px', lineHeight: '18px' },
+      },
+      h('span', { style: { color: 'var(--dsw-alias-state-warn-primary)', whiteSpace: 'nowrap' } }, `[${kindLabel(it.kind)}]`),
+      h('span', { style: { wordBreak: 'break-all', color: 'var(--dsw-alias-label-primary)' } }, it.path),
+      it.bytes ? h('span', { style: { color: 'var(--dsw-alias-label-tertiary)', whiteSpace: 'nowrap' } }, `${(it.bytes / 1048576).toFixed(1)} MB`) : null,
+      ))
+      const parts = []
+      if (notices.byKind) {
+        if (notices.byKind['too-large']) parts.push(M(`${notices.byKind['too-large']} 个超过单文件上限`, `${notices.byKind['too-large']} over the size cap`))
+        if (notices.byKind.history) parts.push(M(`${notices.byKind.history} 个在历史提交里`, `${notices.byKind.history} already in history`))
+        if (notices.byKind.failed) parts.push(M(`${notices.byKind.failed} 个失败`, `${notices.byKind.failed} failed`))
+        if (notices.byKind.skipped) parts.push(M(`${notices.byKind.skipped} 个被跳过`, `${notices.byKind.skipped} skipped`))
+      }
+      return h('div', {
+        style: {
+          marginTop: '6px', padding: '8px 10px', borderRadius: '6px',
+          border: '1px solid var(--dsw-alias-state-warn-primary)',
+          background: 'color-mix(in srgb, var(--dsw-alias-state-warn-primary) 8%, transparent)',
+        },
+      },
+      h('div', { style: { fontSize: '12px', fontWeight: 600, color: 'var(--dsw-alias-state-warn-primary)' } },
+        M(`上次同步有 ${notices.total} 个文件没同步${parts.length ? `（${parts.join('、')}）` : ''}`, `Last sync left ${notices.total} file(s) unsynced${parts.length ? ` (${parts.join(', ')})` : ''}`)),
+      h('div', { style: { ...S.footnote, marginTop: '3px' } },
+        M('这些文件仍在本机磁盘上，只是没进仓库；下次同步会自动复查。',
+          'They are still on this machine, just not in the repo; the next sync re-checks them.')),
+      h('div', { style: { marginTop: '4px' } }, rows),
+      notices.truncated
+        ? h('div', { style: { ...S.footnote, marginTop: '3px' } },
+          M(`只列前 ${rows.length} 个，完整清单：~/.dsh/sync-notices.json`,
+            `Showing the first ${rows.length}; full list: ~/.dsh/sync-notices.json`))
+        : null,
+      notices.byKind && notices.byKind.history
+        ? h('div', { style: { ...S.footnote, marginTop: '4px', color: 'var(--dsw-alias-state-warn-primary)' } },
+          M('历史提交里的超限文件会让整次推送被远端拒收：换一份新的空仓库（本卡「初始化推送」），或用 git filter-repo 清史。',
+            'Oversized files already in history make the whole push get rejected: point at a fresh empty repo (Initialize push here), or rewrite history with git filter-repo.'))
+        : null,
       )
     }
 

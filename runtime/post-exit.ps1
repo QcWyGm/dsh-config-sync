@@ -125,8 +125,18 @@ try {
     ([ordered]@{ pid = $PID; mode = $Mode; at = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() } | ConvertTo-Json),
     (New-Object Text.UTF8Encoding $false))
 } catch { }
-# 结果文件给客户端下次启动读：ok/mode/at/code/message/restored/log
+# 结果文件给客户端下次启动读：ok/mode/at/code/message/restored/log (+ notices)
 function Write-Result([bool]$ok, [int]$code, [string]$message, [bool]$restored) {
+  # 未同步文件清单（sync.ps1 / capture.ps1 / apply.ps1 攒下的）：面板要常驻显示，
+  # 所以它必须跟着结果一起落盘，而不是只留在本次的日志里。
+  $notices = $null
+  try {
+    $np = Join-Path $DshHome 'sync-notices.json'
+    if (Test-Path -LiteralPath $np) {
+      $notices = Get-Content -LiteralPath $np -Raw -Encoding utf8 | ConvertFrom-Json
+      if ($notices -and [int]$notices.total -le 0) { $notices = $null }
+    }
+  } catch { $notices = $null }
   $obj = [ordered]@{
     mode      = $Mode
     ok        = $ok
@@ -137,14 +147,47 @@ function Write-Result([bool]$ok, [int]$code, [string]$message, [bool]$restored) 
     log       = $LogFile
     appRoot   = $AppRoot
     restart   = [bool]$Restart
+    notices   = $notices
   }
   try {
     $dir = Split-Path -Parent $ResultFile
     if ($dir -and -not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
-    $json = $obj | ConvertTo-Json -Depth 4
+    $json = $obj | ConvertTo-Json -Depth 6
     [IO.File]::WriteAllText($ResultFile, $json, (New-Object Text.UTF8Encoding $false))
     Log ("结果已写入：{0}" -f $ResultFile)
   } catch { Log ("写结果文件失败：{0}" -f $_.Exception.Message) }
+}
+
+# 进度窗口末尾的小结：哪些文件这次没同步、为什么。顺序按「必须该修」在前。
+function Show-NoticesSummary {
+  $np = Join-Path $DshHome 'sync-notices.json'
+  if (-not (Test-Path -LiteralPath $np)) { return }
+  $n = $null
+  try { $n = Get-Content -LiteralPath $np -Raw -Encoding utf8 | ConvertFrom-Json } catch { return }
+  if (-not $n -or [int]$n.total -le 0) { return }
+  $groups = @(
+    @{ Kind = 'history';   Title = '历史提交里的超限文件（远端会拒收，需换仓库或清史）' }
+    @{ Kind = 'too-large'; Title = '超过单文件上限，未进仓库' }
+    @{ Kind = 'failed';    Title = '写入/推送失败' }
+    @{ Kind = 'skipped';   Title = '按规则跳过' }
+  )
+  Write-Host ''
+  Write-Host ("---------------- 未同步的文件 {0} 个 ----------------" -f $n.total) -ForegroundColor Yellow
+  foreach ($g in $groups) {
+    $items = @($n.items | Where-Object { $_.kind -eq $g.Kind })
+    if ($items.Count -eq 0) { continue }
+    Write-Host ("  [{0}] {1}" -f $items.Count, $g.Title) -ForegroundColor Yellow
+    $i = 0
+    foreach ($it in $items) {
+      if ($i -ge 5) { break }
+      $size = if ($it.bytes) { '（{0:N1} MB）' -f ([double]$it.bytes / 1MB) } else { '' }
+      Write-Host ("    - {0}{1}：{2}" -f $it.path, $size, $it.reason)
+      $i++
+    }
+    if ($items.Count -gt 5) { Write-Host ("    …还有 {0} 个，完整清单：{1}" -f ($items.Count - 5), $np) }
+  }
+  Write-Host ("  清单文件：{0}" -f $np)
+  Write-Host '--------------------------------------------------------' -ForegroundColor Yellow
 }
 
 function Finish([int]$code, [string]$note) {
@@ -166,6 +209,7 @@ function Finish([int]$code, [string]$note) {
   if ($Mode -eq 'pull' -or $Mode -eq 'push' -or $Mode -eq 'update' -or $Mode -eq 'restore') {
     $title = if ($Mode -eq 'update') { '插件更新已完成' } elseif ($Mode -eq 'restore') { '还原已完成' } else { '同步已完成' }
     try {
+      Show-NoticesSummary
       Write-Host ''
       Write-Host ("================ {0} ================" -f $title)
       Write-Host '  这个窗口不会自动关闭：看完按任意键，或点右上角 × 关闭。'

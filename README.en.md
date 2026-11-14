@@ -171,9 +171,32 @@ The plugin does not pick a git host: the remote URL is only validated for its *f
 | Default branch | `main` is tried first; if the remote has no `main`, the first remote branch is used (`master` on older repos), and tracking is set up after the pull |
 | Auth | SSH: fill in the key path (empty lets `.ssh\config` or Git defaults decide), and generated scripts use `GIT_SSH_COMMAND` with `StrictHostKeyChecking=accept-new`; HTTPS: use the account/token in Git Credential Manager — the plugin stores no passwords |
 | Failure hint | On a failed fetch/pull the self-check host is read from the real `origin` URL (since 0.3.27) instead of a hard-coded `git@gitee.com`; an https URL gets the `ls-remote` check, not `ssh -T` |
-| File size cap | 100MB (Gitee free tier, GitHub and GitLab all default to roughly this), and larger files are left out of the repo |
+| File size cap | Three tiers: over 100 MB is skipped at capture time; ≥95 MB is unstaged before committing and recorded; 50–95 MB only warns |
 
 Two notes for private repos: ① SSH is the simplest; ② the plugin's **own update manifest** points at the author's public repo by default — if you repoint it at your own private repo, only Gitee raw links are currently rewritten to the API + token form, so anonymous raw reads of a private GitHub/GitLab repo will fail. That is a known limitation.
+
+## When some files never make it into the repo
+
+Anything left out is reported in three places, so nobody has to read the log:
+
+| Where | What you see |
+|---|---|
+| Post-exit progress window | A `N file(s) not synced` block printed **before** the "sync finished" banner: grouped by kind, up to 5 rows per group (kind, relative path, size, reason), with "…and N more, full list: <path>" |
+| Config-sync panel | A permanent warning box at the bottom of the "last auto sync" card: per-kind counts, up to 30 rows, plus "they are still on this machine, just not in the repo; the next sync re-checks them" |
+| Machine-readable | `~\.dsh\sync-notices.json` (`at/mode/total/byKind/items`, four fixed `byKind` keys) and the `notices` field of `auto-sync-result.json` |
+
+Four `kind` values: `too-large` (over the single-file cap: skipped at capture >100 MB, unstaged before commit ≥95 MB, or not restored on pull), `history` (an oversized file already sits in local history, so the remote rejects the whole push), `skipped` (rule-based skip such as model weights or `*.whl`, or a locked file), `failed` (per-file write failure, session-header/projcache rewrite failure, or remote rejection).
+
+### Two prechecks before pushing
+
+1. **Index precheck**: after `git add -A`, every staged file is stat'ed; anything ≥95 MB is taken out with `git reset -- <path>`, added to `.git\info\exclude` so a later add skips it, recorded as a notice, and the rest of the commit pushes as usual — one huge file no longer blocks a whole sync. 50–95 MB only warns.
+2. **History precheck**: `git ls-tree -r -l HEAD` is scanned; a ≥95 MB hit is reported up front as "the remote will reject the whole push (this is not a network problem)" with two ways out: ① point the panel at a fresh empty repo via "Initialize push" (config sync needs no old history), or ② rewrite history with `git filter-repo` and force-push. **Report only — history is never rewritten automatically.**
+
+### Why a push failed
+
+The raw `git push` output is no longer collapsed into "network/auth failure"; it is classified by signature: `File <path> is X MB; this exceeds ... limit` → file too large (paths and sizes listed); `exceeds ... quota` / `repository size` → repo quota; `[remote rejected]` / `pre-receive hook declined` → remote rejection; `Could not read from remote` / `Permission denied` / `publickey` / `Host key verification` / `Could not resolve host` / `timed out` → network or auth.
+
+Measured (2026-11-14, isolated repo + local bare remote + fake `pre-receive` hook): a 96 MB file was unstaged while the rest pushed fine and `sync-notices.json` recorded `too-large=1`; after the same file went into history the precheck reported `history=1`; a hook replaying GitHub's message (`File big.bin is 96.00 MB; this exceeds ...`) was classified as "1 file over the cap", not as a network problem; the window summary and the panel block read the same file.
 
 ## Workspaces and sessions follow the machine too (projcache cwd fixed in 0.3.44)
 

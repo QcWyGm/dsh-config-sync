@@ -169,9 +169,46 @@ dsh plugin add https://raw.githubusercontent.com/QcWyGm/dsh-config-sync/main/rel
 | 默认分支 | 先试 `main`，没有就取远端第一个分支（老仓库 `master` 也行），拉取后自动建 tracking |
 | 认证 | SSH 填私钥路径（留空交给 `.ssh\config`），脚本用 `GIT_SSH_COMMAND` + `StrictHostKeyChecking=accept-new`；HTTPS 用 Git 凭据管理器，插件不存密码 |
 | 报错自检 | fetch/pull 失败时提示里的主机名取自 `origin` 真实地址；https 地址给 `ls-remote` 检查，不是 `ssh -T` |
-| 单文件上限 | 100 MB，超过的不进仓库 |
+| 单文件上限 | 分三档：源头 >100 MB 抓取时就跳过；≥95 MB 提交前从索引剔除并记一笔；50–95 MB 只警告不拦 |
 
 私有库注意：①优先 SSH 地址；②插件**自身更新清单**默认指向作者公开仓库，改成私有库后只有 Gitee 的 raw 会被自动换成 API + token，GitHub/GitLab 私有库 raw 匿名读会失败（已知限制）。
+
+## 有文件没同步上时：窗口末尾 + 面板常驻提示
+
+只要出现「文件没进仓库」，三处会同时告诉你，不用翻日志：
+
+| 位置 | 形式 |
+|---|---|
+| 退出后的进度窗口 | 在「同步已完成」横幅**之前**打印 `未同步的文件 N 个`：按类分组，每组最多 5 条（类名、相对路径、体积、原因），超出的给「…还有 N 个，完整清单：<路径>」 |
+| 配置同步面板 | 「上次自动同步」卡底部常驻黄框：分类计数 + 最多 30 条明细 + 「文件仍在本机，只是没进仓库；下次同步自动复查」 |
+| 机器可读 | `~\.dsh\sync-notices.json`（`at/mode/total/byKind/items`，四个 `byKind` 键固定）与 `auto-sync-result.json` 的 `notices` 字段 |
+
+四类 `kind`：
+
+| kind | 什么时候记 | 文件本身 |
+|---|---|---|
+| `too-large` | 超过单文件上限：抓取时跳过（>100 MB）、提交前从索引剔除（≥95 MB）、拉取时仓库里那个文件不还原 | 留在磁盘，只是不进仓库 |
+| `history` | 推送前历史预检发现本地历史提交里已有超限文件 | 远端会拒收整次推送 |
+| `skipped` | 按规则跳过（模型权重、`*.whl` 等）或被占用 | 留在磁盘 |
+| `failed` | 单文件写入失败、会话头/projcache 修正失败、被远端拒收 | 看 `reason` |
+
+### 推送前两道预检
+
+1. **索引预检**：`git add -A` 之后逐个 stat 暂存文件，≥95 MB 的 `git reset -- <path>` 撤出索引、写进 `.git\info\exclude`（下次 add 不再收），其余照常提交推送——一个大文件不会拖住整次同步。50–95 MB 只警告。
+2. **历史预检**：`git ls-tree -r -l HEAD` 扫已有历史，命中 ≥95 MB 就提前报「远端会拒收整次推送（不是网络问题）」，并给两条路：①面板「初始化推送」到一份新的空仓库（配置同步不需要旧历史，最省事）；②`git filter-repo` 清史后强推。**只报告，不自动改写历史。**
+
+### push 失败归因
+
+`git push` 的原始输出不再被一句「网络/认证失败」盖掉，按特征分类：
+
+| 特征 | 结论 |
+|---|---|
+| `File <path> is X MB; this exceeds ... limit` | 文件超限（逐个列出文件名与体积） |
+| `exceeds ... quota` / `repository size` / `仓库容量` | 仓库总量超限 |
+| `[remote rejected]` / `pre-receive hook declined` | 远端拒收（无文件名时按通用拒收处理） |
+| `Could not read from remote` / `Permission denied` / `publickey` / `Host key verification` / `Could not resolve host` / `timed out` | 网络或认证 |
+
+实测（2026-11-14，隔离仓库 + 本地裸库 + 假 `pre-receive` hook）：96 MB 文件被剔除后其余照推成功、`sync-notices.json` 落盘 `too-large=1`；同一文件进历史后预检报 `history=1`；hook 回放 GitHub 报文（`File big.bin is 96.00 MB; this exceeds ...`）被正确归成「文件超限 1 个」而不是网络问题；窗口末尾汇总与面板区块读的是同一份清单。
 
 ## 工作区与会话跟着机器走
 

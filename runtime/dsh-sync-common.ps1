@@ -22,6 +22,95 @@ function Ok($m)   { Write-Host "  [OK] $m" -ForegroundColor Green }
 function Warn($m) { Write-Host "  [!]  $m"  -ForegroundColor Yellow }
 function Die($m)  { Write-Host "  [X]  $m"  -ForegroundColor Red; exit 1 }
 
+# ---------- 未同步文件清单（notices） ----------
+# 为什么单独攒一份文件：capture / sync / apply 是不同进程，各自只能写日志，用户看不到
+# 「哪些文件这次没同步」；post-exit 在进度窗口末尾要汇总它，面板（index.js / client.js）
+# 要常驻显示它。所以统一落到 ~\.dsh\sync-notices.json，谁跑谁追加，收尾谁读谁用。
+# kind：
+#   too-large  超过单文件上限（capture 跳过 / push 前从索引剔除 / 历史里已存在）
+#   skipped    被规则或占用跳过（不是失败，但用户该知道）
+#   failed     写入失败、被远端拒绝等真失败
+#   history    历史提交里已存在的超限文件（远端必然拒收，必须改写历史或换仓库）
+$script:SyncNoticeItems = New-Object 'System.Collections.ArrayList'
+$script:SyncNoticeHome = $null
+$script:SyncNoticeMode = ''
+$script:SyncNoticeLoaded = $false
+
+function Get-SyncNoticesPath([string]$dshHome) {
+  $h = if ($dshHome) { $dshHome } else { Join-Path $env:USERPROFILE '.dsh' }
+  return (Join-Path $h 'sync-notices.json')
+}
+
+function Read-SyncNotices([string]$dshHome) {
+  try {
+    $p = Get-SyncNoticesPath $dshHome
+    if (-not (Test-Path -LiteralPath $p)) { return $null }
+    return (Get-Content -LiteralPath $p -Raw -Encoding utf8 | ConvertFrom-Json)
+  } catch { return $null }
+}
+
+function Save-SyncNotices {
+  try {
+    $p = Get-SyncNoticesPath $script:SyncNoticeHome
+    $dir = Split-Path -Parent $p
+    if ($dir -and -not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+    $byKind = [ordered]@{}
+    foreach ($k in @('too-large', 'history', 'skipped', 'failed')) {
+      $byKind[$k] = @($script:SyncNoticeItems | Where-Object { $_.kind -eq $k }).Count
+    }
+    $obj = [ordered]@{
+      at     = [long]([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds())
+      mode   = $script:SyncNoticeMode
+      total  = $script:SyncNoticeItems.Count
+      byKind = $byKind
+      items  = @($script:SyncNoticeItems)
+    }
+    [IO.File]::WriteAllText($p, ($obj | ConvertTo-Json -Depth 4), (New-Object Text.UTF8Encoding $false))
+  } catch { }
+}
+
+# 每个动作开始时清空。被 sync 调起的子脚本（capture）要传 -NoResetNotices，
+# 否则它一 Reset 就把父进程已经攒下的条目抹掉。
+function Reset-SyncNotices([string]$dshHome, [string]$mode) {
+  $script:SyncNoticeHome = $dshHome
+  $script:SyncNoticeMode = $mode
+  $script:SyncNoticeItems.Clear()
+  $script:SyncNoticeLoaded = $true
+  Save-SyncNotices
+}
+
+function Add-SyncNotice {
+  param([string]$Kind = 'skipped', [string]$Path = '', [string]$Reason = '', [long]$Bytes = 0)
+  if (-not $Path) { return }
+  # 先吃进磁盘上别的进程已经写好的条目（capture 与 sync 是两个进程）
+  if (-not $script:SyncNoticeLoaded) {
+    $existing = Read-SyncNotices $script:SyncNoticeHome
+    if ($existing -and $existing.items) {
+      foreach ($it in @($existing.items)) {
+        [void]$script:SyncNoticeItems.Add([ordered]@{ kind = [string]$it.kind; path = [string]$it.path; bytes = [long]$it.bytes; reason = [string]$it.reason })
+      }
+    }
+    $script:SyncNoticeLoaded = $true
+  }
+  foreach ($it in $script:SyncNoticeItems) {
+    if ($it.kind -eq $Kind -and $it.path -eq $Path) { return }
+  }
+  [void]$script:SyncNoticeItems.Add([ordered]@{ kind = $Kind; path = $Path; bytes = $Bytes; reason = $Reason })
+  Save-SyncNotices
+}
+
+# 给窗口/面板用的一行摘要：「2 个超过单文件上限、1 个被远端拒绝」
+function Get-SyncNoticesSummary($notices) {
+  if (-not $notices -or -not $notices.items -or @($notices.items).Count -eq 0) { return '' }
+  $bk = $notices.byKind
+  $parts = @()
+  if ($bk.'too-large' -gt 0) { $parts += ("{0} 个超过单文件上限" -f $bk.'too-large') }
+  if ($bk.history -gt 0) { $parts += ("{0} 个历史提交里的超限文件" -f $bk.history) }
+  if ($bk.skipped -gt 0) { $parts += ("{0} 个被规则跳过" -f $bk.skipped) }
+  if ($bk.failed -gt 0) { $parts += ("{0} 个写入/推送失败" -f $bk.failed) }
+  return ($parts -join '、')
+}
+
 # Windows PowerShell 5.1 的模块自动加载偶尔拿不到 Get-FileHash（PSModulePath 被别的版本目录污染时，
 # 会先撞上一个装不进 5.1 的同名模块，之后这个 cmdlet 就"不存在"了，脚本直接 CommandNotFound 崩掉）。
 # 同步链路全靠它判断"文件要不要覆盖"，所以缺了就补一个等价实现，不让一个 cmdlet 决定整条链路生死。

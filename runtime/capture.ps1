@@ -43,12 +43,16 @@ param(
   [switch]$WorkspaceOnly,
   [switch]$SkipWorkspace,
   [switch]$NoMirrorWorkspace,
-  [string]$WorkspaceHome = $(Join-Path $env:USERPROFILE 'Documents\deepseek-harness')
+  [string]$WorkspaceHome = $(Join-Path $env:USERPROFILE 'Documents\deepseek-harness'),
+  # sync.ps1 调起本脚本时必须传：否则本脚本的 Reset 会抹掉父进程已攒下的未同步清单
+  [switch]$NoResetNotices
 )
 
 $ErrorActionPreference = 'Stop'
 if (-not $RepoRoot) { $RepoRoot = $PSScriptRoot }
 . (Join-Path $PSScriptRoot 'dsh-sync-common.ps1')
+
+if (-not $NoResetNotices) { Reset-SyncNotices $DshHome 'capture' }
 
 # 客户端可能被卸载重装到别的盘：-AppRoot 先校验，对不上就自动定位（注册表 → 常见位置）。
 $resolvedRoot = Resolve-DshAppRoot $AppRoot
@@ -203,6 +207,7 @@ function Sync-WorkspaceCapture {
       # 超过 100MB 的（模型权重 / whl 安装包等）不进仓库：留在本机，同步只搬配置与资料
       if ($_.Length -gt $wsMaxFileBytes) {
         Warn ('文件过大（{0:N1} MB > 100 MB），不参与同步：{1}' -f ($_.Length / 1MB), $rel)
+        Add-SyncNotice -Kind 'too-large' -Path $rel -Bytes ([long]$_.Length) -Reason ('{0:N1} MB > 单文件上限 100 MB，未进仓库' -f ($_.Length / 1MB))
         return $false
       }
       return $true
