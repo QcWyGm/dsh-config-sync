@@ -196,6 +196,12 @@ Four `kind` values: `too-large` (over the single-file cap: skipped at capture >1
 
 The raw `git push` output is no longer collapsed into "network/auth failure"; it is classified by signature: `File <path> is X MB; this exceeds ... limit` → file too large (paths and sizes listed); `exceeds ... quota` / `repository size` → repo quota; `[remote rejected]` / `pre-receive hook declined` → remote rejection; `Could not read from remote` / `Permission denied` / `publickey` / `Host key verification` / `Could not resolve host` / `timed out` → network or auth.
 
+### The non-ASCII path trap (0.3.48)
+
+`git` keeps `core.quotepath=true` by default, so non-ASCII paths come back octal-escaped and wrapped in quotes (`"workspace/DSH\347\240\264\347\224\262/..."`). The 0.3.47 index precheck read that straight from `& $git ... diff --cached --name-only`, so `Test-Path -LiteralPath` hit the `"` and threw `路径中具有非法字符` (illegal characters in path) — the whole sync died before committing.
+
+Fix: every path-consuming git query now goes through `Read-GitLines` (`-c core.quotepath=false` + cmd byte redirect + UTF-8 read), and each per-file `stat` sits inside `try/catch` so one bad name only skips the size check instead of killing the run. Measured on the real repo: 918 staged paths, 0 quoted and 0 stat failures; the history precheck parsed all 3222 `ls-tree -r -l` lines into path plus size.
+
 Measured (2026-11-14, isolated repo + local bare remote + fake `pre-receive` hook): a 96 MB file was unstaged while the rest pushed fine and `sync-notices.json` recorded `too-large=1`; after the same file went into history the precheck reported `history=1`; a hook replaying GitHub's message (`File big.bin is 96.00 MB; this exceeds ...`) was classified as "1 file over the cap", not as a network problem; the window summary and the panel block read the same file.
 
 ## Workspaces and sessions follow the machine too (projcache cwd fixed in 0.3.44)

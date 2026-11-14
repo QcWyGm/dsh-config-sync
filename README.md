@@ -208,6 +208,12 @@ dsh plugin add https://raw.githubusercontent.com/QcWyGm/dsh-config-sync/main/rel
 | `[remote rejected]` / `pre-receive hook declined` | 远端拒收（无文件名时按通用拒收处理） |
 | `Could not read from remote` / `Permission denied` / `publickey` / `Host key verification` / `Could not resolve host` / `timed out` | 网络或认证 |
 
+### 中文路径的坑（0.3.48）
+
+`git` 默认 `core.quotepath=true`，非 ASCII 路径会被转义成 `"workspace/DSH\347\240\264\347\224\262/..."`（**带双引号**）。0.3.47 的索引预检直接读 `& $git ... diff --cached --name-only` 的输出，于是 `Test-Path -LiteralPath` 撞上 `"` 报 `执行体调用异常：路径中具有非法字符`，整次同步在提交前就挂了。
+
+修法：凡是要「按路径干活」的 git 查询一律走 `Read-GitLines`（内部 `-c core.quotepath=false` + cmd 字节重定向 + 按 UTF-8 读），并给逐个 stat 包一层 `try/catch` —— 单个坏名字只跳过体积检查，不再拖垮整次同步。实测真实仓库 918 条暂存路径：含引号 0 条、stat 失败 0 条；历史预检的 `ls-tree -r -l` 3222 条全部能按 `\t` 切出路径与体积。
+
 实测（2026-11-14，隔离仓库 + 本地裸库 + 假 `pre-receive` hook）：96 MB 文件被剔除后其余照推成功、`sync-notices.json` 落盘 `too-large=1`；同一文件进历史后预检报 `history=1`；hook 回放 GitHub 报文（`File big.bin is 96.00 MB; this exceeds ...`）被正确归成「文件超限 1 个」而不是网络问题；窗口末尾汇总与面板区块读的是同一份清单。
 
 ## 工作区与会话跟着机器走

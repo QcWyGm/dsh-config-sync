@@ -695,7 +695,9 @@ if ($Action -eq 'push') {
   Say "== 提交 =="
   Initialize-CommitIdentity
   & $git -C $RepoRoot add -A
-  $pending = @(& $git -C $RepoRoot diff --cached --name-only)
+  # 走 Read-GitLines：中文目录名若被 quotepath 转义成 "…\347\240\264…"，连引号一起拿进
+  # Test-Path -LiteralPath 就是「路径中具有非法字符」，整次同步会在这里挂掉
+  $pending = @((Read-GitLines 'diff --cached --name-only').Lines)
 
   # ---------- 单文件上限预检（提交前） ----------
   # capture 已在源头挡掉 workspace 里 >100MB 的资料，但仓库目录里仍可能有别处来的大文件
@@ -707,9 +709,12 @@ if ($Action -eq 'push') {
   if ($pending.Count -gt 0) {
     $tooLarge = @()
     foreach ($rel in $pending) {
-      $full = Join-Path $RepoRoot $rel
-      if (-not (Test-Path -LiteralPath $full)) { continue }   # 删除项没有体积
-      try { $len = [long](Get-Item -LiteralPath $full -Force).Length } catch { continue }
+      # 单个名字异常（含引号、盘符、控制字符）不该拖垮整次同步：stat 不了就跳过这条
+      try {
+        $full = Join-Path $RepoRoot $rel
+        if (-not (Test-Path -LiteralPath $full)) { continue }   # 删除项没有体积
+        $len = [long](Get-Item -LiteralPath $full -Force).Length
+      } catch { continue }
       if ($len -ge $pushHardLimit) { $tooLarge += [pscustomobject]@{ Rel = [string]$rel; Bytes = $len } }
       elseif ($len -ge $pushWarnLimit) {
         Warn ('文件偏大（{0:N1} MB，接近 100 MB 上限）：{1}' -f ($len / 1MB), $rel)
@@ -733,7 +738,7 @@ if ($Action -eq 'push') {
         Add-SyncNotice -Kind 'too-large' -Path $relPath -Bytes $o.Bytes -Reason ('{0:N1} MB ≥ 单文件上限 {1:N0} MB，未提交也未推送' -f ($o.Bytes / 1MB), ($pushHardLimit / 1MB))
       }
       Warn '这些文件仍留在磁盘，只是不进仓库；已写进 .git\info\exclude，下次 add 不会再收进来。'
-      $pending = @(& $git -C $RepoRoot diff --cached --name-only)
+      $pending = @((Read-GitLines 'diff --cached --name-only').Lines)
     }
   }
 
@@ -775,10 +780,8 @@ if ($Action -eq 'push') {
   # 远端拒收看的是「这次要推上去的所有对象」，而不只是工作区。索引预检只能挡住本次新增的，
   # 早先某个提交已经把大文件写进历史时，怎么 add / reset 都没用 —— 必须先让用户知道这条死路。
   $histTooLarge = @()
-  $eapHist = $ErrorActionPreference
-  $ErrorActionPreference = 'Continue'
-  $treeOut = @(& $git -C $RepoRoot ls-tree -r -l HEAD 2>$null)
-  $ErrorActionPreference = $eapHist
+  # ls-tree 的路径同样会因 quotepath 被八进制转义，走 Read-GitLines 拿真实路径（-l 不会破坏 tab 分隔）
+  $treeOut = @((Read-GitLines 'ls-tree -r -l HEAD').Lines)
   foreach ($line in $treeOut) {
     if ($line -match '^\d+\s+blob\s+[0-9a-f]+\s+(\d+)\t(.+)$') {
       $sz = [long]$Matches[1]
