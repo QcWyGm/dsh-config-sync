@@ -1,9 +1,9 @@
 {
-  "version": "0.3.50",
+  "version": "0.3.51",
   "releasedAt": "2026-11-15",
-  "notes": "0.3.50：修「同步内容 → 技能市场台账」两个勾选项的 id。条目元素本来是 {id, src} 对象，之前把整个对象当 id 传下去，写进 config-sync-scope.json 时被序列化成 \"[object Object]\"：面板上看得到 installed.json / panel.json 两项，但单独取消勾选永远记不住，还会被「排除项只认本机真实存在」的清理逻辑判成无效键。改成取 f.id（文件名）后，勾选与排除都能正常落盘、跨机读回一致。",
-  "notesEn": "0.3.50: fixes the ids of the two skill-market ledger checkboxes under \"Sync content\". The entries are {id, src} objects, but the whole object was passed as the id, so config-sync-scope.json serialized it as \"[object Object]\": both installed.json / panel.json showed up in the panel, yet unchecking either one never stuck and the \"only real local ids\" cleanup dropped the key. Taking f.id (the file name) makes checks and exclusions persist and round-trip across machines.",
-  "sha256":"d40cdfaa9dd72bc3e49058f00eedd4203087b065405443927b38e1388a37c346",
-  "tgz": "releases/dsh-config-sync-0.3.50.tgz",
+  "notes": "0.3.51：同步范围扩到「插件数据 + 额外路径」两组。以前只有固定白名单，新装的第三方插件写在自己目录里的配置和数据（redteam\\knowledge.db、our-free-model\\settings.json、dsh-purge、channel-pack 等）一律同步不上。现在：① 插件数据组自动枚举 DSH 一级目录，一个目录一个槽（跳过 profiles/skills/storages/dsh-runtimes 等已有专属组的目录与隐藏目录、node_modules）；② 额外路径组由你在面板里自己加绝对路径（目录或单文件）；③ 排除名单默认 50 条（数据库/二进制/压缩包/缓存/令牌/密钥等），一行一条、整份替换，单文件上限硬顶 100MB（GitHub 单文件限制），超了直接跳过。文本在仓库里用 {{APP_ROOT}} / {{DSH_HOME}} 等占位符，换机 apply 自动展开；二进制字节保真；写回前把目标侧旧文件先备份到 backups\\config-<时间戳>。规则落在本机 ~\\.dsh\\config-sync-extra.json（不进仓库），面板新增「插件数据与额外路径」卡可直接改排除名单、上限与路径。",
+  "notesEn": "0.3.51 extends the sync scope to two new groups: \"Plugin data\" and \"Extra paths\". Until now only a fixed whitelist was synced, so configs and data that newly installed third-party plugins keep in their own folders (redteam\\knowledge.db, our-free-model\\settings.json, dsh-purge, channel-pack, ...) never travelled across machines. Now: (1) plugin data auto-enumerates the top-level folders of the DSH home, one folder per slot, skipping folders that already have a dedicated group (profiles/skills/storages/dsh-runtimes ...), hidden folders and node_modules; (2) extra paths are absolute paths you add in the panel, folder or single file; (3) the exclusion list ships with 50 wildcard entries (databases, binaries, archives, caches, tokens, keys ...), one per line, replaced wholesale, with a per-file cap hard-clamped to 100MB (GitHub single-file limit) — bigger files are skipped. Text files are stored with {{APP_ROOT}} / {{DSH_HOME}} placeholders and expanded on the other machine; binaries are copied byte for byte; overwritten target files are backed up into backups\\config-<timestamp> first. Rules live in ~\\.dsh\\config-sync-extra.json (this machine only, never committed) and the new \"Plugin data & extra paths\" card edits the exclusions, the size cap and the path list.",
+  "sha256":"ef1a4feaba76d77ae16787d4e76a1f0ad6f1829cdb6c2cc4c70f144ba1115503",
+  "tgz": "releases/dsh-config-sync-0.3.51.tgz",
   "minClient": "0.2.2-rc.2"
 }

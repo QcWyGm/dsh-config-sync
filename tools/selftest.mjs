@@ -94,7 +94,7 @@ function check(label, cond, detail = '') {
 }
 
 console.log('== dsh-config-sync 宿主半身自检 ==')
-check('apply() 注册了路由', routes.size === 9 && routes.has('/config-sync/update') && routes.has('/config-sync/scope') && routes.has('/config-sync/conflict') && routes.has('/config-sync/roots') && routes.has('/config-sync/feedback'), `实际 ${routes.size} 条：${[...routes.keys()].join(', ')}`)
+check('apply() 注册了路由', routes.size === 10 && routes.has('/config-sync/update') && routes.has('/config-sync/scope') && routes.has('/config-sync/extra-config') && routes.has('/config-sync/conflict') && routes.has('/config-sync/roots') && routes.has('/config-sync/feedback'), `实际 ${routes.size} 条：${[...routes.keys()].join(', ')}`)
 
 const status = await call('/config-sync/status', { headers: { host: 'localhost:3080' } })
 const body = JSON.parse(status.body || '{}')
@@ -381,7 +381,7 @@ const prevScope = existsSync(scopeFile) ? readFileSync(scopeFile, 'utf8') : null
 const scopeGet = await call('/config-sync/scope', { headers: { host: 'localhost:3080' } })
 const scopeBody = JSON.parse(scopeGet.body || '{}')
 check('scope 返回 200', scopeGet.statusCode === 200, String(scopeGet.statusCode))
-check('scope 列出十组同步内容', Array.isArray(scopeBody.groups) && scopeBody.groups.length === 10, `${(scopeBody.groups || []).length} 组`)
+check('scope 列出十二组同步内容', Array.isArray(scopeBody.groups) && scopeBody.groups.length === 12, `${(scopeBody.groups || []).length} 组`)
 check('scope 每组都带标题 / 说明 / 明细项',
   (scopeBody.groups || []).every((g) => g && typeof g.title === 'string' && typeof g.desc === 'string' && Array.isArray(g.items)),
   (scopeBody.groups || []).map((g) => g.id).join(', '))
@@ -705,7 +705,7 @@ if (prevScope === null) { try { unlinkSync(scopeFile) } catch { } } else writeFi
       && /if \(-not \$SkipWatermark\)/.test(postExitSrc),
     'post-exit.ps1')
 
-  const SCOPE_GROUPS = ['profile', 'prompt', 'skills', 'presets', 'storages-record', 'settings', 'mnemon', 'local-plugins', 'workspace', 'conversations']
+  const SCOPE_GROUPS = ['profile', 'prompt', 'skills', 'presets', 'storages-record', 'settings', 'mnemon', 'local-plugins', 'plugin-data', 'extra', 'workspace', 'conversations']
   check('公共脚本提供 scope 读取与判断函数',
     ['Get-SyncScope', 'Test-SyncGroupEnabled', 'Test-SyncItemEnabled', 'Test-SyncDeleteCloud', 'Skip-SyncGroup', 'Skip-SyncItem']
       .every((n) => commonSrc.includes(`function ${n}`)), 'dsh-sync-common.ps1')
@@ -715,8 +715,8 @@ if (prevScope === null) { try { unlinkSync(scopeFile) } catch { } } else writeFi
   check('capture 十组都按勾选判断',
     SCOPE_GROUPS.every((g) => captureSrc.includes(`Test-SyncGroupEnabled $Scope '${g}'`)),
     SCOPE_GROUPS.filter((g) => !captureSrc.includes(`Test-SyncGroupEnabled $Scope '${g}'`)).join(', ') || 'capture.ps1')
-  const EXCLUDABLE = ['skills', 'presets', 'settings', 'local-plugins', 'prompt', 'storages-record', 'workspace', 'conversations']
-  check('capture 组内还能单独排除（skills / presets / settings / local-plugins / prompt / 台账 / 工作区 / 会话）',
+  const EXCLUDABLE = ['skills', 'presets', 'settings', 'local-plugins', 'prompt', 'storages-record', 'plugin-data', 'extra', 'workspace', 'conversations']
+  check('capture 组内还能单独排除（skills / presets / settings / local-plugins / prompt / 台账 / 插件数据 / 额外路径 / 工作区 / 会话）',
     EXCLUDABLE.every((g) => captureSrc.includes(`Test-SyncItemEnabled $Scope '${g}'`)),
     EXCLUDABLE.filter((g) => !captureSrc.includes(`Test-SyncItemEnabled $Scope '${g}'`)).join(', ') || 'capture.ps1')
   check('apply 十组都按勾选跳过（未勾选的不还原）',
@@ -729,6 +729,34 @@ if (prevScope === null) { try { unlinkSync(scopeFile) } catch { } } else writeFi
     applySrc.includes("(Test-SyncItemEnabled $Scope 'skills' $_.Name)"), 'apply.ps1')
   check('会话按工作区过滤，且未勾选的会话不会被铺回本机',
     captureSrc.includes('$skipSessDirs') && applySrc.includes('$skipConvDirs'), 'capture/apply')
+
+  // 0.3.51：插件数据（自动枚举）与额外路径（用户自选），规则落在 config-sync-extra.json
+  check('两组 id 进了公共脚本、capture、apply 与面板',
+    commonSrc.includes("'plugin-data', 'extra'")
+    && captureSrc.includes("Test-SyncGroupEnabled $Scope 'plugin-data'")
+    && applySrc.includes("Test-SyncGroupEnabled $Scope 'plugin-data'")
+    && indexSrc.includes("id: 'plugin-data'") && indexSrc.includes("id: 'extra'"), 'all')
+  check('规则文件：config-sync-extra.json + 排除名单整份替换（空数组也要能生效）',
+    commonSrc.includes('config-sync-extra.json')
+    && commonSrc.includes("if ($j.pluginData.PSObject.Properties['exclude']) { $pd.exclude = @("), 'dsh-sync-common.ps1')
+  check('单文件上限卡在 GitHub 硬限 100MB（配置调大也压回来）',
+    commonSrc.includes('$SyncExtraHardMaxBytes = 104857600') && commonSrc.includes('[Math]::Min([int64]$v, [int64]$SyncExtraHardMaxBytes)'), 'dsh-sync-common.ps1')
+  check('插件数据按 dav 目录枚举，系统/已覆盖目录进默认 skipDirs',
+    commonSrc.includes('function Get-PluginDataSlots') && commonSrc.includes("'profiles', 'skills', '.agent-presets', 'storages'"), 'dsh-sync-common.ps1')
+  check('抓取写 manifest（路径占位符化，方便另一台展开）',
+    captureSrc.includes("Join-Path $pdDst 'manifest.json'") && captureSrc.includes("src  = (ConvertTo-TokenText $slot.src $pdRoots)"), 'capture.ps1')
+  check('写回先展开占位符、再逐文件合并并留底',
+    /Copy-TreeInto \$slotSrc \$dst \$bk/.test(applySrc) && applySrc.includes('$miss = @(Get-MissingTokens $expanded)'), 'apply.ps1')
+  check('面板有 /config-sync/extra-config 接口与规则卡',
+    indexSrc.includes("const ROUTE_EXTRA_CONFIG = '/config-sync/extra-config'")
+    && indexSrc.includes('async function handleExtraConfig')
+    && clientSrc.includes("fetch('/config-sync/extra-config'") && clientSrc.includes('function ExtraCard'), 'index/client')
+  check('凭据文件默认不进仓库：*vault* 在名单里，且抓取前按内容嗅探再拦一道',
+    commonSrc.includes("'*vault*'") && indexSrc.includes("'*vault*'")
+    && commonSrc.includes('function Test-SyncExtraSecret') && commonSrc.includes('$SyncExtraSecretMarkers')
+    && captureSrc.includes('Get-SyncExtraSecretSkips'), 'common/index/capture')
+  check('符号链接/junction 不跟进（插件目录常把外部数据链进来）',
+    commonSrc.includes('[IO.FileAttributes]::ReparsePoint'), 'dsh-sync-common.ps1')
   check('工作区登记表也跟着过滤（不会「数据跳过了、登记表还写着」）',
     captureSrc.includes("$entries = @($entries | Where-Object { Test-SyncItemEnabled $Scope 'workspace' $_.Id })")
     && applySrc.includes("$plan = @($plan | Where-Object { Test-SyncItemEnabled $Scope 'workspace' $_.Id })"),

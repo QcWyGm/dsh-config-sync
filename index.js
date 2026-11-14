@@ -2646,6 +2646,157 @@ function listLocalPlugins(dshHome) {
  * 面板要显示的十组内容 + 组内明细项。
  * 明细项一律用「本机实际存在的名字」，因为用户勾的就是自己看得见的那份。
  */
+/**
+ * 插件数据 / 额外路径（0.3.51 起）的规则文件：<DshHome>\config-sync-extra.json（本机，不进仓库）。
+ * 与 runtime\dsh-sync-common.ps1 的默认值必须一致，否则面板说"会同步"、capture 却跳过。
+ */
+const ROUTE_EXTRA_CONFIG = '/config-sync/extra-config'
+const EXTRA_CONFIG_NAME = 'config-sync-extra.json'
+/** GitHub 单文件硬上限 100MB，超过必被拒收，所以配置里调多大都按这个封顶。 */
+const EXTRA_HARD_MAX_BYTES = 104857600
+const EXTRA_DEFAULT_SKIP_DIRS = [
+  'profiles', 'skills', '.agent-presets', 'storages', 'sessions', 'attachments', 'logs', 'backups',
+  'update-staging', 'electron', 'dsh-runtimes', 'dsh-market', '.dsh-plugin-market', 'dsh-session-manager',
+  'im', 'node_modules',
+]
+const EXTRA_DEFAULT_EXCLUDE = [
+  '*.db', '*.db-*', '*.db3', '*.sqlite', '*.sqlite3', '*.sqlite-*', '*.db-shm', '*.db-wal',
+  '*.node', '*.exe', '*.dll', '*.asar', '*.pak', '*.bin', '*.iso', '*.img',
+  '*.zip', '*.7z', '*.rar', '*.tar', '*.gz', '*.tgz', '*.mp4', '*.mkv', '*.avi',
+  '*.log', '*.log.*', '*.tmp', '*.bak', '*.bak-*', '*.old', '*.orig', '*.swp',
+  'api-key', '*.pem', '*.key', '*.p12', '*.pfx', '*.crt',
+  '*cache*', '*token*', '*secret*', '*credential*', '*password*', '*vault*',
+  'node_modules', '.git', '.cache', '__pycache__', '.venv',
+]
+
+function extraConfigPath(dshHome) { return join(dshHome, EXTRA_CONFIG_NAME) }
+
+function readExtraConfig(dshHome) {
+  const cfg = {
+    version: 1,
+    pluginData: {
+      enabled: true,
+      maxFileBytes: EXTRA_HARD_MAX_BYTES,
+      exclude: [...EXTRA_DEFAULT_EXCLUDE],
+      skipDirs: [...EXTRA_DEFAULT_SKIP_DIRS],
+    },
+    extra: { enabled: true, paths: [] },
+  }
+  const p = extraConfigPath(dshHome)
+  if (!isFile(p)) return cfg
+  try {
+    const j = JSON.parse(readFileSync(p, 'utf8'))
+    const pd = j?.pluginData
+    if (pd) {
+      if (pd.enabled === false) cfg.pluginData.enabled = false
+      const n = Number(pd.maxFileBytes)
+      if (Number.isFinite(n) && n > 0) cfg.pluginData.maxFileBytes = Math.min(Math.floor(n), EXTRA_HARD_MAX_BYTES)
+      // 排除名单整份替换：用户在面板里删掉一条就真的不再排除
+      if (Array.isArray(pd.exclude)) cfg.pluginData.exclude = pd.exclude.filter((x) => typeof x === 'string' && x)
+      if (Array.isArray(pd.skipDirs)) cfg.pluginData.skipDirs = pd.skipDirs.filter((x) => typeof x === 'string' && x)
+    }
+    const ex = j?.extra
+    if (ex) {
+      if (ex.enabled === false) cfg.extra.enabled = false
+      if (Array.isArray(ex.paths)) {
+        cfg.extra.paths = ex.paths
+          .filter((x) => x && typeof x.id === 'string' && typeof x.src === 'string' && x.id && x.src)
+          .map((x) => ({ id: x.id, src: x.src, label: typeof x.label === 'string' && x.label ? x.label : x.id }))
+      }
+    }
+  } catch { /* 坏了就按默认规则走，不让面板整页读不出来 */ }
+  return cfg
+}
+
+function saveExtraConfig(dshHome, cfg) {
+  const p = extraConfigPath(dshHome)
+  const out = {
+    version: 1,
+    pluginData: {
+      enabled: cfg.pluginData.enabled !== false,
+      maxFileBytes: Math.min(Math.max(1, Math.floor(Number(cfg.pluginData.maxFileBytes) || EXTRA_HARD_MAX_BYTES)), EXTRA_HARD_MAX_BYTES),
+      exclude: (cfg.pluginData.exclude || []).filter((x) => typeof x === 'string' && x),
+      skipDirs: (cfg.pluginData.skipDirs || []).filter((x) => typeof x === 'string' && x),
+    },
+    extra: {
+      enabled: cfg.extra.enabled !== false,
+      paths: (cfg.extra.paths || []).map((x) => ({ id: x.id, src: x.src, label: x.label || x.id })),
+    },
+  }
+  writeFileSync(p, JSON.stringify(out, null, 2) + '\n', 'utf8')
+  return p
+}
+
+function wildcardToRegex(pat) {
+  const esc = String(pat).replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.')
+  return new RegExp(`^${esc}$`, 'i')
+}
+
+/** 返回跳过原因（'' = 允许同步），与 runtime 的 Test-SyncExtraSkip 判定一致。 */
+function extraSkipReason(relName, size, cfg) {
+  const max = Math.min(cfg.pluginData.maxFileBytes || EXTRA_HARD_MAX_BYTES, EXTRA_HARD_MAX_BYTES)
+  if (size > max) return 'too-big'
+  if (!relName) return ''
+  const parts = String(relName).split(/[\\/]+/).filter((x) => x)
+  const name = parts.length ? parts[parts.length - 1] : relName
+  for (const pat of cfg.pluginData.exclude || []) {
+    const re = wildcardToRegex(pat)
+    if (re.test(name)) return 'excluded'
+    for (const seg of parts) if (re.test(seg)) return 'excluded'
+  }
+  return ''
+}
+
+function dirHasRules(cfg) { return (cfg.pluginData.exclude || []).map(wildcardToRegex) }
+
+/** 插件数据槽：<DshHome> 的一级目录（跳过系统/已覆盖目录与隐藏目录），带文件数与体积。 */
+function listPluginDataSlots(dshHome, cfg) {
+  const skip = new Set(cfg.pluginData.skipDirs || [])
+  let entries = []
+  try {
+    entries = readdirSync(dshHome, { withFileTypes: true })
+  } catch { return [] }
+  const out = []
+  for (const e of entries) {
+    if (!e.isDirectory()) continue
+    if (skip.has(e.name)) continue
+    if (e.name.startsWith('.')) continue
+    const stat = countSlotFiles(join(dshHome, e.name), cfg, 0, 4000)
+    out.push({ id: e.name, src: join(dshHome, e.name), files: stat.files, bytes: stat.bytes, capped: stat.capped, skipped: stat.skipped })
+  }
+  return out
+}
+
+function countSlotFiles(dir, cfg, depth, limit) {
+  const acc = { files: 0, bytes: 0, skipped: 0, capped: false }
+  if (depth > 8) return acc
+  let entries = []
+  try { entries = readdirSync(dir, { withFileTypes: true }) } catch { return acc }
+  const rules = dirHasRules(cfg)
+  for (const e of entries) {
+    if (acc.files >= limit) { acc.capped = true; break }
+    if (e.isDirectory()) {
+      if (rules.some((re) => re.test(e.name))) { acc.skipped++; continue }
+      const sub = countSlotFiles(join(dir, e.name), cfg, depth + 1, limit - acc.files)
+      acc.files += sub.files; acc.bytes += sub.bytes; acc.skipped += sub.skipped; acc.capped = acc.capped || sub.capped
+      continue
+    }
+    if (!e.isFile()) continue
+    let size = 0
+    try { size = statSync(join(dir, e.name)).size } catch { continue }
+    if (extraSkipReason(e.name, size, cfg)) { acc.skipped++; continue }
+    acc.files++; acc.bytes += size
+  }
+  return acc
+}
+
+function humanBytes(n) {
+  if (n < 1024) return `${n} B`
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`
+  if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`
+  return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`
+}
+
 function collectScopeGroups(dshHome, appRoot) {
   const profileDir = resolveProfileDir(dshHome)
   const groups = []
@@ -2703,6 +2854,26 @@ function collectScopeGroups(dshHome, appRoot) {
     descZh: 'link 进 profile 的本地插件，打包成 zip 随配置走', descEn: 'link:-mounted local plugins, packaged as zip and carried with the config',
     items: localPlugins.map((n) => ({ id: n, label: n })) })
 
+  // 0.3.51 起：插件自己写的配置/数据（<DshHome> 一级目录）与用户自选的额外路径
+  // 规则在 config-sync-extra.json 里，默认全勾；已被上面几组覆盖的目录不进这一组（避免仓库出现两份）
+  const extraCfg = readExtraConfig(dshHome)
+  const pdSlots = listPluginDataSlots(dshHome, extraCfg)
+  groups.push({ id: 'plugin-data', titleZh: '插件数据', titleEn: 'Plugin data',
+    descZh: '各插件自己目录里的配置与数据（排除缓存、数据库、密钥与大文件）', descEn: 'Config and data plugins keep in their own folders (caches, databases, keys and big files excluded)',
+    enabledOff: extraCfg.pluginData.enabled === false,
+    items: pdSlots.map((s) => {
+      const size = humanBytes(s.bytes)
+      const label = s.files === 0
+        ? `${s.id} · 0 files`
+        : `${s.id} · ${s.capped ? '4000+' : s.files} files · ${size}`
+      return { id: s.id, label, files: s.files, bytes: s.bytes, skipped: s.skipped }
+    }) })
+
+  groups.push({ id: 'extra', titleZh: '额外路径', titleEn: 'Extra paths',
+    descZh: '你自己指定要跟着配置走的文件或目录（存在 config-sync-extra.json）', descEn: 'Files or folders you add yourself (kept in config-sync-extra.json)',
+    enabledOff: extraCfg.extra.enabled === false,
+    items: (extraCfg.extra.paths || []).map((p) => ({ id: p.id, label: `${p.label || p.id}  ${p.src}` })) })
+
   const workspaces = listWorkspaceEntries(dshHome)
   groups.push({ id: 'workspace', titleZh: '工作区资料', titleEn: 'Workspace files',
     descZh: '登记过的工作区里的资料（>100MB 与模型权重本来就不同步）', descEn: 'Files inside registered workspaces (big files and model weights are never synced)',
@@ -2715,9 +2886,11 @@ function collectScopeGroups(dshHome, appRoot) {
   const scope = readScope(dshHome)
   for (const g of groups) {
     g.enabled = scopeGroupEnabled(scope, g.id)
+    // 组在 config-sync-extra.json 里被关掉时，面板也要显示未勾选（两处判断必须一致）
+    if (g.enabledOff === true) g.enabled = false
     for (const it of g.items) it.enabled = scopeItemEnabled(scope, g.id, it.id)
   }
-  return { scope, groups }
+  return { scope, groups, extraCfg }
 }
 
 async function handleScope(req, res, config) {
@@ -2754,6 +2927,13 @@ async function handleScope(req, res, config) {
       for (const g of cur.groups) allowed[g.id] = new Set(g.items.filter((i) => i.excludable !== false).map((i) => i.id))
     } catch { }
     const clean = {}
+    // 这两组的整组开关同时写进 config-sync-extra.json：面板显示与 capture 判定都读同一处
+    const extraForScope = readExtraConfig(dshHome)
+    let extraDirty = false
+    for (const [id, key] of [['plugin-data', 'pluginData'], ['extra', 'extra']]) {
+      const g = groupsIn[id]
+      if (g && typeof g === 'object' && typeof g.enabled === 'boolean') { extraForScope[key].enabled = g.enabled; extraDirty = true }
+    }
     for (const [id, g] of Object.entries(groupsIn)) {
       if (!g || typeof g !== 'object') continue
       // 必需组一律按"开启、无排除"处理：关掉它会让另一台 apply 直接报错，不是"少同步一点"
@@ -2767,6 +2947,7 @@ async function handleScope(req, res, config) {
       if (Object.keys(entry).length) clean[id] = entry
     }
     const file = writeScope(dshHome, { deleteCloud: body.deleteCloud === true, groups: clean })
+    if (extraDirty) { try { saveExtraConfig(dshHome, extraForScope) } catch { } }
     sendJson(res, 200, { ok: true, path: file, deleteCloud: body.deleteCloud === true })
   } catch (error) {
     sendJson(res, 400, { ok: false, error: String((error && error.message) || error) })
@@ -2798,6 +2979,74 @@ function writeConflicts(dshHome, obj) {
   mkdirSync(dirname(p), { recursive: true })
   writeFileSync(p, JSON.stringify(obj, null, 2) + '\n', 'utf8')
   return p
+}
+
+/**
+ * 「插件数据 / 额外路径」规则：<DshHome>\config-sync-extra.json。
+ * GET 返回当前规则 + 默认名单（面板用来做「恢复默认」）；
+ * POST 覆盖保存：排除名单要可改（用户删一条就真不排除），单文件上限卡在 100MB（GitHub 硬限）。
+ */
+async function handleExtraConfig(req, res, config) {
+  const dshHome = config?.dshHome || process.env.DSH_HOME || join(homedir(), '.dsh')
+  try {
+    const cfgPath = extraConfigPath(dshHome)
+    if (req.method === 'GET') {
+      const cfg = readExtraConfig(dshHome)
+      sendJson(res, 200, {
+        ok: true,
+        path: cfgPath,
+        exists: isFile(cfgPath),
+        hardMaxBytes: EXTRA_HARD_MAX_BYTES,
+        defaults: {
+          exclude: EXTRA_DEFAULT_EXCLUDE,
+          skipDirs: EXTRA_DEFAULT_SKIP_DIRS,
+          maxFileBytes: EXTRA_HARD_MAX_BYTES,
+        },
+        config: cfg,
+      })
+      return
+    }
+    if (req.method !== 'POST') { sendJson(res, 405, { ok: false, error: 'GET/POST only' }); return }
+    if (!originAllowed(req)) { sendJson(res, 403, { ok: false, error: 'cross-origin request rejected' }); return }
+    const raw = await readBody(req)
+    const body = raw.trim() ? JSON.parse(raw) : {}
+    const src = body && typeof body.config === 'object' && body.config ? body.config : (body || {})
+    const cur = readExtraConfig(dshHome)
+    if (src.pluginData && typeof src.pluginData === 'object') {
+      if (typeof src.pluginData.enabled === 'boolean') cur.pluginData.enabled = src.pluginData.enabled
+      const n = Number(src.pluginData.maxFileBytes)
+      if (Number.isFinite(n) && n > 0) cur.pluginData.maxFileBytes = Math.min(Math.floor(n), EXTRA_HARD_MAX_BYTES)
+      if (Array.isArray(src.pluginData.exclude)) cur.pluginData.exclude = src.pluginData.exclude.filter((x) => typeof x === 'string' && x.trim()).map((x) => x.trim())
+      if (Array.isArray(src.pluginData.skipDirs)) cur.pluginData.skipDirs = src.pluginData.skipDirs.filter((x) => typeof x === 'string' && x.trim()).map((x) => x.trim())
+    }
+    if (src.extra && typeof src.extra === 'object') {
+      if (typeof src.extra.enabled === 'boolean') cur.extra.enabled = src.extra.enabled
+      if (Array.isArray(src.extra.paths)) {
+        const used = new Set()
+        const paths = []
+        for (const p of src.extra.paths) {
+          if (!p || typeof p.src !== 'string' || !p.src.trim()) continue
+          const abs = p.src.trim().replace(/\//g, '\\')
+          if (!/^[A-Za-z]:\\/.test(abs) && !abs.startsWith('\\\\')) continue
+          const base = (typeof p.label === 'string' && p.label.trim())
+            ? p.label.trim()
+            : (typeof p.id === 'string' && p.id.trim() ? p.id.trim() : basename(abs))
+          let id = String(base).replace(/[\\/:*?"<>|\s]+/g, '-').replace(/^-+|-+$/g, '') || 'extra'
+          if (!isAbsolute(abs)) continue
+          let n = 2
+          const root = id
+          while (used.has(id.toLowerCase())) { id = `${root}-${n++}` }
+          used.add(id.toLowerCase())
+          paths.push({ id, src: abs, label: base })
+        }
+        cur.extra.paths = paths
+      }
+    }
+    const p = saveExtraConfig(dshHome, cur)
+    sendJson(res, 200, { ok: true, path: p, config: readExtraConfig(dshHome) })
+  } catch (error) {
+    sendJson(res, 400, { ok: false, error: String((error && error.message) || error) })
+  }
 }
 
 async function handleConflict(req, res, config) {
@@ -3961,6 +4210,11 @@ export function apply(ctx, config) {
         kind: 'exact',
         path: ROUTE_SCOPE,
         handler: withLang(handleScope),
+      }))
+      scoped.effect(() => scoped.webServer.register({
+        kind: 'exact',
+        path: ROUTE_EXTRA_CONFIG,
+        handler: withLang(handleExtraConfig),
       }))
       scoped.effect(() => scoped.webServer.register({
         kind: 'exact',

@@ -491,7 +491,185 @@ function Resolve-DshAppRoot([string]$explicit) {
 # 面板「同步内容」卡片的落点：每组一行、组内还能排除单项。文件不存在 = 全勾（老行为不变）。
 # 纪律：勾选只决定「要不要处理」——跳过就是既不抓也不还原；
 #       只有 deleteCloud 打开时才顺手删掉仓库里那份副本（默认关闭，删了就不可逆）。
-$SyncScopeGroups = @('profile', 'prompt', 'skills', 'presets', 'storages-record', 'settings', 'mnemon', 'local-plugins', 'workspace', 'conversations')
+$SyncScopeGroups = @('profile', 'prompt', 'skills', 'presets', 'storages-record', 'settings', 'mnemon', 'local-plugins', 'plugin-data', 'extra', 'workspace', 'conversations')
+
+# ---------- 插件数据 / 额外路径（0.3.51 起）----------
+# 背景：以前的同步范围是白名单（十组固定清单），新装的插件如果自己往 <DshHome>\<插件名>\ 或
+# 自定义目录里写配置/数据，默认一个都带不走。这里补两组：
+#   plugin-data —— 自动枚举 <DshHome> 的一级子目录（排除已被其他组覆盖的系统目录），每个插件一项，
+#                  递归收符合规则的小文件；
+#   extra       —— 用户在面板上自己填的额外路径（文件或目录），一项一条。
+# 两组的规则都写在配置文件 <DshHome>\config-sync-extra.json（本机，不进仓库）：
+# 排除名单可改、单文件上限可改（硬顶 100MB —— GitHub 单文件超过 100MB 会被拒收，调大也没用）。
+$SyncExtraHardMaxBytes = 104857600
+
+$SyncExtraDefaultSkipDirs = @(
+  'profiles', 'skills', '.agent-presets', 'storages', 'sessions', 'attachments', 'logs', 'backups',
+  'update-staging', 'electron', 'dsh-runtimes', 'dsh-market', '.dsh-plugin-market', 'dsh-session-manager',
+  'im', 'node_modules'
+)
+
+$SyncExtraDefaultExclude = @(
+  '*.db', '*.db-*', '*.db3', '*.sqlite', '*.sqlite3', '*.sqlite-*', '*.db-shm', '*.db-wal',
+  '*.node', '*.exe', '*.dll', '*.asar', '*.pak', '*.bin', '*.iso', '*.img',
+  '*.zip', '*.7z', '*.rar', '*.tar', '*.gz', '*.tgz', '*.mp4', '*.mkv', '*.avi',
+  '*.log', '*.log.*', '*.tmp', '*.bak', '*.bak-*', '*.old', '*.orig', '*.swp',
+  'api-key', '*.pem', '*.key', '*.p12', '*.pfx', '*.crt',
+  '*cache*', '*token*', '*secret*', '*credential*', '*password*', '*vault*',
+  'node_modules', '.git', '.cache', '__pycache__', '.venv'
+)
+
+# 凭据内容嗅探：名字看不出、内容里却带登录态的文件（workbuddy-vault\cn\<hash>.json 就是这种，
+# 里面是 accessToken）不能进仓库。抓取时读前 8KB 判一次，命中就跳过并 Warn。
+$SyncExtraSecretMarkers = @(
+  '"accesstoken"', '"refreshtoken"', '"idtoken"', '"apikey"', '"api_key"',
+  '"clientsecret"', '"privatekey"', '"password"', 'authorization: bearer'
+)
+
+function Test-SyncExtraSecret([string]$file) {
+  try {
+    if ((Get-Item -LiteralPath $file -Force).Length -gt 8MB) { return $false }
+    $bytes = [IO.File]::ReadAllBytes($file)
+    if ($bytes.Length -gt 8192) { $bytes = $bytes[0..8191] }
+    # 二进制里到处是 NUL，别拿它当文本嗅探（真正的二进制文件另有扩展名清单挡着）
+    if ($bytes -contains 0) { return $false }
+    $text = ([Text.Encoding]::UTF8.GetString($bytes)).ToLowerInvariant()
+    foreach ($m in $SyncExtraSecretMarkers) { if ($text.Contains($m)) { return $true } }
+    return $false
+  } catch { return $false }
+}
+
+# 自动枚举时被凭据嗅探挡下的文件：抓完集中 Warn 一次，用户知道"这些没进来、为什么"
+$script:SyncExtraSecretSkips = New-Object System.Collections.ArrayList
+function Reset-SyncExtraSecretSkips { $script:SyncExtraSecretSkips.Clear() }
+function Get-SyncExtraSecretSkips { return @($script:SyncExtraSecretSkips) }
+
+function Get-SyncExtraPath([string]$DshHome) { return (Join-Path $DshHome 'config-sync-extra.json') }
+
+function Get-SyncExtraConfig([string]$DshHome) {
+  $pd = [pscustomobject]@{
+    enabled     = $true
+    maxFileBytes = $SyncExtraHardMaxBytes
+    exclude     = @($SyncExtraDefaultExclude)
+    skipDirs    = @($SyncExtraDefaultSkipDirs)
+  }
+  $ex = [pscustomobject]@{ enabled = $true; paths = @() }
+  $f = $null
+  if ($DshHome) { $f = Get-SyncExtraPath $DshHome }
+  if ($f -and (Test-Path -LiteralPath $f)) {
+    try {
+      $j = Get-Content -LiteralPath $f -Raw -Encoding utf8 | ConvertFrom-Json
+      if ($j.pluginData) {
+        if ($null -ne $j.pluginData.PSObject.Properties['enabled']) { $pd.enabled = ($j.pluginData.enabled -ne $false) }
+        if ($null -ne $j.pluginData.PSObject.Properties['maxFileBytes']) {
+          $v = 0
+          if ([int64]::TryParse([string]$j.pluginData.maxFileBytes, [ref]$v) -and $v -gt 0) { $pd.maxFileBytes = [Math]::Min([int64]$v, [int64]$SyncExtraHardMaxBytes) }
+        }
+        # 排除名单是"整份替换"，不是追加：用户在面板里删掉一条就真的不再排除。
+        # 注意空数组也要能生效（@() 在 PowerShell 里转布尔是 $false，所以按"属性存在"判断）
+        if ($j.pluginData.PSObject.Properties['exclude']) { $pd.exclude = @($j.pluginData.exclude | Where-Object { $_ }) }
+        if ($j.pluginData.PSObject.Properties['skipDirs']) { $pd.skipDirs = @($j.pluginData.skipDirs | Where-Object { $_ }) }
+      }
+      if ($j.extra) {
+        if ($null -ne $j.extra.PSObject.Properties['enabled']) { $ex.enabled = ($j.extra.enabled -ne $false) }
+        if ($j.extra.PSObject.Properties['paths'] -and $j.extra.paths) {
+          $ex.paths = @($j.extra.paths | Where-Object { $_ -and $_.id -and $_.src } | ForEach-Object {
+              [pscustomobject]@{ id = [string]$_.id; src = [string]$_.src; label = [string]$(if ($_.label) { $_.label } else { $_.id }) }
+            })
+        }
+      }
+    } catch {
+      Warn ("config-sync-extra.json 解析失败，按默认规则处理：" + $_.Exception.Message)
+    }
+  }
+  return [pscustomobject]@{ version = 1; pluginData = $pd; extra = $ex }
+}
+
+function Save-SyncExtraConfig([string]$DshHome, $cfg) {
+  $j = [ordered]@{
+    version  = 1
+    pluginData = [ordered]@{
+      enabled      = ($cfg.pluginData.enabled -ne $false)
+      maxFileBytes = [int64]$cfg.pluginData.maxFileBytes
+      exclude      = @($cfg.pluginData.exclude | Where-Object { $_ })
+      skipDirs     = @($cfg.pluginData.skipDirs | Where-Object { $_ })
+    }
+    extra    = [ordered]@{
+      enabled = ($cfg.extra.enabled -ne $false)
+      paths   = @($cfg.extra.paths | Where-Object { $_ } | ForEach-Object { [ordered]@{ id = [string]$_.id; src = [string]$_.src; label = [string]$_.label } })
+    }
+  }
+  $f = Get-SyncExtraPath $DshHome
+  [IO.File]::WriteAllText($f, ($j | ConvertTo-Json -Depth 6), (New-Object Text.UTF8Encoding($false)))
+  return $f
+}
+
+# 排除判定：文件名或任一路径段命中通配就排除；超过单文件上限也排除（返回原因，空串表示通过）
+function Test-SyncExtraSkip([string]$relName, [long]$size, $cfg) {
+  $max = [Math]::Min([int64]$cfg.pluginData.maxFileBytes, [int64]$SyncExtraHardMaxBytes)
+  if ($size -gt $max) { return 'too-big' }
+  if (-not $relName) { return '' }
+  $parts = @($relName -split '[\\/]' | Where-Object { $_ })
+  $name = if ($parts.Count -gt 0) { $parts[$parts.Count - 1] } else { $relName }
+  $pats = @($cfg.pluginData.exclude)
+  foreach ($p in $pats) {
+    $wp = New-Object System.Management.Automation.WildcardPattern($p, [System.Management.Automation.WildcardOptions]::IgnoreCase)
+    if ($wp.IsMatch($name)) { return 'excluded' }
+    foreach ($seg in $parts) { if ($wp.IsMatch($seg)) { return 'excluded' } }
+  }
+  return ''
+}
+
+# 插件数据槽：<DshHome> 一级目录（跳过系统/已覆盖目录与隐藏目录）
+function Get-PluginDataSlots([string]$DshHome, $cfg) {
+  $out = New-Object System.Collections.ArrayList
+  if (-not $DshHome -or -not (Test-Path -LiteralPath $DshHome)) { return @() }
+  $skip = @($cfg.pluginData.skipDirs)
+  foreach ($d in (Get-ChildItem -LiteralPath $DshHome -Directory -Force -ErrorAction SilentlyContinue)) {
+    $name = $d.Name
+    if (-not $name) { continue }
+    if ($skip -contains $name) { continue }
+    if ($name.StartsWith('.')) { continue }
+    [void]$out.Add([pscustomobject]@{ id = $name; label = $name; src = $d.FullName })
+  }
+  return @($out)
+}
+
+# 递归枚举一个槽里「规则允许」的文件（depth 上限 8、条数上限 4000，避免面板读一次就卡住）
+function Get-PluginDataFiles([string]$slotDir, $cfg, [string]$baseDir = '') {
+  $files = New-Object System.Collections.ArrayList
+  $limit = 4000
+  if (-not $baseDir) { $baseDir = $slotDir }
+  function Get-FilesInner([string]$dir, [int]$depth) {
+    if ($depth -gt 8 -or $files.Count -ge $limit) { return }
+    foreach ($f in (Get-ChildItem -LiteralPath $dir -File -Force -ErrorAction SilentlyContinue)) {
+      if ($files.Count -ge $limit) { return }
+      $rel = Get-RelPath $baseDir $f.FullName
+      if (Test-SyncExtraSkip $rel ([long]$f.Length) $cfg) { continue }
+      if (Test-SyncExtraSecret $f.FullName) { [void]$script:SyncExtraSecretSkips.Add($rel); continue }
+      [void]$files.Add([pscustomobject]@{ rel = $rel; full = $f.FullName; size = [long]$f.Length })
+    }
+    foreach ($sub in (Get-ChildItem -LiteralPath $dir -Directory -Force -ErrorAction SilentlyContinue)) {
+      if ($files.Count -ge $limit) { return }
+      # junction / 符号链接一律不跟：pocs、imports 这类目录常是指到别处（甚至别的盘）的链接，
+      # 跟进会把几千个外部文件当成"插件数据"抓走，还会一路撞到 4000 上限被截断
+      if ($sub.Attributes -band [IO.FileAttributes]::ReparsePoint) { continue }
+      if (Test-SyncExtraSkip $sub.Name 0 $cfg) {
+        # 目录段命中排除名单时不再下去（node_modules / .git / *cache* 这类）
+        $pats = @($cfg.pluginData.exclude)
+        $hit = $false
+        foreach ($p in $pats) {
+          $wp = New-Object System.Management.Automation.WildcardPattern($p, [System.Management.Automation.WildcardOptions]::IgnoreCase)
+          if ($wp.IsMatch($sub.Name)) { $hit = $true; break }
+        }
+        if ($hit) { continue }
+      }
+      Get-FilesInner $sub.FullName ($depth + 1)
+    }
+  }
+  Get-FilesInner $slotDir 0
+  return @($files)
+}
 
 # 必需组：不许取消勾选。理由都是"不勾就报错"这一个事实：
 #   profile 里的 package.json / cordis.patch.yml 是 apply 的前置条件 —— 仓库缺它们，apply.ps1 直接 Die；

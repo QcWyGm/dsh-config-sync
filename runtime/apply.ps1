@@ -990,6 +990,129 @@ if (-not (Test-SyncGroupEnabled $Scope 'mnemon')) {
   Warn "仓库里没有 mnemon 数据，跳过记忆目录还原"
 }
 
+# ---------- 7.6. 还原插件数据（plugin-data）与额外路径（extra） ----------
+# capture 时文本已经占位符化，写回前统一展开成本机路径；落盘前把目标侧旧文件留底，
+# 万一拉错了还能从 $BackupDir 里捞回来。
+function Expand-TokenTree([string]$dir, $roots) {
+  if (-not (Test-Path -LiteralPath $dir)) { return }
+  $binExt = @('.tgz', '.zip', '.png', '.jpg', '.jpeg', '.gif', '.ico', '.bmp', '.webp', '.exe', '.dll', '.wasm', '.pdf', '.dat', '.woff', '.woff2', '.ttf', '.otf')
+  Get-ChildItem -LiteralPath $dir -Recurse -File -Force -ErrorAction SilentlyContinue | ForEach-Object {
+    if ($_.Extension.ToLower() -in $binExt) { return }
+    $raw = Read-TextPreserveBom $_.FullName
+    if ($raw -match '\{\{(APP_ROOT|DSH_HOME|WORKSPACE_HOME|ROOT:[A-Za-z0-9_.\-]+)\}\}') {
+      Write-TextPreserveBom $_.FullName (Expand-TokenText $raw $roots)
+    }
+  }
+}
+
+function Copy-TreeInto([string]$srcRoot, [string]$dstRoot, [string]$backupRoot) {
+  # 逐文件合并：目标已有同名文件先备份到 backupRoot，再覆盖（-Recurse 到已存在目录会套娃，所以不用它）
+  $n = 0
+  if (-not (Test-Path -LiteralPath $srcRoot)) { return 0 }
+  Get-ChildItem -LiteralPath $srcRoot -Recurse -File -Force -ErrorAction SilentlyContinue | ForEach-Object {
+    $rel = Get-RelPath $srcRoot $_.FullName
+    if (-not $rel) { return }
+    $dst = Join-Path $dstRoot $rel
+    $dstParent = Split-Path -Parent $dst
+    if (-not (Test-Path -LiteralPath $dstParent)) { New-Item -ItemType Directory -Path $dstParent -Force | Out-Null }
+    if (Test-Path -LiteralPath $dst) {
+      $bk = Join-Path $backupRoot $rel
+      $bkParent = Split-Path -Parent $bk
+      if (-not (Test-Path -LiteralPath $bkParent)) { New-Item -ItemType Directory -Path $bkParent -Force | Out-Null }
+      Copy-Item -LiteralPath $dst -Destination $bk -Force
+    }
+    Copy-Item -LiteralPath $_.FullName -Destination $dst -Force
+    $n++
+  }
+  return $n
+}
+
+$pdRoots = Get-SyncRoots $DshHome $AppRoot $WorkspaceHome
+
+if (-not (Test-SyncGroupEnabled $Scope 'plugin-data')) {
+  Warn '跳过（未勾选同步）：插件数据（plugin-data）'
+} else {
+  $pdSrc = Join-Path $RepoRoot 'plugin-data'
+  $pdMf = Join-Path $pdSrc 'manifest.json'
+  if (-not (Test-Path -LiteralPath $pdMf)) {
+    Warn '仓库里没有 plugin-data\manifest.json，跳过插件数据还原'
+  } else {
+    $pdManifest = Get-Content -LiteralPath $pdMf -Raw -Encoding utf8 | ConvertFrom-Json
+    $pdDone = 0
+    foreach ($slot in @($pdManifest.slots)) {
+      if (-not $slot.id -or -not $slot.src) { continue }
+      if (-not (Test-SyncItemEnabled $Scope 'plugin-data' $slot.id)) { Warn ('跳过（已排除）：插件数据 ' + $slot.id); continue }
+      $slotSrc = Join-Path $pdSrc $slot.id
+      if (-not (Test-Path -LiteralPath $slotSrc)) { continue }
+      $expanded = Expand-TokenText ([string]$slot.src) $pdRoots
+      $miss = @(Get-MissingTokens $expanded)
+      if ($miss.Count -gt 0) { Warn ('插件数据 ' + $slot.id + ' 的目标路径展开后仍有未配置占位符：' + ($miss -join ',')); continue }
+      $dst = $expanded.Replace('/', $BS)
+      if (-not $dst) { continue }
+      if (-not (Test-Path -LiteralPath $dst)) { New-Item -ItemType Directory -Path $dst -Force | Out-Null }
+      $bk = Join-Path $BackupDir ('plugin-data-' + $slot.id)
+      $n = Copy-TreeInto $slotSrc $dst $bk
+      Expand-TokenTree $dst $pdRoots
+      $pdDone++
+      Ok ('已还原插件数据 ' + $slot.id + '：' + $n + ' 个文件 → ' + $dst)
+    }
+    if ($pdDone -eq 0) { Warn '插件数据：没有可还原的槽（仓库里没有内容或都被排除）' }
+  }
+}
+
+if (-not (Test-SyncGroupEnabled $Scope 'extra')) {
+  Warn '跳过（未勾选同步）：额外路径（extra）'
+} else {
+  $exSrc = Join-Path $RepoRoot 'extra'
+  $exMf = Join-Path $exSrc 'manifest.json'
+  if (-not (Test-Path -LiteralPath $exMf)) {
+    Warn '仓库里没有 extra\manifest.json，跳过额外路径还原'
+  } else {
+    $exManifest = Get-Content -LiteralPath $exMf -Raw -Encoding utf8 | ConvertFrom-Json
+    foreach ($it in @($exManifest.items)) {
+      if (-not $it.id -or -not $it.src) { continue }
+      if (-not (Test-SyncItemEnabled $Scope 'extra' $it.id)) { Warn ('跳过（已排除）：额外路径 ' + $it.id); continue }
+      $expanded = Expand-TokenText ([string]$it.src) $pdRoots
+      $miss = @(Get-MissingTokens $expanded)
+      if ($miss.Count -gt 0) { Warn ('额外路径 ' + $it.id + ' 的目标路径展开后仍有未配置占位符：' + ($miss -join ',')); continue }
+      $dst = $expanded.Replace('/', $BS)
+      if (-not $dst) { continue }
+      if ($it.kind -eq 'dir') {
+        $itemSrc = Join-Path $exSrc $it.id
+        if (-not (Test-Path -LiteralPath $itemSrc)) { continue }
+        if (-not (Test-Path -LiteralPath $dst)) { New-Item -ItemType Directory -Path $dst -Force | Out-Null }
+        $bk = Join-Path $BackupDir ('extra-' + $it.id)
+        $n = Copy-TreeInto $itemSrc $dst $bk
+        Expand-TokenTree $dst $pdRoots
+        Ok ('已还原额外路径 ' + $it.id + '：' + $n + ' 个文件 → ' + $dst)
+      } else {
+        $leaf = Split-Path -Leaf ([string]$it.src)
+        $itemSrc = Join-Path $exSrc ($it.id + (Split-Path -Extension $dst))
+        if (-not (Test-Path -LiteralPath $itemSrc)) {
+          $itemSrc = Join-Path $exSrc $it.id
+          if (-not (Test-Path -LiteralPath $itemSrc)) { continue }
+        }
+        $dstParent = Split-Path -Parent $dst
+        if ($dstParent -and -not (Test-Path -LiteralPath $dstParent)) { New-Item -ItemType Directory -Path $dstParent -Force | Out-Null }
+        if (Test-Path -LiteralPath $dst) {
+          $bk = Join-Path $BackupDir ('extra-' + $leaf)
+          $bkParent = Split-Path -Parent $bk
+          if ($bkParent -and -not (Test-Path -LiteralPath $bkParent)) { New-Item -ItemType Directory -Path $bkParent -Force | Out-Null }
+          Copy-Item -LiteralPath $dst -Destination $bk -Force
+        }
+        Copy-Item -LiteralPath $itemSrc -Destination $dst -Force
+        # 只展开这一个文件（整目录展开会改到用户同目录下的其他文件）
+        if ((Split-Path -Extension $dst).ToLower() -notin @('.tgz', '.zip', '.png', '.jpg', '.jpeg', '.gif', '.ico', '.exe', '.dll', '.wasm', '.pdf')) {
+          $raw = Read-TextPreserveBom $dst
+          if ($raw -match '\{\{(APP_ROOT|DSH_HOME|WORKSPACE_HOME|ROOT:[A-Za-z0-9_.\-]+)\}\}') { Write-TextPreserveBom $dst (Expand-TokenText $raw $pdRoots) }
+        }
+        Ok ('已还原额外路径 ' + $it.id + '：单个文件 → ' + $dst)
+      }
+    }
+  }
+}
+
+
 # 读归档里的插件版本：tgz 里是 package/package.json，zip 里是 <目录名>/package.json 或根 package.json。
 # 读不出来返回 $null，调用方回退到 mtime 判据（不因为读不到就盲目重铺）。
 function Get-ArchivePluginVersion([string]$archPath, [string]$dirName) {

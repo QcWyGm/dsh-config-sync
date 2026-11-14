@@ -1,4 +1,4 @@
-# dsh-config-sync
+﻿# dsh-config-sync
 
 [中文](README.md) | English
 
@@ -400,7 +400,7 @@ Removal uses `Directory.Delete`, so only the link itself goes and nothing is del
 **One misjudgement fixed as well**: before 0.3.29 the deploy test compared mtime, and `git checkout/fetch` stamps the archive with the current time, so every sync round concluded "new version" and renamed the directory into a backup and re-extracted it again (that is how `dsh-purge-1.1.92` and `.bak-timestamp` ended up side by side). It now compares the version inside the archive `package.json` against the deployed one; when the version cannot be read it falls back to mtime with a 10-second margin.
 ## Sync scope (per-group and per-item checkboxes, since 0.3.8)
 
-The panel has a "Sync content" card (placed at the very bottom of the page): the ten groups that sync to the cloud are listed individually and **checked by default**. Clicking a row expands that group's items and clicking it again collapses them (there is no separate "Details" button); both the group and each item can be unchecked — unchecked content is **no longer captured on push and no longer restored on pull**; tick it again and syncing resumes (push and pull share the same file).
+The panel has a "Sync content" card (placed at the very bottom of the page): the twelve groups that sync to the cloud are listed individually and **checked by default**. Clicking a row expands that group's items and clicking it again collapses them (there is no separate "Details" button); both the group and each item can be unchecked — unchecked content is **no longer captured on push and no longer restored on pull**; tick it again and syncing resumes (push and pull share the same file).
 
 - **It opens read-only**: every checkbox is greyed out and only reflects the current selection. Click "Edit" to unlock them, then "Save" to write the file (or "Cancel" to drop the change and re-read the saved state). This prevents a stray click from silently changing what gets synced.
 
@@ -414,6 +414,8 @@ The panel has a "Sync content" card (placed at the very bottom of the page): the
 | Plugin configs | `settings/` | 13 config files (see the table in "Plugin configs travel with the sync"), each excludable |
 | Mnemon | `mnemon/` | the whole folder (single entry) |
 | Local plugins | `local-plugins/` | one entry per linked plugin |
+| Plugin data | `plugin-data/` | one entry per top-level plugin folder (auto-enumerated, see below) |
+| Extra paths | `extra/` | absolute paths you add yourself (see below) |
 | Workspaces | `workspace/` | one entry per registered workspace (`workspace-registry.json` only lists checked ones) |
 | Conversations | `conversations/` | one entry per workspace |
 
@@ -422,6 +424,35 @@ The panel has a "Sync content" card (placed at the very bottom of the page): the
 - The card carries one more switch, "Also delete the cloud copy when unchecked", **off by default**: while off, unchecking just means "this machine stops caring" and the cloud copy stays, so re-ticking resumes immediately; when on, unchecking really deletes the matching folder/sub-path from the repo on the next push (the other machine can no longer pull it) and **that deletion cannot be undone**.
 - Items you cannot tick (the five profile files, mnemon) are deliberately group-level switches: the lockfile specifiers must match package.json, and excluding one alone breaks installation.
 - **The "Local profile" group is required and cannot be unchecked** (the panel shows "required" and greys the checkbox out). It is not an optional extra but a precondition of `apply.ps1`: when `profile\package.json` or `profile\cordis.patch.yml` is missing from the repo, a pull stops with `[X] 仓库内容不完整`; and `profile\host-contract.json` in the same group is the version-consistency check between the two machines — lose it and configs are laid down across mismatched client versions, which can leave the app unable to start. Editing `config-sync-scope.json` to `false` does not help either: `capture.ps1`, `apply.ps1` and the panel all treat it as on (`Test-SyncGroupEnabled` pins it).
+
+## Plugin data & extra paths (0.3.51)
+
+Third-party plugins usually keep their own config and data in their own top-level folder (`~\.dsh\<plugin>\`). These two groups carry them along:
+
+- **Plugin data (`plugin-data/`)**: `<DshHome>`'s top-level folders are enumerated automatically — one folder, one slot — stored as `plugin-data\<slot>\...` plus `plugin-data\manifest.json` (`slots[{id,src,files,bytes}]`).
+  - Skipped by default: `profiles`, `skills`, `.agent-presets`, `storages`, `sessions`, `attachments`, `logs`, `backups`, `update-staging`, `electron`, `dsh-runtimes`, `dsh-market`, `.dsh-plugin-market`, `dsh-session-manager`, `im`, `node_modules` and hidden folders — they either already have a dedicated group or are cache/runtime.
+  - Each slot scans at most 8 levels deep and 4000 files (so no plugin can drag a whole repository in).
+- **Extra paths (`extra/`)**: absolute paths you add in the panel, folder or single file; stored as `extra\<id>\...` or `extra\<id><ext>` plus `extra\manifest.json`.
+- **Text is placeholder-normalised, binary stays byte-exact**: text files get `{{APP_ROOT}}` / `{{DSH_HOME}}` / `{{WORKSPACE_HOME}}` / `{{ROOT:x}}` written into the repo (CRLF→LF along the way) and are expanded on the other machine by `Expand-TokenText`; binaries (`.db`/`.node`/`.exe`/images, or any file containing NUL bytes) are copied byte for byte.
+- **Write-back always keeps a copy first**: apply merges file by file and backs up the overwritten target file into `backups\config-<timestamp>\plugin-data-<slot>` or `extra-<id>`.
+
+### Rules file: `~\.dsh\config-sync-extra.json` (this machine only, never committed)
+
+The "Plugin data & extra paths" card edits this file directly:
+
+| Field | Meaning |
+|---|---|
+| `pluginData.enabled` | group switch for plugin data (linked with the row in "Sync content") |
+| `pluginData.maxFileBytes` | per-file limit, **hard-capped at 104857600 (100MB, GitHub's single-file limit)**; larger values are clamped |
+| `pluginData.exclude` | exclusion list, wildcards one per line, **replaced wholesale** (emptying it really excludes nothing) |
+| `pluginData.skipDirs` | top-level folders skipped during enumeration, also replaced wholesale |
+| `extra.enabled` / `extra.paths[]` | extra-paths switch and list (`{id,src,label}`, `src` must be absolute) |
+
+Default exclusions (50 entries, edit freely): `*.db` / `*.db-*` / `*.sqlite*` / `*.db-shm` / `*.db-wal`, `*.node` / `*.exe` / `*.dll` / `*.asar` / `*.pak` / `*.bin` / `*.img` / `*.iso`, archives `*.zip|7z|rar|tar|gz|tgz`, media `*.mp4|mkv|avi`, `*.log` / `*.log.*`, `*.tmp` / `*.bak` / `*.bak-*` / `*.old` / `*.orig` / `*.swp`, `api-key` / `*.pem|key|p12|pfx|crt`, `*cache*` / `*token*` / `*secret*` / `*credential*` / `*password*` / `*vault*`, `node_modules` / `.git` / `.cache` / `__pycache__` / `.venv`.
+
+- **Why cache/token/database files are excluded by default**: `*cache*` and `*token*` files change on every run and would put a diff in every push; `.db` files are often locked by the plugin itself and restore badly across machines.
+- **Extra paths are safest under a standard root**: anything under `~\.dsh\`, the client folder or the workspace root is normalised into a placeholder; elsewhere (say `D:\tmp\xxx`) it can only be laid down at the same absolute path, and a machine without it skips the item with a `[!]` notice.
+- If a path still contains an unconfigured placeholder after expansion, apply skips that slot with a `[!]` notice instead of writing `{{DSH_HOME}}` into a plugin's config.
 
 ## Auto sync / auto push (two switches, both off by default)
 
@@ -487,11 +518,11 @@ Release flow: change code → `pwsh -File tools\pack-plugin.ps1` to pack `releas
 | `POST /config-sync/settings` | `{repoPath?, remoteUrl?, sshKey?, autoPull?, autoPush?, autoRestart?, backupRoot?, clearBackupRoot?}`: validate → write settings → (touch git only when the URL changed); failure rolls back and returns 400; an empty `backupRoot` / `clearBackupRoot` resets it to the default `~\.dsh\backups`; an empty folder is accepted, only "holds other files yet not a repo" is refused |
 | `POST /config-sync/auto` | `{action:'check'\|'pull-now'\|'push-now'\|'restore-preview'\|'restore-now'\|'cancel', backupDir?, closeNow?, restart?}`; `check` is a read-only fetch comparison (short-circuits with `pendingPull: true` when the local repo is empty instead of failing), `pull-now`/`push-now`/`restore-now` close the client without `/F` (a normal exit, so config is saved), `push-now` returns 400 on an empty folder; `restore-preview` only computes the diff (`pluginsRemove` / `pluginsInstall` / `willRemove` / `willOverwrite` / `willWrite`), while `restore-now` queues the "restore to that point after exit" run; `auto.pending` in `status` carries `reason` (why it queued) |
 | `GET/POST /config-sync/update` | `{action:'check'\|'prepare'\|'install-restart'\|'install-live'\|'restart'\|'apply'}`: `check` re-reads the manifest (mirrors tried in order); `prepare` only downloads into `~\.dsh\update-staging\`; `install-restart` hands that local package to the post-exit installer and closes DSH; `install-live` / `apply` / `restart` remain for CLI and compatibility |
-| `GET/POST /config-sync/scope` | GET returns the ten-group scope (`{id,title,desc,enabled,items:[{id,label,enabled,excludable}]}` per group, plus `deleteCloud` and the local file `path`); POST `{deleteCloud?, groups:{id:{enabled?,excluded?}}}` stores only what differs from the default (fully-checked groups are not written) and drops exclusions that no longer exist |
+| `GET/POST /config-sync/scope` | GET returns the twelve-group scope (`{id,title,desc,enabled,items:[{id,label,enabled,excludable}]}` per group, plus `deleteCloud` and the local file `path`); POST `{deleteCloud?, groups:{id:{enabled?,excluded?}}}` stores only what differs from the default (fully-checked groups are not written) and drops exclusions that no longer exist || `GET/POST /config-sync/extra-config` | reads/writes the plugin-data rules (`{config:{pluginData:{enabled,maxFileBytes,exclude,skipDirs},extra:{enabled,paths[]}}}`; ids de-duplicated, paths must be absolute, the size cap is clamped to 100MB; GET also returns `defaults` for the "Restore defaults" button) |
 
 Cross-origin requests get 403. The client only `fetch`es these routes, imports no `@deepseek-ai/dsh-client-*`, and styles with `--dsw-alias-*` tokens only. Every request carries `accept-language`, which the host turns into Chinese or English text (`node:async_hooks` `AsyncLocalStorage`, one language per request).
 
-Paths: the repo follows the priority above; the client root prefers `config.appRoot` and otherwise derives from the plugin's own location (`<AppRoot>\dsh-config-sync-0.1.0`), so moving machines needs no edit; `.dsh` is `config.dshHome` → `%DSH_HOME%` → `~\.dsh`. The sync state file `~\.dsh\config-sync-state.json` is written by `sync.ps1`; the plugin only reads it. Local-only files: `config-sync-roots.json` (confirmed roots), `config-sync-pending-paths.json` (files skipped for a missing root), `config-sync-absolute-paths.json` (0.3.36: stray roots-outside paths found after a push) and `config-sync-overwrite.json` (0.3.36: which local configs a pull overwrote, with backup paths).
+Paths: the repo follows the priority above; the client root prefers `config.appRoot` and otherwise derives from the plugin's own location (`<AppRoot>\dsh-config-sync-0.1.0`), so moving machines needs no edit; `.dsh` is `config.dshHome` → `%DSH_HOME%` → `~\.dsh`. The sync state file `~\.dsh\config-sync-state.json` is written by `sync.ps1`; the plugin only reads it. Local-only files: `config-sync-roots.json` (confirmed roots), `config-sync-pending-paths.json` (files skipped for a missing root), `config-sync-absolute-paths.json` (0.3.36: stray roots-outside paths found after a push) and `config-sync-overwrite.json` (0.3.36: which local configs a pull overwrote, with backup paths), `config-sync-scope.json` (per-group checkboxes) and `config-sync-extra.json` (0.3.51: plugin-data rules and extra paths).
 
 **Boundary**: `capture` has to read `cordis.patch.yml` while DSH holds that file, so it would capture a half-written state; and after `apply` writes, DSH writes over it again on exit. Hence the fixed boundary: decide what to run and write the command now, double-click after DSH exits. The full explanation of the sync mechanism, directory layout, moving to another machine and troubleshooting lives in the config repo's root `README.md`; this document covers the plugin itself.
 

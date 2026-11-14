@@ -474,7 +474,7 @@ $Scope = Get-SyncScope $DshHome
 
 $ProfileDir = Join-Path $DshHome ("profiles\" + $ProfileName)
 if (-not $WorkspaceOnly -and -not (Test-Path -LiteralPath $ProfileDir)) { Die "找不到 profile：$ProfileDir" }
-foreach ($d in @('profile', 'prompt', 'skills', 'presets', 'local-plugins', 'storages-record', 'settings', 'mnemon', 'workspace', 'conversations')) {
+foreach ($d in @('profile', 'prompt', 'skills', 'presets', 'local-plugins', 'storages-record', 'settings', 'mnemon', 'plugin-data', 'extra', 'workspace', 'conversations')) {
   $p = Join-Path $RepoRoot $d
   if (-not (Test-Path -LiteralPath $p)) { New-Item -ItemType Directory -Path $p -Force | Out-Null }
 }
@@ -838,6 +838,183 @@ if ($PackLocalPlugins) {
 }
 
 } else { Skip-SyncGroup $Scope $RepoRoot 'local-plugins' }
+
+# 6.5) 插件数据（0.3.51 起）：<DshHome> 一级目录里各插件自己的配置/数据
+#     规则（排除名单、单文件上限）来自 <DshHome>\config-sync-extra.json，可在面板里改。
+#     已经被「插件设置与工作流」「记忆数据」覆盖的文件不重复收，避免仓库里出现两份。
+function CopyTrackedTokens($src, $dst, $label, $roots) {
+  # 文本：占位符化（{{APP_ROOT}} / {{DSH_HOME}} / {{WORKSPACE_HOME}}）+ LF；二进制：字节保真
+  $ext = [IO.Path]::GetExtension($src).ToLower()
+  $bin = $ext -in @('.tgz', '.zip', '.png', '.jpg', '.jpeg', '.gif', '.ico', '.bmp', '.webp', '.exe', '.dll', '.wasm', '.pdf', '.dat', '.woff', '.woff2', '.ttf', '.otf')
+  if (-not $bin) {
+    $probe = [IO.File]::ReadAllBytes($src)
+    if ($probe.Length -gt 0 -and $probe -contains 0) { $bin = $true }
+  }
+  if ($bin) { CopyTracked $src $dst $label; return }
+  $bytes = [IO.File]::ReadAllBytes($src)
+  $hasBom = ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF)
+  $text = [Text.Encoding]::UTF8.GetString($bytes)
+  if ($hasBom -and $text.Length -gt 0 -and $text[0] -eq [char]0xFEFF) { $text = $text.Substring(1) }
+  $text = $text -replace "`r`n", "`n"
+  $text = ConvertTo-TokenText $text $roots
+  if (Test-Path -LiteralPath $dst) {
+    if ((Get-RepoText $dst) -ceq $text) { Say ("  =  " + $label + "（无变化）"); return }
+  }
+  [IO.File]::WriteAllText($dst, $text, (New-Object Text.UTF8Encoding($hasBom, $false)))
+    $changed.Add($label) | Out-Null
+  Ok ("更新 " + $label)
+}
+
+$ExtraCfg = Get-SyncExtraConfig $DshHome
+
+if (-not (Test-SyncGroupEnabled $Scope 'plugin-data') -or $ExtraCfg.pluginData.enabled -eq $false) {
+  if (Test-SyncGroupEnabled $Scope 'plugin-data') { Warn '插件数据：已在 config-sync-extra.json 里关闭（pluginData.enabled=false），跳过' }
+  else { Skip-SyncGroup $Scope $RepoRoot 'plugin-data' }
+} else {
+  $pdRoots = Get-SyncRoots $DshHome $AppRoot $WorkspaceHome
+  $pdDst = Join-Path $RepoRoot 'plugin-data'
+  if (-not (Test-Path -LiteralPath $pdDst)) { New-Item -ItemType Directory -Path $pdDst -Force | Out-Null }
+  Reset-SyncExtraSecretSkips
+  $pdSlots = New-Object System.Collections.ArrayList
+  foreach ($slot in (Get-PluginDataSlots $DshHome $ExtraCfg)) {
+    if (-not (Test-SyncItemEnabled $Scope 'plugin-data' $slot.id)) {
+      Skip-SyncItem $Scope $RepoRoot 'plugin-data' $slot.id ('plugin-data\' + $slot.id)
+      continue
+    }
+    $slotDst = Join-Path $pdDst $slot.id
+    $files = @(Get-PluginDataFiles $slot.src $ExtraCfg)
+    $bytes = 0
+    foreach ($f in $files) { $bytes += $f.size }
+    if ($files.Count -eq 0) {
+      # 本机这个插件目录里没有符合规则的文件（全是大文件/缓存/密钥），仓库里就别留空壳
+      if (Test-Path -LiteralPath $slotDst) {
+        Remove-Item -LiteralPath $slotDst -Recurse -Force
+        $changed.Add('plugin-data\' + $slot.id + '（删除）') | Out-Null
+      }
+      Say ('  -  ' + $slot.id + '（无可同步文件，跳过）')
+      continue
+    }
+    foreach ($f in $files) {
+      $dstFile = Join-Path $slotDst $f.rel
+      $dstDir = Split-Path -Parent $dstFile
+      if (-not (Test-Path -LiteralPath $dstDir)) { New-Item -ItemType Directory -Path $dstDir -Force | Out-Null }
+      CopyTrackedTokens $f.full $dstFile ('plugin-data\' + $slot.id + '\' + $f.rel) $pdRoots
+    }
+    # 镜像：本机已不存在的文件从仓库删掉（排除名单改过、插件删了配置都会走到这里）
+    if (Test-Path -LiteralPath $slotDst) {
+      Get-ChildItem -LiteralPath $slotDst -Recurse -File -Force | ForEach-Object {
+        $rel = Get-RelPath $slotDst $_.FullName
+        if ($rel -and -not (Test-Path -LiteralPath (Join-Path $slot.src $rel))) {
+          Remove-Item -LiteralPath $_.FullName -Force
+          $changed.Add('plugin-data\' + $slot.id + '\' + $rel + '（删除）') | Out-Null
+          Warn ('仓库中移除本机已不存在的文件：' + $slot.id + '\' + $rel)
+        }
+      }
+    }
+    [void]$pdSlots.Add([ordered]@{
+      id   = $slot.id
+      src  = (ConvertTo-TokenText $slot.src $pdRoots)
+      files = $files.Count
+      bytes = [int64]$bytes
+    })
+    Ok ('插件数据 ' + $slot.id + '：' + $files.Count + ' 个文件，' + ('{0:N0}' -f ($bytes / 1KB)) + ' KB')
+  }
+  # manifest 不写时间戳：写了会让每次抓取都产生"有改动"，白白多一个提交
+  $pdManifest = [ordered]@{ version = 1; slots = @($pdSlots) }
+  $pdManifestPath = Join-Path $pdDst 'manifest.json'
+  $pdManifestText = ($pdManifest | ConvertTo-Json -Depth 6)
+  if (Test-Path -LiteralPath $pdManifestPath) {
+    if ((Get-RepoText $pdManifestPath) -ceq $pdManifestText) { Say '  =  plugin-data\manifest.json（无变化）' }
+    else { [IO.File]::WriteAllText($pdManifestPath, $pdManifestText, (New-Object Text.UTF8Encoding($false))); $changed.Add('plugin-data\manifest.json') | Out-Null; Ok '更新 plugin-data\manifest.json' }
+  } else {
+    [IO.File]::WriteAllText($pdManifestPath, $pdManifestText, (New-Object Text.UTF8Encoding($false))); $changed.Add('plugin-data\manifest.json') | Out-Null; Ok '新增 plugin-data\manifest.json'
+  }
+  Ok ('插件数据：本轮 ' + $pdSlots.Count + ' 个槽参与同步')
+  $secretSkips = @(Get-SyncExtraSecretSkips)
+  if ($secretSkips.Count -gt 0) {
+    # 名字看不出、内容里带 accessToken / apiKey / password 的文件：不进仓库，只提示
+    $head = ($secretSkips | Select-Object -First 6) -join '、'
+    Warn ('插件数据：' + $secretSkips.Count + ' 个文件内容含凭据（accessToken / apiKey / password 等），已跳过不进仓库：' + $head + $(if ($secretSkips.Count -gt 6) { ' …' } else { '' }))
+  }
+}
+
+# 6.6) 额外路径（0.3.51 起）：用户在面板里自己填的文件/目录
+if (-not (Test-SyncGroupEnabled $Scope 'extra') -or $ExtraCfg.extra.enabled -eq $false) {
+  if (Test-SyncGroupEnabled $Scope 'extra') { Warn '额外路径：已在 config-sync-extra.json 里关闭（extra.enabled=false），跳过' }
+  else { Skip-SyncGroup $Scope $RepoRoot 'extra' }
+} elseif (@($ExtraCfg.extra.paths).Count -eq 0) {
+  Say '  -  额外路径：没有登记任何路径（面板「额外路径」卡里可以加）'
+} else {
+  $exRoots = Get-SyncRoots $DshHome $AppRoot $WorkspaceHome
+  $exDst = Join-Path $RepoRoot 'extra'
+  if (-not (Test-Path -LiteralPath $exDst)) { New-Item -ItemType Directory -Path $exDst -Force | Out-Null }
+  $exItems = New-Object System.Collections.ArrayList
+  foreach ($p in @($ExtraCfg.extra.paths)) {
+    $srcPath = [string]$p.src
+    if (-not (Test-Path -LiteralPath $srcPath)) { Warn ('额外路径本机不存在，跳过：' + $srcPath); continue }
+    $srcTok = ConvertTo-TokenText $srcPath $exRoots
+    if (-not $srcTok.Contains('{{')) {
+      # 不在 .dsh / 客户端目录 / 工作区根之下：换台机器 apply 会按同一个绝对路径铺，路径不存在就只能跳过
+      Warn ('额外路径不在已知根下（换机可能对不上）：' + $srcPath)
+    }
+    if (-not (Test-SyncItemEnabled $Scope 'extra' $p.id)) { Skip-SyncItem $Scope $RepoRoot 'extra' $p.id ('extra\' + $p.id); continue }
+    $isDir = (Get-Item -LiteralPath $srcPath -Force).PSIsContainer
+    $itemDst = Join-Path $exDst $p.id
+    $nFiles = 0; $nBytes = 0
+    if ($isDir) {
+      if ((Test-Path -LiteralPath $itemDst) -and -not (Get-Item -LiteralPath $itemDst -Force).PSIsContainer) { Remove-Item -LiteralPath $itemDst -Force }
+      if (-not (Test-Path -LiteralPath $itemDst)) { New-Item -ItemType Directory -Path $itemDst -Force | Out-Null }
+      $files = @(Get-PluginDataFiles $srcPath $ExtraCfg)
+      foreach ($f in $files) {
+        $dstFile = Join-Path $itemDst $f.rel
+        $dstDir = Split-Path -Parent $dstFile
+        if (-not (Test-Path -LiteralPath $dstDir)) { New-Item -ItemType Directory -Path $dstDir -Force | Out-Null }
+        CopyTrackedTokens $f.full $dstFile ('extra\' + $p.id + '\' + $f.rel) $exRoots
+        $nFiles++; $nBytes += $f.size
+      }
+      if (Test-Path -LiteralPath $itemDst) {
+        Get-ChildItem -LiteralPath $itemDst -Recurse -File -Force | ForEach-Object {
+          $rel = Get-RelPath $itemDst $_.FullName
+          if ($rel -and -not (Test-Path -LiteralPath (Join-Path $srcPath $rel))) {
+            Remove-Item -LiteralPath $_.FullName -Force
+            $changed.Add('extra\' + $p.id + '\' + $rel + '（删除）') | Out-Null
+          }
+        }
+      }
+      Ok ('额外路径 ' + $p.id + '：目录，' + $nFiles + ' 个文件')
+    } else {
+      $itemDst = Join-Path $exDst ($p.id + (Split-Path -Extension $srcPath))
+      if ((Test-Path -LiteralPath $itemDst) -and (Get-Item -LiteralPath $itemDst -Force).PSIsContainer) { Remove-Item -LiteralPath $itemDst -Recurse -Force }
+      if (Test-SyncExtraSecret $srcPath) {
+        # 你自己加进来的路径：尊重设置照抓，但提醒一句（进仓库就等于进了远端历史）
+        Warn ('额外路径 ' + $p.id + '：文件内容含凭据（accessToken / apiKey / password 等），建议别同步；本次仍按你的设置抓取')
+      }
+      CopyTrackedTokens $srcPath $itemDst ('extra\' + (Split-Path -Leaf $itemDst)) $exRoots
+      $nFiles = 1; $nBytes = (Get-Item -LiteralPath $srcPath).Length
+      Ok ('额外路径 ' + $p.id + '：单个文件 ' + (Split-Path -Leaf $srcPath))
+    }
+    [void]$exItems.Add([ordered]@{
+      id    = $p.id
+      label = $p.label
+      src   = (ConvertTo-TokenText $srcPath $exRoots)
+      kind  = $(if ($isDir) { 'dir' } else { 'file' })
+      files = $nFiles
+      bytes = [int64]$nBytes
+    })
+  }
+  $exManifestPath = Join-Path $exDst 'manifest.json'
+  $exManifestText = ([ordered]@{ version = 1; items = @($exItems) } | ConvertTo-Json -Depth 6)
+  if (Test-Path -LiteralPath $exManifestPath) {
+    if ((Get-RepoText $exManifestPath) -cne $exManifestText) {
+      [IO.File]::WriteAllText($exManifestPath, $exManifestText, (New-Object Text.UTF8Encoding($false)))
+      $changed.Add('extra\manifest.json') | Out-Null; Ok '更新 extra\manifest.json'
+    } else { Say '  =  extra\manifest.json（无变化）' }
+  } else {
+    [IO.File]::WriteAllText($exManifestPath, $exManifestText, (New-Object Text.UTF8Encoding($false)))
+    $changed.Add('extra\manifest.json') | Out-Null; Ok '新增 extra\manifest.json'
+  }
+}
+
 
 # 7) 工作区 + 会话同步（默认全量；放在最后，前面的配置都抓完再抓资料）
 if (-not $SkipWorkspace) {

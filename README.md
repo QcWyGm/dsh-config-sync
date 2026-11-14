@@ -1,4 +1,4 @@
-# dsh-config-sync
+﻿# dsh-config-sync
 
 中文 | [English](README.en.md)
 
@@ -374,7 +374,7 @@ dsh plugin add https://raw.githubusercontent.com/QcWyGm/dsh-config-sync/main/rel
 
 ## 同步内容勾选
 
-面板最下面「同步内容」卡，十组逐组列出、**默认全勾**；点一行展开明细，组和单项都能取消勾选——取消后**推送不再抓、拉取不再还原**，重新勾上继续同步（推拉共用同一份勾选）。
+面板最下面「同步内容」卡，十二组逐组列出、**默认全勾**；点一行展开明细，组和单项都能取消勾选——取消后**推送不再抓、拉取不再还原**，重新勾上继续同步（推拉共用同一份勾选）。
 
 | 组 | 云端目录 | 明细项 |
 |---|---|---|
@@ -386,6 +386,8 @@ dsh plugin add https://raw.githubusercontent.com/QcWyGm/dsh-config-sync/main/rel
 | 插件配置 | `settings/` | 13 个文件，可单独排除 |
 | 记忆 | `mnemon/` | 整目录 |
 | 本地插件 | `local-plugins/` | 每个 link 插件 |
+| 插件数据 | `plugin-data/` | 每个插件自己的一级目录（自动枚举，见下节） |
+| 额外路径 | `extra/` | 你自己加的绝对路径（见下节） |
 | 工作区 | `workspace/` | 每个登记的工作区 |
 | 会话 | `conversations/` | 每个工作区对应的会话 |
 
@@ -394,6 +396,35 @@ dsh plugin add https://raw.githubusercontent.com/QcWyGm/dsh-config-sync/main/rel
 - 跳过**两侧都生效**：`capture.ps1` 不抓、`apply.ps1` 不还原；`-PruneSkills` 也不会把"勾掉的本机技能"当多出来的项删掉。
 - 另有开关「取消勾选时顺手删掉云端副本」，**默认关**；打开后取消勾选会真的删仓库里的对应目录（删除不可恢复）。
 - **`本机 profile` 是必需内容**：仓库里没有 `profile\package.json` 或 `cordis.patch.yml` 时拉取会 `[X] 仓库内容不完整` 退出；`profile\host-contract.json` 还是两台机器的版本一致性校验。
+
+## 插件数据与额外路径（0.3.51）
+
+新装的第三方插件，配置和数据多半写在自己的一级目录里（`~\.dsh\<插件名>\`）。这两组把它们也带上：
+
+- **插件数据（`plugin-data/`）**：自动枚举 `<DshHome>` 的一级目录，一个目录一个槽，收成 `plugin-data\<槽名>\...` + `plugin-data\manifest.json`（`slots[{id,src,files,bytes}]`）。
+  - 默认跳过：`profiles`、`skills`、`.agent-presets`、`storages`、`sessions`、`attachments`、`logs`、`backups`、`update-staging`、`electron`、`dsh-runtimes`、`dsh-market`、`.dsh-plugin-market`、`dsh-session-manager`、`im`、`node_modules` 和隐藏目录——这些要么已经有专门的组，要么是缓存/运行时。
+  - 每个槽最多扫 8 层、4000 个文件（防止某个插件把整仓库塞进来）。
+- **额外路径（`extra/`）**：面板里自己加的绝对路径，目录或单个文件都行；落成 `extra\<id>\...` 或 `extra\<id><扩展名>` + `extra\manifest.json`。
+- **文本做占位符归一，二进制字节保真**：文本文件里的 `{{APP_ROOT}}` / `{{DSH_HOME}}` / `{{WORKSPACE_HOME}}` / `{{ROOT:x}}` 由 `ConvertTo-TokenText` 写进仓库（顺带 CRLF→LF），换机 apply 时用 `Expand-TokenText` 展开；`.db`/`.node`/`.exe`/图片这类二进制（或含 NUL 字节的文件）原样字节拷贝。
+- **写回先留底**：apply 逐文件合并，目标侧被覆盖的旧文件先备份到 `backups\config-<时间戳>\plugin-data-<槽>` 或 `extra-<id>`。
+
+### 规则文件：`~\.dsh\config-sync-extra.json`（本机，不进仓库）
+
+面板上「插件数据与额外路径」卡直接改这份文件：
+
+| 字段 | 含义 |
+|---|---|
+| `pluginData.enabled` | 插件数据整组开关（与「同步内容」里那一行联动） |
+| `pluginData.maxFileBytes` | 单文件上限，**硬顶 104857600（100MB，GitHub 单文件硬限）**，填大了也按 100MB 算 |
+| `pluginData.exclude` | 排除名单，通配、一行一条，**整份替换**（清空就真的不排除任何文件） |
+| `pluginData.skipDirs` | 自动枚举时跳过的一级目录名，同样整份替换 |
+| `extra.enabled` / `extra.paths[]` | 额外路径整组开关与路径清单（`{id,src,label}`，src 必须绝对路径） |
+
+默认排除名单（50 条，可按需删改）：`*.db` / `*.db-*` / `*.sqlite*` / `*.db-shm` / `*.db-wal`、`*.node` / `*.exe` / `*.dll` / `*.asar` / `*.pak` / `*.bin` / `*.img` / `*.iso`、压缩包 `*.zip|7z|rar|tar|gz|tgz`、`*.mp4|mkv|avi`、`*.log` / `*.log.*`、`*.tmp` / `*.bak` / `*.bak-*` / `*.old` / `*.orig` / `*.swp`、`api-key` / `*.pem|key|p12|pfx|crt`、`*cache*` / `*token*` / `*secret*` / `*credential*` / `*password*`、`*vault*`、`node_modules` / `.git` / `.cache` / `__pycache__` / `.venv`。
+
+- **为什么默认排掉缓存/令牌/数据库**：`*cache*`、`*token*` 这类「每次运行都变」的文件会让每次推送都有 diff；`.db` 常被插件自己锁着写，跨机器还原容易坏。
+- **额外路径放标准根下更稳**：在 `~\.dsh\`、客户端目录、工作区根之下会被归一成占位符；放在别处（如 `D:\tmp\xxx`）只能按同一个绝对路径铺，对方机器没这个路径就跳过并 `[!]` 提示。
+- 清单里的路径若展开后仍有未配置的占位符，apply 跳过该槽并 `[!]` 提示，不会把 `{{DSH_HOME}}` 原样写进插件配置。
 
 ## 自动同步 / 自动推送（默认关）
 
@@ -463,12 +494,13 @@ node ~\.dsh\.dsh-plugin-market\market-core.mjs catalog --profile desktop
 | `POST /config-sync/settings` | 校验 → 写设置 →（地址变了才动 git），失败回滚并 400 |
 | `POST /config-sync/auto` | `{action:'check'\|'pull-now'\|'push-now'\|'restore-preview'\|'restore-now'\|'cancel'}`，都不带 `/F` 关闭客户端（走正常退出，配置能存下来） |
 | `GET/POST /config-sync/update` | `{action:'check'\|'install-live'\|'restart'\|'apply'}` |
-| `GET/POST /config-sync/scope` | 十组同步范围读写 |
+| `GET/POST /config-sync/scope` | 十二组同步范围读写 |
+| `GET/POST /config-sync/extra-config` | 插件数据与额外路径的规则读写（`{config:{pluginData:{enabled,maxFileBytes,exclude,skipDirs},extra:{enabled,paths[]}}}`，id 去重、路径必须绝对、上限按 100MB 压；GET 另带 `defaults` 供「恢复默认」） |
 | `GET/POST /config-sync/conflict` | 冲突清单与选择 |
 
 跨站请求 403。客户端只 `fetch` 这几条，不 import 任何 `@deepseek-ai/dsh-client-*`，样式只用 `--dsw-alias-*` token。
 
-路径：仓库按上面的优先级；客户端根 `config.appRoot` 优先，留空由插件自身位置推出，换机不用改；`.dsh` 为 `config.dshHome` → `%DSH_HOME%` → `~\.dsh`。本机私有文件：`config-sync-roots.json`、`config-sync-pending-paths.json`、`config-sync-absolute-paths.json`、`config-sync-overwrite.json`、`config-sync-scope.json`、`config-sync-state.json`。
+路径：仓库按上面的优先级；客户端根 `config.appRoot` 优先，留空由插件自身位置推出，换机不用改；`.dsh` 为 `config.dshHome` → `%DSH_HOME%` → `~\.dsh`。本机私有文件：`config-sync-roots.json`、`config-sync-pending-paths.json`、`config-sync-absolute-paths.json`、`config-sync-overwrite.json`、`config-sync-scope.json`、`config-sync-extra.json`、`config-sync-state.json`。
 
 **边界**：`capture` 要读 `cordis.patch.yml`，DSH 运行时这文件正被应用持有，抓到的是半截状态；`apply` 写完以后，DSH 退出时又会回写覆盖。所以边界固定为：判断该跑什么、把命令写好，退出 DSH 后执行。
 
@@ -541,3 +573,4 @@ node ~\.dsh\.dsh-plugin-market\market-core.mjs catalog --profile desktop
 | 空目录语义 | `repoPhase` 八种形态判定全对（含 8.3 短名路径）；空目录跑 `push` 被拦（退出码 1、未生成 `.git`），跑 `pull` 自动 `init → fetch → checkout main` |
 
 真机部分另记两条：`{"action":"pull-now"}` 时 `DSH 7→0` 用 5 秒、+10 秒出现可见窗口、拉完自动 `0→4→7`；开 `autoPush` 后点关闭，7 个进程 `hwnd=0` 不退，16 秒后强制收尾并推送成功。
+

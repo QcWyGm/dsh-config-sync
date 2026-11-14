@@ -380,6 +380,27 @@ window.__ModuleLoader__.load({
     }
 
     /**
+     * 插件数据 / 额外路径规则：GET 取 <DshHome>\config-sync-extra.json（排除名单、单文件上限、自选路径），
+     * POST 覆盖保存。单文件上限服务端封顶 100MB（GitHub 拒收更大文件）。
+     */
+    async function callExtraConfig(payload) {
+      const res = await fetch('/config-sync/extra-config', payload
+        ? {
+          method: 'POST',
+          cache: 'no-store',
+          credentials: 'same-origin',
+          headers: jsonHeaders,
+          body: JSON.stringify(payload),
+        }
+        : { cache: 'no-store', credentials: 'same-origin', headers: langHeaders() })
+      const text = await res.text()
+      let body
+      try { body = text ? JSON.parse(text) : null } catch { throw badJson(res) }
+      if (!res.ok || !body || body.ok !== true) throw new Error((body && body.error) || `${res.status}`)
+      return body
+    }
+
+    /**
      * 同步冲突：GET 取清单（两侧预览 + 每项当前选择），POST 存选择 / 还原单项 / 放弃清单。
      * 落地由 sync.ps1 在下次拉取时按同一份 JSON 执行，这里只改文件不动仓库。
      */
@@ -1330,6 +1351,166 @@ window.__ModuleLoader__.load({
      * deleteCloud（默认关）是唯一的破坏性选项：打开后取消勾选会顺手删掉仓库里的副本。
      * 只读优先：进卡先只看不改，点「修改」才解锁勾选，改完点「保存」才落盘（取消=丢弃这次改动）。
      */
+    /**
+     * 「插件数据与额外路径」卡：新插件自己往 <DshHome>\<插件名>\ 或自选目录里写的配置/数据，
+     * 靠这组的规则决定哪些跟着配置走。规则落在 <DshHome>\config-sync-extra.json：
+     *   - 单文件上限（默认 100MB，GitHub 单文件硬限，调大也按 100MB 算）
+     *   - 排除名单（通配，一行一条；可恢复默认）
+     *   - 额外路径（自己加的绝对路径，目录或单个文件）
+     * 保存后 capture 立刻按新规则抓取，apply 按 manifest 反向展开写回。
+     */
+    function ExtraCard() {
+      const [data, setData] = react.useState(null)
+      const [draft, setDraft] = react.useState(null)
+      const [busy, setBusy] = react.useState(false)
+      const [err, setErr] = react.useState('')
+      const [msg, setMsg] = react.useState('')
+      const [newPath, setNewPath] = react.useState('')
+      const [newLabel, setNewLabel] = react.useState('')
+
+      const toDraft = (d) => ({
+        pdEnabled: d.config.pluginData.enabled !== false,
+        exEnabled: d.config.extra.enabled !== false,
+        maxMB: Math.round((d.config.pluginData.maxFileBytes || d.hardMaxBytes) / (1024 * 1024)),
+        excludeText: (d.config.pluginData.exclude || []).join('\n'),
+        skipDirs: [...(d.config.pluginData.skipDirs || [])],
+        paths: (d.config.extra.paths || []).map((p) => ({ ...p })),
+      })
+
+      const load = async () => {
+        setBusy(true); setErr(''); setMsg('')
+        try {
+          const r = await callExtraConfig()
+          setData(r)
+          setDraft(toDraft(r))
+        } catch (e) {
+          setErr(String((e && e.message) || e))
+        } finally { setBusy(false) }
+      }
+      react.useEffect(() => { load() }, [])
+
+      const save = async () => {
+        if (!data || !draft) return
+        setBusy(true); setErr(''); setMsg('')
+        try {
+          const maxMB = Math.min(Math.max(1, Number(draft.maxMB) || 100), Math.round(data.hardMaxBytes / (1024 * 1024)))
+          const r = await callExtraConfig({
+            config: {
+              pluginData: {
+                enabled: draft.pdEnabled,
+                maxFileBytes: maxMB * 1024 * 1024,
+                exclude: draft.excludeText.split(/\r?\n/).map((x) => x.trim()).filter(Boolean),
+                skipDirs: draft.skipDirs,
+              },
+              extra: {
+                enabled: draft.exEnabled,
+                paths: draft.paths.map((p) => ({ id: p.id, src: p.src, label: p.label })),
+              },
+            },
+          })
+          setData(r)
+          setDraft(toDraft(r))
+          setMsg(M('已保存规则，下次推送按新规则抓取', 'Rules saved; the next push follows them'))
+        } catch (e) {
+          setErr(String((e && e.message) || e))
+        } finally { setBusy(false) }
+      }
+
+      const resetExclude = () => {
+        if (!data) return
+        setDraft({ ...draft, excludeText: (data.defaults.exclude || []).join('\n') })
+        setMsg(M('已填回默认排除名单（还要点保存才生效）', 'Default exclusions restored in the form (click Save to apply)'))
+      }
+      const addPath = () => {
+        const p = newPath.trim()
+        if (!p || !draft) return
+        const label = newLabel.trim() || p.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || 'extra'
+        setDraft({ ...draft, paths: [...draft.paths, { id: label, src: p, label }] })
+        setNewPath(''); setNewLabel('')
+      }
+      const removePath = (idx) => {
+        if (!draft) return
+        setDraft({ ...draft, paths: draft.paths.filter((_, i) => i !== idx) })
+      }
+
+      if (!data || !draft) {
+        return h('div', { style: S.card },
+          h('div', { style: S.cardTitle }, M('插件数据与额外路径', 'Plugin data & extra paths')),
+          h('div', { style: S.hint }, err ? M(`读取失败：${err}`, `Read failed: ${err}`) : M('正在读取规则…', 'Loading rules…')))
+      }
+
+      const hardMB = Math.round(data.hardMaxBytes / (1024 * 1024))
+      return h('div', { style: S.card },
+        h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' } },
+          h('div', { style: S.cardTitle }, M('插件数据与额外路径', 'Plugin data & extra paths')),
+          h('div', { style: { ...S.hint, flex: 1, minWidth: '160px' } },
+            M('新插件自己的配置与数据：自动按插件目录收，规则随时可改', 'New plugins\' own config & data: collected per plugin folder, rules editable')),
+          h('button', { type: 'button', style: S.btnPrimary, disabled: busy, onClick: save }, busy ? M('保存中…', 'Saving…') : M('保存', 'Save')),
+          h('button', { type: 'button', style: S.btn, disabled: busy, onClick: load }, M('刷新', 'Refresh')),
+        ),
+        msg ? h('div', { style: { ...S.hint, color: 'var(--dsw-alias-state-success-primary, #1a7f37)' } }, msg) : null,
+        err ? h('div', { style: { ...S.hint, color: 'var(--dsw-alias-state-error-primary)' } }, err) : null,
+        h('div', { style: S.footnote }, `${data.path}${data.exists ? '' : M('（尚未创建，保存后生成）', ' (created on first save)')}`),
+
+        // 两个整组开关
+        h('div', { style: { display: 'flex', flexDirection: 'column', gap: '4px', marginTop: '4px' } },
+          h('label', { style: { display: 'flex', gap: '8px', alignItems: 'center', fontSize: '12px' } },
+            h('input', { type: 'checkbox', checked: draft.pdEnabled, onChange: (e) => setDraft({ ...draft, pdEnabled: e.target.checked }) }),
+            h('span', null, M('插件数据（自动枚举本机各插件目录）', 'Plugin data (auto-scan each plugin folder)'))),
+          h('label', { style: { display: 'flex', gap: '8px', alignItems: 'center', fontSize: '12px' } },
+            h('input', { type: 'checkbox', checked: draft.exEnabled, onChange: (e) => setDraft({ ...draft, exEnabled: e.target.checked }) }),
+            h('span', null, M('额外路径（下面自己加的路径）', 'Extra paths (added below)'))),
+        ),
+
+        // 单文件上限
+        h('div', { style: { display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap', marginTop: '6px' } },
+          h('span', { style: { fontSize: '12px' } }, M('单文件上限', 'Max file size')),
+          h('input', {
+            type: 'number', min: 1, max: hardMB, value: draft.maxMB,
+            onChange: (e) => setDraft({ ...draft, maxMB: e.target.value }),
+            style: { width: '90px', padding: '3px 6px', fontSize: '12px' },
+          }),
+          h('span', { style: { fontSize: '12px' } }, 'MB'),
+          h('span', { style: S.footnote }, M(`超过就跳过；上限 ${hardMB}MB（GitHub 单文件硬限，调大也按它算）`, `Bigger files are skipped; capped at ${hardMB}MB (GitHub single-file limit)`)),
+        ),
+
+        // 排除名单
+        h('div', { style: { display: 'flex', gap: '8px', alignItems: 'center', marginTop: '6px', flexWrap: 'wrap' } },
+          h('div', { style: { fontSize: '12px' } }, M('排除名单（通配，一行一条）', 'Exclusions (wildcards, one per line)')),
+          h('button', { type: 'button', style: S.btn, onClick: resetExclude }, M('恢复默认', 'Restore defaults')),
+        ),
+        h('textarea', {
+          value: draft.excludeText, spellCheck: false,
+          onChange: (e) => setDraft({ ...draft, excludeText: e.target.value }),
+          style: { width: '100%', boxSizing: 'border-box', minHeight: '96px', fontFamily: 'ui-monospace, Consolas, monospace', fontSize: '12px', lineHeight: '16px' },
+        }),
+
+        // 额外路径
+        h('div', { style: { fontSize: '12px', marginTop: '8px' } }, M('额外路径（绝对路径，目录或单个文件）', 'Extra paths (absolute, folder or single file)')),
+        draft.paths.length === 0
+          ? h('div', { style: S.footnote }, M('还没有加路径：只想同步插件目录就不用加', 'None yet — skip this if plugin folders are enough'))
+          : h('div', { style: { display: 'flex', flexDirection: 'column', gap: '2px' } },
+            draft.paths.map((p, i) => h('div', { key: `${p.id}-${i}`, style: { display: 'flex', gap: '8px', alignItems: 'center', fontSize: '12px' } },
+              h('span', { style: { minWidth: '90px' } }, p.label || p.id),
+              h('span', { style: { flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--dsw-alias-label-secondary)' } }, p.src),
+              h('button', { type: 'button', style: S.btn, onClick: () => removePath(i) }, M('移除', 'Remove')),
+            ))),
+        h('div', { style: { display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap', marginTop: '4px' } },
+          h('input', {
+            type: 'text', value: newLabel, placeholder: M('名字（可留空）', 'Name (optional)'),
+            onChange: (e) => setNewLabel(e.target.value),
+            style: { width: '140px', padding: '3px 6px', fontSize: '12px' },
+          }),
+          h('input', {
+            type: 'text', value: newPath, placeholder: M('C:\\Users\\你\\某个目录 或某个文件', 'C:\\Users\\you\\some-folder'),
+            onChange: (e) => setNewPath(e.target.value),
+            style: { flex: 1, minWidth: '200px', padding: '3px 6px', fontSize: '12px' },
+          }),
+          h('button', { type: 'button', style: S.btn, onClick: addPath }, M('添加', 'Add')),
+        ),
+      )
+    }
+
     function ScopeCard() {
       const [state, setState] = react.useState(null)
       const [open, setOpen] = react.useState({})
@@ -2195,6 +2376,7 @@ window.__ModuleLoader__.load({
       const restoreCard = data ? h(RestoreCard, { data, onSaved: refresh }) : null
       // 「同步内容」卡自己拉 /config-sync/scope，不依赖 status（status 读的是仓库与本机，跟勾选无关）
       const scopeCard = h(ScopeCard, {})
+      const extraCard = h(ExtraCard, {})
       // 「本机路径」与「问题反馈」自己持有数据（roots 文件是本机私有，feedback 在仓库里）
       // 这一区平时不进页面：只有标题行的按钮被点开才渲染。
       // 三类都算告警（待确认路径 / 根外绝对路径 / 被覆盖的配置），数量挂在按钮上。
@@ -2275,7 +2457,8 @@ window.__ModuleLoader__.load({
           // 「还原备份」跟在动作卡之后：先看怎么生成脚本，再挑具体退回到哪份快照
           Section(M('还原备份', 'Restore backup'), M('点快照 → 确认差异 → 排队还原（退出客户端后执行）', 'Pick a snapshot → confirm the diff → queued restore (runs after the client quits)'), [restoreCard].filter(Boolean)),
           // 「同步内容」放在整页最下面：它是"细项配置"，看清前面的状态与动作后才会来调整
-          Section(M('同步内容', 'Sync content'), M('十组内容，默认全勾；必需组锁定', 'Ten groups, all checked; required groups are locked'), [scopeCard]),
+          Section(M('同步内容', 'Sync content'), M('十二组内容，默认全勾；必需组锁定', 'Twelve groups, all checked; required groups are locked'), [scopeCard]),
+          Section(M('插件数据与额外路径', 'Plugin data & extra paths'), M('新插件自己的配置与数据怎么跟着走：默认自动收，排除名单与单文件上限可改', 'How new plugins\' own config and data travel: collected automatically, with editable exclusions and a size cap'), [extraCard]),
           // 反馈放在最后一区：查完状态、调完配置，才轮到「有问题要报」
           Section(M('问题反馈', 'Feedback'), M('提交即建 GitHub Issue（label feedback），跨机器共用同一份；离线先进本机队列', 'Each report becomes a GitHub Issue (label feedback), shared across machines; offline ones queue locally first'), [feedbackCard]),
         ),
