@@ -1,9 +1,9 @@
 {
-  "version": "0.3.52",
+  "version": "0.3.53",
   "releasedAt": "2026-11-15",
-  "notes": "0.3.52：面板「插件数据与额外路径」卡改成和「同步内容」一致的手势——先是只读（开关、单文件上限、排除名单、额外路径都锁着），点「修改」才解锁：额外路径可以直接在页面填绝对路径点「添加」、点「移除」删掉；改完点「保存」才写进 config-sync-extra.json，点「取消」丢弃改动。填相对路径会被当场拦下（换台机器对不上）。",
-  "notesEn": "0.3.52: the \"Plugin data & extra paths\" card now uses the same gesture as \"Sync content\" — read-only first (switches, per-file cap, exclusion list and extra paths all locked), and Edit unlocks it: you can add an absolute path right there and click Remove to delete one; Save writes config-sync-extra.json, Cancel drops the change. A relative path is rejected on the spot (it would not line up on the other machine).",
-  "sha256":"298bf80093844411d3717765895e85608575045baf95e402babb4b000669a855",
-  "tgz": "releases/dsh-config-sync-0.3.52.tgz",
+  "notes": "0.3.53：额外路径列表在只读状态不再显示「移除」按钮，只显示名字和路径；点「修改」后才出现「移除」和添加输入框，改完点「保存」才落盘。",
+  "notesEn": "0.3.53: in read-only state the extra-path list no longer shows a Remove button — only the name and the path. Click Edit to reveal Remove and the add-path inputs; Save writes the rules.",
+  "sha256":"5294e5a197556869bf88577524736de94bbf5d1bd60fc0f84dabe3085880be59",
+  "tgz": "releases/dsh-config-sync-0.3.53.tgz",
   "minClient": "0.2.2-rc.2"
 }

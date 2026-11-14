@@ -1524,7 +1524,7 @@ window.__ModuleLoader__.load({
             draft.paths.map((p, i) => h('div', { key: `${p.id}-${i}`, style: { display: 'flex', gap: '8px', alignItems: 'center', fontSize: '12px' } },
               h('span', { style: { minWidth: '90px' } }, p.label || p.id),
               h('span', { style: { flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--dsw-alias-label-secondary)' } }, p.src),
-              h('button', { type: 'button', style: S.btn, disabled: !editing || busy, onClick: () => removePath(i) }, M('移除', 'Remove')),
+              editing ? h('button', { type: 'button', style: S.btn, disabled: busy, onClick: () => removePath(i) }, M('移除', 'Remove')) : null,
             ))),
         editing
           ? h('div', { style: { display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap', marginTop: '4px' } },

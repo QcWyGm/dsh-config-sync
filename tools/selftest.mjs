@@ -762,6 +762,10 @@ if (prevScope === null) { try { unlinkSync(scopeFile) } catch { } } else writeFi
     && clientSrc.includes('disabled: !editing')
     && /const \[editing, setEditing\] = react\.useState\(false\)[\s\S]{0,1200}setEditing\(false\)/.test(clientSrc)
     && clientSrc.includes('M(\'取消\', \'Cancel\')'), 'client.js')
+  const rmIdx = clientSrc.indexOf('() => removePath')
+  const rmBefore = rmIdx >= 0 ? clientSrc.slice(rmIdx - 180, rmIdx) : ''
+  check('额外路径的「移除」按钮只在编辑态出现（只读时整行只剩名字和路径）',
+    rmBefore.includes("editing ? h('button'") && !rmBefore.includes('disabled: !editing'), 'client.js')
   check('工作区登记表也跟着过滤（不会「数据跳过了、登记表还写着」）',
     captureSrc.includes("$entries = @($entries | Where-Object { Test-SyncItemEnabled $Scope 'workspace' $_.Id })")
     && applySrc.includes("$plan = @($plan | Where-Object { Test-SyncItemEnabled $Scope 'workspace' $_.Id })"),
