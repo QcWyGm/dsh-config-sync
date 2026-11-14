@@ -1363,6 +1363,7 @@ window.__ModuleLoader__.load({
       const [data, setData] = react.useState(null)
       const [draft, setDraft] = react.useState(null)
       const [busy, setBusy] = react.useState(false)
+      const [editing, setEditing] = react.useState(false)
       const [err, setErr] = react.useState('')
       const [msg, setMsg] = react.useState('')
       const [newPath, setNewPath] = react.useState('')
@@ -1410,27 +1411,41 @@ window.__ModuleLoader__.load({
           })
           setData(r)
           setDraft(toDraft(r))
+          setEditing(false)
           setMsg(M('已保存规则，下次推送按新规则抓取', 'Rules saved; the next push follows them'))
         } catch (e) {
           setErr(String((e && e.message) || e))
         } finally { setBusy(false) }
       }
 
+      // 取消：丢掉草稿，回到最后一次保存的状态（与「同步内容」卡同一套手势）
+      const cancel = () => {
+        if (data) setDraft(toDraft(data))
+        setEditing(false)
+        setErr(''); setMsg('')
+      }
+
       const resetExclude = () => {
-        if (!data) return
+        if (!data || !editing) return
         setDraft({ ...draft, excludeText: (data.defaults.exclude || []).join('\n') })
         setMsg(M('已填回默认排除名单（还要点保存才生效）', 'Default exclusions restored in the form (click Save to apply)'))
       }
       const addPath = () => {
         const p = newPath.trim()
-        if (!p || !draft) return
+        if (!p || !draft || !editing) return
+        if (!/^([A-Za-z]:[\\/]|\\\\)/.test(p)) {
+          setErr(M('要填绝对路径，比如 C:\\Users\\你\\某个目录（相对路径换台机器对不上）', 'Use an absolute path such as C:\\Users\\you\\some-folder'))
+          return
+        }
         const label = newLabel.trim() || p.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || 'extra'
         setDraft({ ...draft, paths: [...draft.paths, { id: label, src: p, label }] })
-        setNewPath(''); setNewLabel('')
+        setNewPath(''); setNewLabel(''); setErr('')
+        setMsg(M('已加进列表，点「保存」才真正生效', 'Added to the list — click Save to apply'))
       }
       const removePath = (idx) => {
-        if (!draft) return
+        if (!draft || !editing) return
         setDraft({ ...draft, paths: draft.paths.filter((_, i) => i !== idx) })
+        setMsg(M('已从列表移除，点「保存」才真正生效', 'Removed from the list — click Save to apply'))
       }
 
       if (!data || !draft) {
@@ -1444,21 +1459,33 @@ window.__ModuleLoader__.load({
         h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' } },
           h('div', { style: S.cardTitle }, M('插件数据与额外路径', 'Plugin data & extra paths')),
           h('div', { style: { ...S.hint, flex: 1, minWidth: '160px' } },
-            M('新插件自己的配置与数据：自动按插件目录收，规则随时可改', 'New plugins\' own config & data: collected per plugin folder, rules editable')),
-          h('button', { type: 'button', style: S.btnPrimary, disabled: busy, onClick: save }, busy ? M('保存中…', 'Saving…') : M('保存', 'Save')),
-          h('button', { type: 'button', style: S.btn, disabled: busy, onClick: load }, M('刷新', 'Refresh')),
+            M('新插件自己的配置与数据：自动按插件目录收，规则可改', 'New plugins\' own config & data: collected per plugin folder, rules editable')),
+          editing
+            ? [
+              h('button', { key: 'save', type: 'button', style: S.btnPrimary, disabled: busy, onClick: save },
+                busy ? M('保存中…', 'Saving…') : M('保存', 'Save')),
+              h('button', { key: 'cancel', type: 'button', style: S.btn, disabled: busy, onClick: cancel }, M('取消', 'Cancel')),
+            ]
+            : [
+              h('button', { key: 'edit', type: 'button', style: S.btn, disabled: busy, onClick: () => { setEditing(true); setMsg(''); setErr('') } }, M('修改', 'Edit')),
+              h('button', { key: 'reload', type: 'button', style: S.btn, disabled: busy, onClick: load }, M('刷新', 'Refresh')),
+            ],
         ),
+        h('div', { style: S.footnote },
+          editing
+            ? M('改完点「保存」写进 config-sync-extra.json；点「取消」丢弃改动', 'Click Save to write config-sync-extra.json; Cancel drops the change')
+            : M('只读：点右上「修改」才能改规则、加路径', 'Read-only: click Edit to change rules or add paths')),
         msg ? h('div', { style: { ...S.hint, color: 'var(--dsw-alias-state-success-primary, #1a7f37)' } }, msg) : null,
         err ? h('div', { style: { ...S.hint, color: 'var(--dsw-alias-state-error-primary)' } }, err) : null,
         h('div', { style: S.footnote }, `${data.path}${data.exists ? '' : M('（尚未创建，保存后生成）', ' (created on first save)')}`),
 
         // 两个整组开关
         h('div', { style: { display: 'flex', flexDirection: 'column', gap: '4px', marginTop: '4px' } },
-          h('label', { style: { display: 'flex', gap: '8px', alignItems: 'center', fontSize: '12px' } },
-            h('input', { type: 'checkbox', checked: draft.pdEnabled, onChange: (e) => setDraft({ ...draft, pdEnabled: e.target.checked }) }),
+          h('label', { style: { display: 'flex', gap: '8px', alignItems: 'center', fontSize: '12px', opacity: editing ? 1 : 0.85 } },
+            h('input', { type: 'checkbox', disabled: !editing, checked: draft.pdEnabled, onChange: (e) => setDraft({ ...draft, pdEnabled: e.target.checked }) }),
             h('span', null, M('插件数据（自动枚举本机各插件目录）', 'Plugin data (auto-scan each plugin folder)'))),
-          h('label', { style: { display: 'flex', gap: '8px', alignItems: 'center', fontSize: '12px' } },
-            h('input', { type: 'checkbox', checked: draft.exEnabled, onChange: (e) => setDraft({ ...draft, exEnabled: e.target.checked }) }),
+          h('label', { style: { display: 'flex', gap: '8px', alignItems: 'center', fontSize: '12px', opacity: editing ? 1 : 0.85 } },
+            h('input', { type: 'checkbox', disabled: !editing, checked: draft.exEnabled, onChange: (e) => setDraft({ ...draft, exEnabled: e.target.checked }) }),
             h('span', null, M('额外路径（下面自己加的路径）', 'Extra paths (added below)'))),
         ),
 
@@ -1466,7 +1493,7 @@ window.__ModuleLoader__.load({
         h('div', { style: { display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap', marginTop: '6px' } },
           h('span', { style: { fontSize: '12px' } }, M('单文件上限', 'Max file size')),
           h('input', {
-            type: 'number', min: 1, max: hardMB, value: draft.maxMB,
+            type: 'number', min: 1, max: hardMB, disabled: !editing, value: draft.maxMB,
             onChange: (e) => setDraft({ ...draft, maxMB: e.target.value }),
             style: { width: '90px', padding: '3px 6px', fontSize: '12px' },
           }),
@@ -1477,12 +1504,16 @@ window.__ModuleLoader__.load({
         // 排除名单
         h('div', { style: { display: 'flex', gap: '8px', alignItems: 'center', marginTop: '6px', flexWrap: 'wrap' } },
           h('div', { style: { fontSize: '12px' } }, M('排除名单（通配，一行一条）', 'Exclusions (wildcards, one per line)')),
-          h('button', { type: 'button', style: S.btn, onClick: resetExclude }, M('恢复默认', 'Restore defaults')),
+          h('button', { type: 'button', style: S.btn, disabled: !editing || busy, onClick: resetExclude }, M('恢复默认', 'Restore defaults')),
         ),
         h('textarea', {
-          value: draft.excludeText, spellCheck: false,
+          value: draft.excludeText, spellCheck: false, readOnly: !editing,
           onChange: (e) => setDraft({ ...draft, excludeText: e.target.value }),
-          style: { width: '100%', boxSizing: 'border-box', minHeight: '96px', fontFamily: 'ui-monospace, Consolas, monospace', fontSize: '12px', lineHeight: '16px' },
+          style: {
+            width: '100%', boxSizing: 'border-box', minHeight: '96px', fontFamily: 'ui-monospace, Consolas, monospace',
+            fontSize: '12px', lineHeight: '16px',
+            background: editing ? undefined : 'var(--dsw-alias-bg-secondary, #f7f7f8)',
+          },
         }),
 
         // 额外路径
@@ -1493,21 +1524,23 @@ window.__ModuleLoader__.load({
             draft.paths.map((p, i) => h('div', { key: `${p.id}-${i}`, style: { display: 'flex', gap: '8px', alignItems: 'center', fontSize: '12px' } },
               h('span', { style: { minWidth: '90px' } }, p.label || p.id),
               h('span', { style: { flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--dsw-alias-label-secondary)' } }, p.src),
-              h('button', { type: 'button', style: S.btn, onClick: () => removePath(i) }, M('移除', 'Remove')),
+              h('button', { type: 'button', style: S.btn, disabled: !editing || busy, onClick: () => removePath(i) }, M('移除', 'Remove')),
             ))),
-        h('div', { style: { display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap', marginTop: '4px' } },
-          h('input', {
-            type: 'text', value: newLabel, placeholder: M('名字（可留空）', 'Name (optional)'),
-            onChange: (e) => setNewLabel(e.target.value),
-            style: { width: '140px', padding: '3px 6px', fontSize: '12px' },
-          }),
-          h('input', {
-            type: 'text', value: newPath, placeholder: M('C:\\Users\\你\\某个目录 或某个文件', 'C:\\Users\\you\\some-folder'),
-            onChange: (e) => setNewPath(e.target.value),
-            style: { flex: 1, minWidth: '200px', padding: '3px 6px', fontSize: '12px' },
-          }),
-          h('button', { type: 'button', style: S.btn, onClick: addPath }, M('添加', 'Add')),
-        ),
+        editing
+          ? h('div', { style: { display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap', marginTop: '4px' } },
+            h('input', {
+              type: 'text', value: newLabel, placeholder: M('名字（可留空）', 'Name (optional)'),
+              onChange: (e) => setNewLabel(e.target.value),
+              style: { width: '140px', padding: '3px 6px', fontSize: '12px' },
+            }),
+            h('input', {
+              type: 'text', value: newPath, placeholder: M('C:\\Users\\你\\某个目录 或某个文件', 'C:\\Users\\you\\some-folder'),
+              onChange: (e) => setNewPath(e.target.value),
+              style: { flex: 1, minWidth: '200px', padding: '3px 6px', fontSize: '12px' },
+            }),
+            h('button', { type: 'button', style: S.btn, disabled: busy, onClick: addPath }, M('添加', 'Add')),
+          )
+          : h('div', { style: S.footnote }, M('点「修改」后这里会出现输入框，可直接加路径', 'Click Edit and an input appears here to add a path')),
       )
     }
 

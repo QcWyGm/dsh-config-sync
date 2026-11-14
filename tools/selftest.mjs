@@ -757,6 +757,11 @@ if (prevScope === null) { try { unlinkSync(scopeFile) } catch { } } else writeFi
     && captureSrc.includes('Get-SyncExtraSecretSkips'), 'common/index/capture')
   check('符号链接/junction 不跟进（插件目录常把外部数据链进来）',
     commonSrc.includes('[IO.FileAttributes]::ReparsePoint'), 'dsh-sync-common.ps1')
+  check('「插件数据与额外路径」卡先只读，点「修改」才能改、点「保存」才落盘',
+    clientSrc.includes('readOnly: !editing')
+    && clientSrc.includes('disabled: !editing')
+    && /const \[editing, setEditing\] = react\.useState\(false\)[\s\S]{0,1200}setEditing\(false\)/.test(clientSrc)
+    && clientSrc.includes('M(\'取消\', \'Cancel\')'), 'client.js')
   check('工作区登记表也跟着过滤（不会「数据跳过了、登记表还写着」）',
     captureSrc.includes("$entries = @($entries | Where-Object { Test-SyncItemEnabled $Scope 'workspace' $_.Id })")
     && applySrc.includes("$plan = @($plan | Where-Object { Test-SyncItemEnabled $Scope 'workspace' $_.Id })"),
