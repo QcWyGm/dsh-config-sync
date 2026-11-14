@@ -1,9 +1,9 @@
 {
-  "version": "0.3.53",
+  "version": "0.3.54",
   "releasedAt": "2026-11-15",
-  "notes": "0.3.53：额外路径列表在只读状态不再显示「移除」按钮，只显示名字和路径；点「修改」后才出现「移除」和添加输入框，改完点「保存」才落盘。",
-  "notesEn": "0.3.53: in read-only state the extra-path list no longer shows a Remove button — only the name and the path. Click Edit to reveal Remove and the add-path inputs; Save writes the rules.",
-  "sha256":"5294e5a197556869bf88577524736de94bbf5d1bd60fc0f84dabe3085880be59",
-  "tgz": "releases/dsh-config-sync-0.3.53.tgz",
+  "notes": "0.3.54（纯性能，行为不变）：①capture 判断文件要不要重写，从「每个文件算两次哈希」改成「批量 FileInfo 比对（大小+修改时间），只对可疑文件算哈希」，五万文件从约 120 秒降到约 4 秒，加 -DeepVerify 可强制全量算哈希；②推送前的历史超限扫描改为按提交缓存，只首扫/被拒/-ScanHistory 时全量跑，五万文件仓库每次省下 20 秒以上；③拉取由 fetch+pull（两次网络往返）改为 fetch+merge --ff-only（一次往返）。",
+  "notesEn": "0.3.54 (performance only, behaviour unchanged): capture no longer hashes every file twice to decide whether a file needs rewriting — it compares batched FileInfo (size + mtime) and hashes only the suspicious ones, cutting ~120 s to ~4 s on 50k files; -DeepVerify forces a full hash pass. The pre-push oversized-history scan is now cached per commit and only runs in full on the first push, after a rejection, or with -ScanHistory, saving 20 s+ per push on a 50k-file repo. A pull is now fetch + merge --ff-only (one network round trip) instead of fetch + pull (two).",
+  "sha256":"7f78b5a2ad2cd002669c32dd2dbb5adb9be10c2be1c84854d2ba561d24558454",
+  "tgz": "releases/dsh-config-sync-0.3.54.tgz",
   "minClient": "0.2.2-rc.2"
 }

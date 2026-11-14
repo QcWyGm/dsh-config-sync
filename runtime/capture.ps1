@@ -43,6 +43,8 @@ param(
   [switch]$WorkspaceOnly,
   [switch]$SkipWorkspace,
   [switch]$NoMirrorWorkspace,
+  # 文件比较默认走「大小 + mtime 快筛，只在可疑时算哈希」；怀疑仓库有内容漂移时加这个强制全量算哈希
+  [switch]$DeepVerify,
   [string]$WorkspaceHome = $(Join-Path $env:USERPROFILE 'Documents\deepseek-harness'),
   # sync.ps1 调起本脚本时必须传：否则本脚本的 Reset 会抹掉父进程已攒下的未同步清单
   [switch]$NoResetNotices
@@ -213,26 +215,32 @@ function Sync-WorkspaceCapture {
       return $true
     })
     $srcRels = @{}
-    foreach ($f in $srcFiles) { $srcRels[(Get-RelPath $srcRoot $f.FullName)] = $f.FullName }
+    foreach ($f in $srcFiles) { $srcRels[(Get-RelPath $srcRoot $f.FullName)] = $f }
+    # 仓库侧也枚举一次：拿 FileInfo 在内存里比对（旧写法每文件两次 Get-FileHash，5 万文件要 2 分钟）
+    $dstRels = @{}
+    foreach ($rf in @(Get-ChildItem -LiteralPath $dstRoot -Recurse -File -Force)) {
+      $rel = Get-RelPath $dstRoot $rf.FullName
+      if ($rel) { $dstRels[$rel] = $rf }
+    }
+    $madeDirs = @{}
     foreach ($rel in @($srcRels.Keys)) {
-      $s = $srcRels[$rel]
+      $si = $srcRels[$rel]
+      if (-not (Test-TreeFileChanged $si $dstRels[$rel])) { continue }
       $d = Join-Path $dstRoot $rel
       $dd = Split-Path -Parent $d
-      if (-not (Test-Path -LiteralPath $dd)) { New-Item -ItemType Directory -Path $dd -Force | Out-Null }
-      $need = $false
-      if (-not (Test-Path -LiteralPath $d)) { $need = $true }
-      elseif ((Get-FileHash -LiteralPath $s -Algorithm SHA256).Hash -ne (Get-FileHash -LiteralPath $d -Algorithm SHA256).Hash) { $need = $true }
-      if ($need) {
-        Copy-Item -LiteralPath $s -Destination $d -Force
-        $changed.Add(('workspace/{0}/{1}' -f $e.Slot, $rel.Replace($BS,'/'))) | Out-Null
-        $nAdd++
+      if (-not $madeDirs.ContainsKey($dd)) {
+        if (-not (Test-Path -LiteralPath $dd)) { New-Item -ItemType Directory -Path $dd -Force | Out-Null }
+        $madeDirs[$dd] = $true
       }
+      Copy-Item -LiteralPath $si.FullName -Destination $d -Force
+      $changed.Add(('workspace/{0}/{1}' -f $e.Slot, $rel.Replace($BS,'/'))) | Out-Null
+      $nAdd++
+      $dstRels[$rel] = [IO.FileInfo]::new($d)
     }
     if (-not $NoMirrorWorkspace -and $srcFiles.Count -gt 0) {
-      foreach ($rf in @(Get-ChildItem -LiteralPath $dstRoot -Recurse -File -Force)) {
-        $rel = Get-RelPath $dstRoot $rf.FullName
-        if ($rel -and -not $srcRels.ContainsKey($rel)) {
-          Remove-Item -LiteralPath $rf.FullName -Force
+      foreach ($rel in @($dstRels.Keys)) {
+        if (-not $srcRels.ContainsKey($rel)) {
+          Remove-Item -LiteralPath $dstRels[$rel].FullName -Force
           $changed.Add(('workspace/{0}/{1}（删除）' -f $e.Slot, $rel.Replace($BS,'/'))) | Out-Null
           $nDel++
         }
@@ -251,6 +259,7 @@ function Sync-WorkspaceCapture {
     }
   }
   Ok ('工作区全量同步：{0} 个工作区，入库/更新 {1} 个文件、删除 {2} 个（字节保真，路径结构不变）' -f $entries.Count, $nAdd, $nDel)
+  Say ('  ' + (Get-TreeCmpSummary))
 }
 
 # ---------- 对话/会话数据同步：常量与函数 ----------
@@ -404,33 +413,39 @@ function Sync-ConversationCapture {
       if ($b.Remap -and $skipSessDirs.ContainsKey($parts[0])) { continue }
       if ($b.Remap -and $dirRemap.ContainsKey($parts[0])) { $parts[0] = $dirRemap[$parts[0]] }
       $rel = ($parts -join '\')
-      $srcRels[$rel] = $f.FullName
+      $srcRels[$rel] = $f
     }
-    foreach ($rel in @($srcRels.Keys)) {
-      $s = $srcRels[$rel]
-      $d = Join-Path $dstRoot $rel
-      $dd = Split-Path -Parent $d
-      if (-not (Test-Path -LiteralPath $dd)) { New-Item -ItemType Directory -Path $dd -Force | Out-Null }
-      $need = $false
-      if (-not (Test-Path -LiteralPath $d)) { $need = $true }
-      elseif ((Get-FileHash -LiteralPath $s -Algorithm SHA256).Hash -ne (Get-FileHash -LiteralPath $d -Algorithm SHA256).Hash) { $need = $true }
-      if ($need) {
-        Copy-Item -LiteralPath $s -Destination $d -Force
-        $changed.Add(('conversations/{0}/{1}' -f $b.Dst, $rel.Replace($BS,'/'))) | Out-Null
-        $nAdd++
-      }
-    }
-    # 镜像删除：本机已删的会话文件，仓库里也删
+    $dstRels = @{}
     foreach ($rf in @(Get-ChildItem -LiteralPath $dstRoot -Recurse -File -Force)) {
       $rel = Get-RelPath $dstRoot $rf.FullName
-      if ($rel -and -not $srcRels.ContainsKey($rel)) {
-        Remove-Item -LiteralPath $rf.FullName -Force
+      if ($rel) { $dstRels[$rel] = $rf }
+    }
+    $madeDirs = @{}
+    foreach ($rel in @($srcRels.Keys)) {
+      $si = $srcRels[$rel]
+      if (-not (Test-TreeFileChanged $si $dstRels[$rel])) { continue }
+      $d = Join-Path $dstRoot $rel
+      $dd = Split-Path -Parent $d
+      if (-not $madeDirs.ContainsKey($dd)) {
+        if (-not (Test-Path -LiteralPath $dd)) { New-Item -ItemType Directory -Path $dd -Force | Out-Null }
+        $madeDirs[$dd] = $true
+      }
+      Copy-Item -LiteralPath $si.FullName -Destination $d -Force
+      $changed.Add(('conversations/{0}/{1}' -f $b.Dst, $rel.Replace($BS,'/'))) | Out-Null
+      $nAdd++
+      $dstRels[$rel] = [IO.FileInfo]::new($d)
+    }
+    # 镜像删除：本机已删的会话文件，仓库里也删
+    foreach ($rel in @($dstRels.Keys)) {
+      if (-not $srcRels.ContainsKey($rel)) {
+        Remove-Item -LiteralPath $dstRels[$rel].FullName -Force
         $changed.Add(('conversations/{0}/{1}（删除）' -f $b.Dst, $rel.Replace($BS,'/'))) | Out-Null
         $nDel++
       }
     }
   }
   Ok ('会话数据全量同步：{0} 个目录映射，入库/更新 {1} 个文件、删除 {2} 个（四块数据全部字节保真）' -f $idxEntries.Count, $nAdd, $nDel)
+  Say ('  ' + (Get-TreeCmpSummary))
 
   # 3) 仓库副本的会话头 cwd 归一成占位符（只改首帧、幂等），让两台机器推上来的内容完全一致。
   #    对不上工作区的 passthrough 目录不动（那种目录在 B 机本来也认不出）。
@@ -511,6 +526,32 @@ function Get-NormalizedHash($path) {
   $norm = $text -replace "`r`n", "`n"
   $sha = [Security.Cryptography.SHA256]::Create()
   return [BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($norm)))
+}
+
+# ---------- 大目录文件比较（性能关键路径） ----------
+# 旧写法对每个文件算两次 Get-FileHash（源 + 仓库），5 万个文件实测约 120s。
+# 现在：两个 tree 各枚举一次拿 FileInfo（Length/LastWriteTimeUtc 已在枚举时读好，不再 stat），
+# 内存里比对；只有「大小不同」或「源比仓库新」才对该文件算哈希确认内容。
+# 这与 git 自己的判定策略一致（size+mtime 变了才重算 blob）。
+$script:CmpDeep = [bool]$DeepVerify
+$script:CmpFileCount = 0
+$script:CmpHashCount = 0
+
+function Test-TreeFileChanged($srcInfo, $dstInfo) {
+  # $srcInfo / $dstInfo 都是 FileInfo（$dstInfo 为 $null 表示仓库里没有这个文件）
+  $script:CmpFileCount++
+  if ($null -eq $dstInfo) { return $true }
+  if ($srcInfo.Length -ne $dstInfo.Length) { return $true }
+  if ($script:CmpDeep -or ($srcInfo.LastWriteTimeUtc -gt $dstInfo.LastWriteTimeUtc)) {
+    $script:CmpHashCount++
+    return ((Get-NormalizedHash $srcInfo.FullName) -ne (Get-NormalizedHash $dstInfo.FullName))
+  }
+  return $false
+}
+
+function Get-TreeCmpSummary {
+  $deep = if ($script:CmpDeep) { '深校验开' } else { '快筛' }
+  return ('文件比较（{0}）：比对 {1} 个，深哈希 {2} 个' -f $deep, $script:CmpFileCount, $script:CmpHashCount)
 }
 function CopyNormalized($src, $dst) {
   # 二进制原样拷贝；文本统一写成 LF（与 .gitattributes 的 eol=lf 对齐），并保留原文件的 UTF-8 BOM

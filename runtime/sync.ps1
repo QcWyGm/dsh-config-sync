@@ -11,10 +11,12 @@ DSH 配置同步 —— 一条命令入口（把原来的「capture + git add + 
   pwsh -File sync.ps1 pull -AllowVersionDrift                 # 两端客户端版本不同时，只同步配置（剔除实验性 bundle）
   pwsh -File sync.ps1 push -WorkspaceOnly                     # 只推工作区/会话
   pwsh -File sync.ps1 pull -SkipInstall                       # 只铺配置，不跑 pnpm install
+  pwsh -File sync.ps1 push -DeepVerify                        # 文件比较强制全量算哈希（默认大小+mtime 快筛）
+  pwsh -File sync.ps1 push -ScanHistory                       # 强制全量重扫历史里的超大文件（默认按提交缓存）
 
 设计要点
   - push 先跑 capture.ps1（本机 → 仓库），再 git add -A / commit / push，任何一步失败就停，不会带着半截状态继续。
-  - pull 先 git pull --ff-only（有本地改动或冲突会直接失败，不去猜怎么合并），再跑 apply.ps1（含版本契约校验）。
+  - pull 先 fetch 再 merge --ff-only（等价于 pull --ff-only，但只付一次网络往返；有本地改动或冲突会直接失败，不去猜怎么合并），再跑 apply.ps1（含版本契约校验）。
   - 不动选项语义：所有开关原样透传给 capture.ps1 / apply.ps1，两个脚本仍可单独调用。
 #>
 param(
@@ -31,6 +33,10 @@ param(
   [switch]$SkipWorkspace,
   [switch]$SkipInstall,
   [switch]$AllowVersionDrift,
+  # 推送前强制全量重扫历史里的超大文件（默认只在首次或推送被拒时才扫，省 20s）
+  [switch]$ScanHistory,
+  # 文件比较强制全量算哈希（默认大小+mtime 快筛，只在可疑时算），透传给 capture.ps1
+  [switch]$DeepVerify,
   [switch]$Force
 )
 
@@ -464,6 +470,22 @@ function Get-RemoteHeads([string]$RemoteUrl) {
   return @($out -split "`n" | Where-Object { $_ -match 'refs/heads/' }).Count
 }
 
+function Get-OversizedHistory([long]$Limit) {
+  # 全量扫 HEAD 的树，返回超过 Limit 的 blob。5 万文件的仓库约 20s，只在首次/被拒/手动 -ScanHistory 时跑。
+  # ls-tree 的路径同样会因 quotepath 被八进制转义，走 Read-GitLines 拿真实路径（-l 不会破坏 tab 分隔）
+  $res = @()
+  $out = @((Read-GitLines 'ls-tree -r -l HEAD').Lines)
+  foreach ($line in $out) {
+    if ($line -match '^\d+\s+blob\s+[0-9a-f]+\s+(\d+)\t(.+)$') {
+      $sz = [long]$Matches[1]
+      if ($sz -ge $Limit) { $res += [pscustomobject]@{ Rel = [string]$Matches[2]; Bytes = $sz } }
+    }
+  }
+  # 注意：不能写 `return ,$res` —— 空结果会被包成「含 1 个空元素」的数组，
+  # 调用方 @(...) 之后 Count 变成 1，于是空仓库会误报「历史里有 1 个超限文件（0.0 MB）」。
+  return $res
+}
+
 function Get-RemoteFileCount([string]$RemoteUrl, [int]$Heads = -2) {
   # 「云端有没有可拉的内容」不能看分支数：远端 main 还在、树被删空了，照样是个空仓库。
   # 真判据是分支树里的文件数。做法：临时 bare 仓库浅取一次再 ls-tree，探完删掉，不碰用户仓库。
@@ -688,6 +710,7 @@ if ($Action -eq 'push') {
   $captureArgs = @{ RepoRoot = $RepoRoot; DshHome = $DshHome; ProfileName = $ProfileName; AppRoot = $AppRoot; WorkspaceHome = $WorkspaceHome; NoResetNotices = $true }
   if ($WorkspaceOnly) { $captureArgs['WorkspaceOnly'] = $true }
   if ($SkipWorkspace) { $captureArgs['SkipWorkspace'] = $true }
+  if ($DeepVerify) { $captureArgs['DeepVerify'] = $true }
   & (Join-Path $PSScriptRoot 'capture.ps1') @captureArgs
   if ($LASTEXITCODE -ne 0) { Die "capture.ps1 未正常结束，已停止（未提交）。" }
 
@@ -779,14 +802,38 @@ if ($Action -eq 'push') {
   # ---------- 历史里已有的超限文件：只报告，不改写历史 ----------
   # 远端拒收看的是「这次要推上去的所有对象」，而不只是工作区。索引预检只能挡住本次新增的，
   # 早先某个提交已经把大文件写进历史时，怎么 add / reset 都没用 —— 必须先让用户知道这条死路。
+  #
+  # 扫描成本：`ls-tree -r -l HEAD` 在 5 万文件的仓库里实测 20~23s，而它查的历史几乎不变
+  #（新增文件已经由上面的 pending 预检覆盖）。所以默认按提交缓存：同一段历史里只全量扫一次，
+  #  换机器/清缓存/加 -ScanHistory/推送被远端拒绝时才重扫。
   $histTooLarge = @()
-  # ls-tree 的路径同样会因 quotepath 被八进制转义，走 Read-GitLines 拿真实路径（-l 不会破坏 tab 分隔）
-  $treeOut = @((Read-GitLines 'ls-tree -r -l HEAD').Lines)
-  foreach ($line in $treeOut) {
-    if ($line -match '^\d+\s+blob\s+[0-9a-f]+\s+(\d+)\t(.+)$') {
-      $sz = [long]$Matches[1]
-      if ($sz -ge $pushHardLimit) { $histTooLarge += [pscustomobject]@{ Rel = [string]$Matches[2]; Bytes = $sz } }
-    }
+  $historyFullyScanned = $false
+  $histScanFile = Join-Path $DshHome 'sync-history-scan.json'
+  $headNow = (Get-GitText 'rev-parse HEAD').Text
+
+  $needHistoryScan = $true
+  if (-not $ScanHistory -and $histScanFile -and (Test-Path -LiteralPath $histScanFile)) {
+    try {
+      $rec = Get-Content -LiteralPath $histScanFile -Raw -Encoding UTF8 | ConvertFrom-Json
+      if ($rec -and $rec.commit) {
+        $recCommit = [string]$rec.commit
+        if ($recCommit -eq $headNow) { $needHistoryScan = $false }
+        else {
+          # 记录的是祖先提交：那段历史早就扫过，本次新增的文件由 pending 预检负责
+          $anc = (Get-GitText ('merge-base --is-ancestor ' + $recCommit + ' HEAD'))
+          if ($anc.Code -eq 0) { $needHistoryScan = $false }
+        }
+      }
+    } catch { }
+  }
+
+  if ($needHistoryScan) {
+    $histTooLarge = @(Get-OversizedHistory $pushHardLimit)
+    $historyFullyScanned = $true
+    try {
+      $rec = [ordered]@{ commit = $headNow; oversized = $histTooLarge.Count; at = (Get-Date -Format 'yyyy-MM-ddTHH:mm:ss') }
+      [IO.File]::WriteAllText($histScanFile, (($rec | ConvertTo-Json -Depth 3) + "`n"), (New-Object Text.UTF8Encoding($false)))
+    } catch { }
   }
   if ($histTooLarge.Count -gt 0) {
     Warn ('历史提交里有 {0} 个超限文件：远端会拒收整次推送（不是网络问题）' -f $histTooLarge.Count)
@@ -820,6 +867,15 @@ if ($Action -eq 'push') {
     if ($l -and $l.Trim()) { Say ('  ' + $l.TrimEnd()) }
   }
   if ($pushCode -ne 0) {
+    if (-not $historyFullyScanned) {
+      # 推送被拒：这时才值得花一次全量扫描，把「是不是历史里的大文件在挡」说清楚
+      $histTooLarge = @(Get-OversizedHistory $pushHardLimit)
+      $historyFullyScanned = $true
+      try {
+        $rec = [ordered]@{ commit = $headNow; oversized = $histTooLarge.Count; at = (Get-Date -Format 'yyyy-MM-ddTHH:mm:ss') }
+        [IO.File]::WriteAllText($histScanFile, (($rec | ConvertTo-Json -Depth 3) + "`n"), (New-Object Text.UTF8Encoding($false)))
+      } catch { }
+    }
     $remoteOversized = @()
     foreach ($l in ($pushOut -split "`r?`n")) {
       if ($l -match 'File\s+(.+?)\s+is\s+([\d.]+)\s*MB.*exceeds.*limit') {
@@ -880,6 +936,7 @@ $branchNow = (Get-GitText 'rev-parse --abbrev-ref HEAD').Text
 $remoteRef = 'origin/' + $branchNow
 $headBeforePull = (Get-GitText 'rev-parse HEAD').Text
 $report = Read-ConflictFile
+$fetchedThisRun = $false
 if ($report) {
   $rc = Resolve-ConflictChoices $report
   Say ("  上一轮选择：用云端 {0} 项，用本机 {1} 项，未选 {2} 项" -f $rc.Cloud, $rc.Local, $rc.Pending)
@@ -895,6 +952,7 @@ if ($report) {
     Say $fetchOut.TrimEnd()
     Die ("git fetch 失败：连不上远端或认证有问题（" + (Get-RemoteAuthHint (Get-GitText 'remote get-url origin').Text) + "，再重跑）。")
   }
+  $fetchedThisRun = $true
   $anc = (Get-GitText ('merge-base --is-ancestor HEAD ' + $remoteRef))
   if ($anc.Code -eq 0) {
     $conflictCount = New-ConflictReport $remoteRef $headBeforePull
@@ -910,33 +968,38 @@ if ($report) {
   }
 }
 
-# 新机器上 origin 可能是插件 later 补上的（remote add），这时分支没有 upstream，
-# 裸 `git pull --ff-only` 会报 "There is no tracking information for the current branch"。
-# 同时 git 的进度/提示都走 stderr，PowerShell 5.1 会包成 NativeCommandError 且 $LASTEXITCODE 不可靠，
-# 所以和 push 一样交给 cmd 转发，只看退出码。
+# 上面已经 fetch 过（origin/<branch> 就是本机最新）；这里不再跑 `git pull` —— 它内部还会再 fetch 一次，
+# 等于每次拉取多付一次网络往返（SSH 握手约 1s）。直接 merge --ff-only，语义完全相同：只认快进，
+# 有本地改动/冲突照样失败，绝不替你合并。
 $bs = Get-BranchUpstream
 $branch = $bs.Branch
 $upstream = $bs.Upstream
-if ($upstream) {
-  $pullLine = '"' + $git + '" -C "' + $RepoRoot + '" pull --ff-only 2>&1'
-} else {
-  Say "  当前分支 $branch 还没有 upstream，按 origin/$branch 拉取并补上跟踪关系"
-  $pullLine = '"' + $git + '" -C "' + $RepoRoot + '" pull --ff-only origin "' + $branch + '" 2>&1'
+if (-not $fetchedThisRun) {
+  # 上一轮带着冲突清单进来（那条路径跳过了前面那次 fetch）：这里补一次，保证 merge 用的是最新 refs
+  Say "  先同步云端 refs（上一次是带着冲突清单进来的，还没 fetch）"
+  $fetchOut = (& "$env:ComSpec" /c ('"' + $git + '" -C "' + $RepoRoot + '" fetch origin --prune 2>&1') 2>&1 | Out-String)
+  if ($LASTEXITCODE -ne 0) {
+    Say $fetchOut.TrimEnd()
+    Die ("git fetch 失败：连不上远端或认证有问题（" + (Get-RemoteAuthHint (Get-GitText 'remote get-url origin').Text) + "，再重跑）。")
+  }
+  $fetchedThisRun = $true
 }
+if (-not $upstream) { Say "  当前分支 $branch 还没有 upstream，按 origin/$branch 拉取并补上跟踪关系" }
+$pullLine = '"' + $git + '" -C "' + $RepoRoot + '" merge --ff-only origin/' + $branch + ' 2>&1'
 # 失败原因要分类再报：把「连不上远端/SSH 命令非法」说成「本地有改动」会把排查带偏
 # （真实案例：GIT_SSH_COMMAND 少了 ssh.exe 本体，git 只说 Could not read from remote repository）。
 $pullOut = (& "$env:ComSpec" /c $pullLine 2>&1 | Out-String)
 Write-Host $pullOut.TrimEnd()
 if ($LASTEXITCODE -ne 0) {
   if ($pullOut -match 'Could not read from remote|Permission denied|invalid option|Host key verification|publickey|Bad owner or permissions') {
-    Die ("git pull 失败：连不上远端 / SSH 认证或命令有问题（不是本地改动）。先自检：" +
-         "①GIT_SSH_COMMAND 第一个词必须是 ssh.exe 本体，可先 set GIT_SSH_COMMAND 什么都不设改用 .ssh\\config；" +
+    Die ("拉取失败：连不上远端 / SSH 认证或命令有问题（不是本地改动）。先自检：" +
+         "①GIT_SSH_COMMAND 第一个词必须是 ssh.exe 本体，可先 set GIT_SSH_COMMAND 什么都不设改用 .ssh\config；" +
          "②" + (Get-RemoteAuthHint (Get-GitText 'remote get-url origin').Text) + "；③再跑 git -C `"$RepoRoot`" ls-remote --heads origin 看退出码。")
-  } elseif ($pullOut -match 'CONFLICT|not possible to fast-forward|Your local changes|overwritten by merge|would be overwritten') {
-    Die ("git pull 失败：本地有未提交改动或与远端冲突。先处理（git -C `"$RepoRoot`" status / stash / 解决冲突）再重跑；" +
+  } elseif ($pullOut -match 'CONFLICT|not possible to fast-forward|Not possible to fast-forward|Your local changes|overwritten by merge|would be overwritten') {
+    Die ("拉取失败：本地有未提交改动或与远端冲突（merge --ff-only 拒绝非快进）。先处理（git -C `"$RepoRoot`" status / stash / 解决冲突）再重跑；" +
          "本脚本不会替你合并。")
   } else {
-    Die "git pull 失败（原因见上面的 git 输出）。先把那几行原文看完再决定，别按「本地有改动」的思路瞎猜。"
+    Die "拉取失败（原因见上面的 git 输出）。先把那几行原文看完再决定，别按「本地有改动」的思路瞎猜。"
   }
 }
 if (-not $upstream) {

@@ -534,7 +534,7 @@ All of them surfaced only by **actually running on a new machine**:
 |---|---|
 | cmd's `echo` swallows `< > \| & ^ %`, so `echo ... config-<timestamp>` became a redirect and printed nothing | every dynamic line goes through `echoSafe()`: `%`→`%%`, special characters prefixed with `^` |
 | after `chcp 65001`, `set /p` cannot read redirected input: automation feeding `y` left `GO` empty, "finished" printed while nothing happened, exit code still 0 | `--yes` skips confirmation + an explicit receipt when there is none |
-| a fresh machine has no upstream, `pull --ff-only` says *There is no tracking information…*, PowerShell 5.1 wraps it as NativeCommandError and the script carried on | `sync.ps1` probes upstream first, falls back to `pull --ff-only origin <branch>` then `set-upstream-to`; push uses `-u` |
+| a fresh machine has no upstream, `git pull --ff-only` says *There is no tracking information…*, PowerShell 5.1 wraps it as NativeCommandError and the script carried on | `sync.ps1` probes upstream first; since 0.3.54 a pull is `fetch` + `merge --ff-only origin/<branch>` (one network round trip), and a missing upstream is fixed with `set-upstream-to`; push uses `-u` |
 | `GIT_SSH_COMMAND` without the ssh.exe program → `/usr/bin/sh: - : invalid option` | four branches: use `core.sshCommand` if set; write a full command when `ssh.exe` is found; **unset the variable** when only a key exists; hand it to `.ssh\config` when there is no key |
 | with an asar build, AppRoot lookups by path all miss and every bundle is reported missing | `isAppRoot` accepts `app\package.json` **or** `app.asar`; version and bundle existence are read straight out of the asar (PowerShell 5.1 `ConvertFrom-Json` caps at 2 MB, a 5.7 MB header has to be read by entry offset), and anything undecidable is reported as "unknown" |
 | plugin directory already present skips deployment, so a newer tgz leaves old code running | `apply.ps1` compares the tgz with the newest deployed file and, when newer, renames to `.bak-<timestamp>` and redeploys |
@@ -546,6 +546,28 @@ All of them surfaced only by **actually running on a new machine**:
 
 Session header `cwd`, empty-snapshot fallback and missing `Get-FileHash` are handled by `apply.ps1` / `restore.ps1` / `dsh-sync-common.ps1` in the config repo; see sections 5 and 10 of its root `README.md`.
 
+## Performance (0.3.54): three speedups, zero behaviour change
+
+All three change *how* things are computed, not *what* is computed: the files written to the repo, the commit contents and the failure decisions stay byte-identical to 0.3.53 — it just runs faster. Numbers come from a same-size synthetic repo (50,889 files / 416 MB) and against real Gitee:
+
+| Step | Before | After | Why |
+|---|---|---|---|
+| capture deciding "does this file need rewriting" | two `Get-FileHash` per file (source + repo): 1.2 ms each → ~**120 s** for 50k files | two `Get-ChildItem` passes, one `FileInfo` each (Length / LastWriteTimeUtc already read by the enumeration) + an in-memory dictionary diff: **3.9 s**; hashes only for the few whose size or mtime differs | per-file `Test-Path` / `Get-Item` is *slower* (measured **37.8 s**, ~0.7 ms per cmdlet call), so bulk enumeration is the only sane way |
+| push scanning history for oversized blobs | `git ls-tree -r -l HEAD` on every push: **20–23 s** on a 50k-file repo, for a history that barely changes | cached per commit in `.dsh\sync-history-scan.json` (`{commit, oversized, at}`): skipped when the commit matches or is an ancestor of HEAD; a full scan only on first push, after a remote rejection, or with `-ScanHistory` | newly added files are already caught by the index pre-check; the history scan only covers "an old commit already carries a huge blob" |
+| pull | `git pull --ff-only` is fetch + merge internally, while the script had already fetched → **two network round trips** (SSH handshake measured ≈0.95 s) | `fetch origin --prune`, then `merge --ff-only origin/<branch>` → **one round trip**; `merge --ff-only` still refuses anything but a fast-forward, so a dirty tree or divergence fails exactly as before | when the run starts from a pending conflict list the earlier fetch was skipped, so one fetch is issued first to make the merge use fresh refs |
+
+Two new switches on `sync.ps1`, both **off by default** — the default path behaves exactly like 0.3.53:
+
+- `-DeepVerify`: forwarded to `capture.ps1`, ignoring the size/mtime fast path and **hashing every file**. Use it when you suspect drift where size and mtime both look unchanged (cost: back to 1.2 ms per file).
+- `-ScanHistory`: ignores the history-scan cache and **always does a full** `ls-tree -r -l HEAD`. Use it after switching remotes, when the cache looks stale, or for a manual re-check.
+
+```powershell
+pwsh -File sync.ps1 push -DeepVerify
+pwsh -File sync.ps1 push -ScanHistory
+```
+
+The log shows which path ran: `文件比较（快筛）：比对 N 个，深哈希 M 个` versus `文件比较（深校验开）：比对 N 个，深哈希 N 个`.
+
 ## Self-check
 
 - `node tools\selftest.mjs <repo path>`: starts the host half with a fake ctx, hits status, generates scripts and asserts the JSON and the files on disk; it backs up any existing `同步-*.cmd` in the repo root and restores them afterwards. **The repo path must be passed explicitly.**
@@ -553,6 +575,22 @@ Session header `cwd`, empty-snapshot fallback and missing `Get-FileHash` are han
 - `pwsh -File tools\pack-plugin.ps1`: packs the tgz and writes the sha256 back into `version.json`. **PowerShell 7 is required** (the script is UTF-8 without a BOM, and 5.1 reads the Chinese text as GBK and fails).
 
 ## Test log (2026-11-11, isolated environment)
+
+### 2026-11-15: performance release 0.3.54 (three speedups, behaviour unchanged)
+
+| Step | Result |
+|---|---|
+| Size baseline | config repo 50,817 files / 398.7 MB (workspace 50,377 / 358.4 MB, `.git` 315 / 223.3 MB, 16 commits); `.dsh` 48,168 files; largest file `workspace\SquadLink\reversing\scripts\pe-analyst\out\insns.tsv` at 44.7 MB |
+| Synthetic same-size repo | 50,889 files / 416.4 MB (built in 136 s); first `git add -A` 92.0 s, empty re-run 0.30 s; `status --porcelain` 0.31 s, `ls-files --stage` 0.14–0.40 s |
+| Biggest push-side waste | `git ls-tree -r -l HEAD` = 19.98 / 21.4 / 23.16 s; alternatives measured: `rev-list --objects` 0.15 s, `cat-file --batch-all-objects --batch-check` 0.21 s, `diff-tree -r -l HEAD~1 HEAD` 0.12 s (none equals "total history size", so caching won over swapping the command) |
+| Hash cost | `Get-FileHash` 1.20 ms per file (600 files 0.72 s); .NET streaming SHA256 1.05 ms — only 1.1× faster, the bottleneck is per-file open/read of small random files |
+| Fast-path write-off | cmdlet style (per-file `Test-Path` + `Get-Item`) **37.78 s**; two `Get-ChildItem` passes + in-memory dictionary **3.91 s**; hashing only the few mismatches took 0.09 s and matched 0 files |
+| Network round trip | real Gitee `git ls-remote --heads origin` 0.90 / 0.97 / 0.96 s → dropping one fetch in a pull saves about 1 s |
+| Read-only walks | 48,168 files in `.dsh` enumerated in 6.85 s; 50,377 in the repo workspace in 2.17 s; single-file stat 0.73 ms |
+| Isolated end-to-end | fake `.dsh` + fake client root + local bare remote, 300-file workspace: push#1 exit 0 (full scan, `oversized: 0`), push#2 **3.23 s** (scan skipped), push#3 `-DeepVerify` exit 0 with "深哈希 300", pull exit 0 with `Fast-forward` and the remote's new file present |
+| Fixed along the way | `Get-OversizedHistory` returned `,$res` for an empty result, so the caller's `@()` saw Count 1 and an empty repo reported "1 oversized file in history (0.0 MB)" with a blank path. Changed to `return $res`; the cache now records `oversized: 0` |
+| Test lesson | an end-to-end run must fake the AppRoot (`Resolve-DshAppRoot` accepts `resources\app\package.json` or `resources\app.asar`); pointing it at the real `D:\DeepSeekHarness` lets `apply` overwrite the real mnemon, recoverable only from its automatic backup |
+
 
 A fake cloud bare repo + fake client root + a standalone `.dsh` holding only `profiles\desktop`; the plugin was installed from tgz and the main machine's directories were never touched.
 

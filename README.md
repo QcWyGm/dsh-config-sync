@@ -512,7 +512,7 @@ node ~\.dsh\.dsh-plugin-market\market-core.mjs catalog --profile desktop
 |---|---|
 | cmd 的 `echo` 吃 `< > \| & ^ %` | 动态文案全过 `echoSafe()`：`%`→`%%`，特殊符号前加 `^` |
 | `chcp 65001` 后 `set /p` 读不到重定向输入 | `--yes` 免确认 + 无确认时明确回执 |
-| 新机器分支没有 upstream，`pull --ff-only` 报 *no tracking information*，PS 5.1 包成 NativeCommandError 后继续走 | 先探 upstream，没有就 `pull --ff-only origin <branch>` 再 `set-upstream-to`；push 带 `-u` |
+| 新机器分支没有 upstream，`git pull --ff-only` 报 *no tracking information*，PS 5.1 包成 NativeCommandError 后继续走 | 先探 upstream；0.3.54 起拉取改成 `fetch` + `merge --ff-only origin/<branch>`（一次网络往返），没有 upstream 就补 `set-upstream-to`；push 带 `-u` |
 | `GIT_SSH_COMMAND` 少了 ssh.exe 本体 → `/usr/bin/sh: - : invalid option` | 四分支：有 `core.sshCommand` 照用；找到 `ssh.exe` 写完整命令；只有私钥就不设变量；无私钥交给 `.ssh\config` |
 | 客户端 asar 打包时按路径找 AppRoot 全落空、bundle 全误报缺失 | `isAppRoot` 认 `app\package.json` **或** `app.asar`；版本与 bundle 从 asar 定向取（PS 5.1 `ConvertFrom-Json` 2 MB 上限，5.7 MB 头只能按 entry 偏移直读），判不了就当"不知道" |
 | 插件目录已存在就跳过部署，tgz 更新了本机还是旧代码 | 比归档内 `package.json` version 与已部署目录 version（之前比 mtime，被 `git checkout` 刷时间害得每轮误判） |
@@ -522,6 +522,28 @@ node ~\.dsh\.dsh-plugin-market\market-core.mjs catalog --profile desktop
 | 拉取整份覆盖 settings，改完没推送就拉取 → 被静默盖回 | 覆盖前比对（占位符归一 + CRLF 拉平 + `our-free-model.json` 三个时间戳置 0），不同就写 `config-sync-overwrite.json` 并提示 |
 | 同步后**新建会话直接失败**：`failed to create session … corrupt Zstandard session log: invalid frame magic at byte 186` | DSH 写的首帧**带 4 字节 content checksum**（帧头描述符 FHD 的 bit2），二分找「最小可解前缀」时解压器对**去掉 checksum 的前缀**照样成功 → 帧尾算短 4 字节；写回把旧 checksum 留成垃圾，DSH 读第二帧就撞上。改成：按 FHD bit2 补 4 字节 → 再以「下一帧帧头」校正 → 写回前自检（首帧 cwd 生效 + 新首帧末尾必须是下一帧帧头），不过不落盘；遇到历史残留尾巴顺手丢掉自愈 |
 
+## 性能（0.3.54）：零行为变化的三处提速
+
+三处都只改「怎么算」，不改「算什么」：落到仓库的文件、提交内容、错误判定与 0.3.53 逐字节一致，只是更快。数据来自同规模假仓库（50889 文件 / 416MB，五万级）与真实 Gitee：
+
+| 环节 | 改之前 | 改之后 | 为什么 |
+|---|---|---|---|
+| capture 判断「文件要不要重写」 | 每个文件算两次 `Get-FileHash`（源 + 仓库）：单文件 1.2ms → 5 万文件 ≈ **120s** | 两次 `Get-ChildItem` 各拿一次 `FileInfo`（Length / LastWriteTimeUtc 随枚举已读好）+ 纯内存字典比对 **3.9s**；只有 size 或 mtime 不一致才算哈希 | 逐文件 `Test-Path` / `Get-Item` 反而**更慢**（实测 37.8s，每次 cmdlet 调用约 0.7ms），批量枚举才是正路 |
+| 推送前扫「历史里的大文件」 | 每次 push 都跑 `git ls-tree -r -l HEAD`：五万文件仓库 **20–23s**，而它查的历史几乎不变 | 按提交缓存到 `.dsh\sync-history-scan.json`（`{commit, oversized, at}`）：commit 相同、或是当前 HEAD 的祖先就跳过；只有首次、被远端拒绝、或显式 `-ScanHistory` 才全量扫 | 新增文件已经由索引预检挡住；历史扫描只负责「老提交里已经躺着一个大文件」这条死路 |
+| 拉取 | `git pull --ff-only` 内部是 fetch + merge，而脚本前面已经 fetch 过 → **两次网络往返**（SSH 握手实测 ≈0.95s/次） | 先 `fetch origin --prune`，再 `merge --ff-only origin/<branch>` → **一次往返**；`merge --ff-only` 只认快进，本地有改动/非快进照样失败，语义完全不变 | 带冲突清单进来的那一轮会跳过一次 fetch，此时先补一次，保证 merge 用的是最新 refs |
+
+两个新开关都在 `sync.ps1` 上，**默认关**，默认路径的行为与 0.3.53 相同：
+
+- `-DeepVerify`：透传 `capture.ps1`，无视 size/mtime 快筛，**每个文件都算哈希**。怀疑出现「大小和时间都没变、内容却变了」的漂移时用（代价是回到 1.2ms/文件）。
+- `-ScanHistory`：无视历史扫描缓存，**这次一定全量扫** `ls-tree -r -l HEAD`。换了远端、怀疑缓存过期、或想手工复核时用。
+
+```powershell
+pwsh -File sync.ps1 push -DeepVerify
+pwsh -File sync.ps1 push -ScanHistory
+```
+
+输出上看得出来走了哪条路：`文件比较（快筛）：比对 N 个，深哈希 M 个` / `文件比较（深校验开）：比对 N 个，深哈希 N 个`。
+
 ## 自检
 
 - `node tools\selftest.mjs <仓库路径>`：假 ctx 拉起宿主半身，打 status、生成脚本、断言 JSON 与落地文件；会先备份仓库根已有的同名 `同步-*.cmd`，断言完原样还原。**必须显式传仓库路径**。
@@ -529,6 +551,21 @@ node ~\.dsh\.dsh-plugin-market\market-core.mjs catalog --profile desktop
 - `pwsh -File tools\pack-plugin.ps1`：打包并把 sha256 回填 `version.json`。**必须用 PowerShell 7**（脚本是无 BOM UTF-8，5.1 按 GBK 读会把中文认错）。
 
 ## 实测记录
+
+### 2026-11-15：性能发版 0.3.54（三处提速，行为不变）
+
+| 环节 | 结果 |
+|---|---|
+| 规模基线 | 配置仓库 50817 文件 / 398.7MB（workspace 50377 / 358.4MB，`.git` 315 / 223.3MB，16 个提交）；`.dsh` 48168 文件；最大单文件 `workspace\SquadLink\reversing\scripts\pe-analyst\out\insns.tsv` 44.7MB |
+| 同规模假仓库 | 50889 文件 / 416.4MB（生成 136s）；`git add -A` 首跑 92.0s、空跑 0.30s；`status --porcelain` 0.31s、`ls-files --stage` 0.14–0.40s |
+| 推送侧最大浪费 | `git ls-tree -r -l HEAD` = 19.98 / 21.4 / 23.16s；替代测速：`rev-list --objects` 0.15s、`cat-file --batch-all-objects --batch-check` 0.21s、`diff-tree -r -l HEAD~1 HEAD` 0.12s（都不等价于「全量历史体积」判定，所以最终选缓存而非替换命令） |
+| 哈希成本 | `Get-FileHash` 单文件 1.20ms（600 文件 0.72s）；.NET 流式 SHA256 1.05ms，只快 1.1×——瓶颈是每文件 open/read 与随机小文件，换 API 没用 |
+| 快筛写法对比 | cmdlet 式（逐文件 `Test-Path` + `Get-Item`）**37.78s**；两次 `Get-ChildItem` + 内存字典 **3.91s**；后者只对 size/mtime 不一致者算哈希，实测 0 个需算（0.09s） |
+| 网络往返 | 真实 Gitee `git ls-remote --heads origin` 三次 0.90 / 0.97 / 0.96s → 拉取省掉一次 fetch 约省 1s |
+| 只读遍历 | `.dsh` 48168 文件枚举 6.85s；仓库 workspace 50377 文件枚举 2.17s；单文件 stat 0.73ms |
+| 隔离端到端 | 假 `.dsh` + 假客户端根 + 本地 bare 远端、300 文件工作区：push#1 退出 0（全量扫、`oversized: 0`）、push#2 **3.23s**（跳过扫描）、push#3 `-DeepVerify` 退出 0 且「深哈希 300」、pull 退出 0 且 `Fast-forward`、远端新增文件到位 |
+| 顺手修掉 | `Get-OversizedHistory` 空结果写成 `return ,$res`，调用方 `@()` 之后 Count 变 1 → 空仓库误报「历史里有 1 个超限文件（0.0 MB）」且路径为空。改成 `return $res`，复测缓存 `oversized: 0` |
+| 测试教训 | 端到端必须造假 AppRoot（`Resolve-DshAppRoot` 认 `resources\app\package.json` 或 `resources\app.asar`）；把真实 `D:\DeepSeekHarness` 传进去会被 `apply` 覆盖真实 mnemon，只能靠它的自动备份还原 |
 
 ### 2026-11-14（二）：会话日志首帧 4 字节残留，新建会话 500
 

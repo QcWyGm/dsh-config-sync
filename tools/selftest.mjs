@@ -1429,4 +1429,33 @@ console.log('== 0.3.44：工作区与会话的路径也按本机落点推断 =='
 }
 
 console.log('')
+console.log('== 0.3.54：三处纯性能改动（行为不变） ==')
+{
+  const cap54 = readFileSync(join(pluginRootSelf, 'runtime', 'capture.ps1'), 'utf8')
+  const sync54 = readFileSync(join(pluginRootSelf, 'runtime', 'sync.ps1'), 'utf8')
+  check('capture 有 -DeepVerify，且深校验开关走 $script:CmpDeep',
+    /\[switch\]\$DeepVerify/.test(cap54) && cap54.includes('$script:CmpDeep')
+    && cap54.includes('function Test-TreeFileChanged'), 'capture.ps1 的深校验开关')
+  check('快筛只比 Length / LastWriteTimeUtc，不一致才 Get-NormalizedHash',
+    cap54.includes('$srcInfo.Length') && cap54.includes('$srcInfo.LastWriteTimeUtc')
+    && cap54.includes('Get-NormalizedHash'), 'capture.ps1 的比较逻辑')
+  check('批量 FileInfo + 字典比对，不再逐文件 Test-Path 父目录',
+    cap54.includes('function Get-TreeCmpSummary') && cap54.includes('$dstRels')
+    && cap54.includes('$madeDirs'), 'capture.ps1 的批量比对')
+  check('sync 把 DeepVerify 透传给 capture', sync54.includes("$captureArgs['DeepVerify'] = $true"))
+  check('历史扫描按提交缓存：commit 相同或是 HEAD 祖先就跳过',
+    sync54.includes('sync-history-scan.json') && sync54.includes('$needHistoryScan')
+    && sync54.includes('merge-base --is-ancestor'), 'sync.ps1 的历史扫描缓存')
+  check('有 -ScanHistory 强制全量，推送被拒时也补一次全量',
+    /\[switch\]\$ScanHistory/.test(sync54) && sync54.includes('$historyFullyScanned'),
+    'sync.ps1 的扫描强制/补扫')
+  check('拉取改成 fetch + merge --ff-only（不再 git pull 的第二次往返）',
+    sync54.includes("merge --ff-only origin/' + $branch") && sync54.includes('$fetchedThisRun')
+    && !sync54.includes('" pull --ff-only'), 'sync.ps1 的拉取命令')
+  check('空扫描结果不写成 `,$res`（否则空仓库误报 1 个超限文件 0.0 MB）',
+    sync54.includes('function Get-OversizedHistory') && !/^\s*return ,\$res\b/m.test(sync54),
+    'Get-OversizedHistory 的返回值')
+}
+
+console.log('')
 process.exit(failures === 0 ? 0 : 1)
