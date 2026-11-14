@@ -439,6 +439,7 @@ node ~\.dsh\.dsh-plugin-market\market-core.mjs catalog --profile desktop
 | 空目录被当成"仓库坏了"，推送按钮可点但必失败 | 按 `repo.phase` 分四态，三层都拦住 |
 | 「云端有没有东西可拉」看分支数 → 树被删空了仍判「有内容」，初始化推送入口永不出现（实测 Gitee 98 个提交、最新树 0 文件） | 判据换成**分支树里的文件数**：`ls-remote --heads` 数分支，有分支才临时 bare `fetch --depth 1 --filter=blob:none` + `ls-tree -r`；`remoteFiles===0` 算「两边都空」，用 `--force-with-lease` 覆盖空分支 |
 | 拉取整份覆盖 settings，改完没推送就拉取 → 被静默盖回 | 覆盖前比对（占位符归一 + CRLF 拉平 + `our-free-model.json` 三个时间戳置 0），不同就写 `config-sync-overwrite.json` 并提示 |
+| 同步后**新建会话直接失败**：`failed to create session … corrupt Zstandard session log: invalid frame magic at byte 186` | DSH 写的首帧**带 4 字节 content checksum**（帧头描述符 FHD 的 bit2），二分找「最小可解前缀」时解压器对**去掉 checksum 的前缀**照样成功 → 帧尾算短 4 字节；写回把旧 checksum 留成垃圾，DSH 读第二帧就撞上。改成：按 FHD bit2 补 4 字节 → 再以「下一帧帧头」校正 → 写回前自检（首帧 cwd 生效 + 新首帧末尾必须是下一帧帧头），不过不落盘；遇到历史残留尾巴顺手丢掉自愈 |
 
 ## 自检
 
@@ -447,6 +448,21 @@ node ~\.dsh\.dsh-plugin-market\market-core.mjs catalog --profile desktop
 - `pwsh -File tools\pack-plugin.ps1`：打包并把 sha256 回填 `version.json`。**必须用 PowerShell 7**（脚本是无 BOM UTF-8，5.1 按 GBK 读会把中文认错）。
 
 ## 实测记录
+
+### 2026-11-14（二）：会话日志首帧 4 字节残留，新建会话 500
+
+同步过一次之后，客户端点「新会话」直接弹 `新建会话失败：gateway/internal: failed to create session: SessionQueryError: stored session "…" is corrupt … invalid frame magic at byte 186`——一个历史会话的日志坏了，整个会话库的校验跟着失败，所以连新会话都建不出来。
+
+| 环节 | 结果 |
+|---|---|
+| 现场 | `~\.dsh\sessions\--D-DeepSeekHarness-DSH~7834~7532--\session-58db748a…\session.v4.jsonl.zstd`，423 字节，mtime 是 11-13 那次同步，不是当天 |
+| 字节解剖 | zstd 帧头 `28 b5 2f fd` 出现在 0 / 190 / 343；DSH 认为首帧止于 **186**，186..189 是 4 字节垃圾，真正的第 2 帧起点在 190 |
+| 根因 | 首帧解压是 210 字节（header 行 + 结尾换行），二分得到的「最小可解前缀」= 186，而帧尾实际是 190：DSH 首帧带 4 字节 content checksum，解压器对缺这 4 字节的前缀同样返回成功。`rest = buf.subarray(186)` 于是把旧 checksum 当正文，写回后 186..189 永久残留 |
+| 影响面 | 扫 `~\.dsh\sessions` 下 17 个 `session.v4.jsonl.zstd`：真正的坏文件 1 个（带空洞）；另 1 个被判误报，复核是**带 checksum 的正常 5 帧文件**（帧头 0/197/380/479/559），已按备份原样还原 |
+| 数据修复 | 备份到 `~\.dsh\backups\session-corrupt-<stamp>` → 删掉 4 字节空洞（423 → 419）→ 复扫 bad=0；首帧 cwd 保留、第 2 帧（269 字节）可解 |
+| 代码修复 | `firstFrameEnd` 按 FHD bit2 补 4 字节并以「下一帧帧头」校正；首帧改为**整段解压文本替换 cwd 后重压**（原来只重压 header 一行，首帧有追加行会丢）；**先自检后落盘**；遇到历史残留尾巴自动丢掉 |
+| 隔离验证 | 用真实 checksum 多帧样本改 cwd：帧结构完整（0/169/352/451/531 全可解）；幂等复跑 `alreadyOk=1`；喂入带空洞的坏文件一次修好（402 字节，帧头 0/169/322） |
+| 结论 | 会话日志只会「缺内容」不会「内容错」，所以删空洞比重新压缩安全；helper 现在宁可跳过报错也不写坏后续帧 |
 
 ### 2026-11-14：两台机器从零跑通（隔离环境）
 
