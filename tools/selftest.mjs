@@ -850,6 +850,8 @@ if (prevScope === null) { try { unlinkSync(scopeFile) } catch { } } else writeFi
     restoreSrc.includes('(Get-Item -LiteralPath $ProfileDir -Force).FullName'), 'restore.ps1')
   check('备份列表带插件数（面板要显示 N 个插件）',
     indexSrc.includes('plugins = Object.keys(pkg?.dependencies') && indexSrc.includes('plugins: x.plugins'), 'index.js')
+  check('技能市场台账的勾选项 id 用文件名，不是整个 {id,src} 对象（否则落盘成 [object Object]）',
+    /items: ledger\.map\(\(f\) => \(\{ id: f\.id, label: f\.id \}\)\)/.test(indexSrc), 'index.js')
   check('restore-now 复用 spawnWatcher，并把快照目录与类型带进执行体',
     /action === 'restore-now'[\s\S]{0,1200}?spawnWatcher\(\{[\s\S]{0,240}?mode: 'restore'/.test(indexSrc)
     && indexSrc.includes("const extraArgs = ['-BackupDir', snap.dir]")

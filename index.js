@@ -2680,7 +2680,7 @@ function collectScopeGroups(dshHome, appRoot) {
   ].filter((x) => existsSync(x.src))
   groups.push({ id: 'storages-record', titleZh: '技能市场台账', titleEn: 'Skill market ledger',
     descZh: '技能市场的安装台账与面板状态', descEn: 'Skill-market install ledger and panel state',
-    items: ledger.map((f) => ({ id: f, label: f })) })
+    items: ledger.map((f) => ({ id: f.id, label: f.id })) })
 
   const settingsFiles = [
     { id: 'our-free-model.json', src: join(dshHome, 'our-free-model', 'settings.json') },
