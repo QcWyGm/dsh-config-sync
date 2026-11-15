@@ -1096,7 +1096,7 @@ console.log('== 空白本机仓库：只允许拉取 ==')
     '面板的按钮门禁没跟后端对齐，或没有「初始化推送」文案')
   check('面板：待初始化徽标有独立文字与配色',
     /if \(kind === 'init'\) return M\('待初始化', 'To initialize'\)/.test(clientNew)
-    && /init: 'var\(--dsw-alias-state-warn-secondary\)'/.test(clientNew),
+    && /init: 'var\(--dsw-alias-state-warn-tertiary\)'/.test(clientNew),
     'kind=init 没有 chipLabel / chipStyle，徽标会掉进「未检测」')
 }
 

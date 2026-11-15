@@ -1,9 +1,9 @@
 {
-  "version": "0.3.54",
+  "version": "0.3.55",
   "releasedAt": "2026-11-15",
-  "notes": "0.3.54（纯性能，行为不变）：①capture 判断文件要不要重写，从「每个文件算两次哈希」改成「批量 FileInfo 比对（大小+修改时间），只对可疑文件算哈希」，五万文件从约 120 秒降到约 4 秒，加 -DeepVerify 可强制全量算哈希；②推送前的历史超限扫描改为按提交缓存，只首扫/被拒/-ScanHistory 时全量跑，五万文件仓库每次省下 20 秒以上；③拉取由 fetch+pull（两次网络往返）改为 fetch+merge --ff-only（一次往返）。",
-  "notesEn": "0.3.54 (performance only, behaviour unchanged): capture no longer hashes every file twice to decide whether a file needs rewriting — it compares batched FileInfo (size + mtime) and hashes only the suspicious ones, cutting ~120 s to ~4 s on 50k files; -DeepVerify forces a full hash pass. The pre-push oversized-history scan is now cached per commit and only runs in full on the first push, after a rejection, or with -ScanHistory, saving 20 s+ per push on a 50k-file repo. A pull is now fetch + merge --ff-only (one network round trip) instead of fetch + pull (two).",
-  "sha256":"7f78b5a2ad2cd002669c32dd2dbb5adb9be10c2be1c84854d2ba561d24558454",
-  "tgz": "releases/dsh-config-sync-0.3.54.tgz",
+  "notes": "0.3.55：①配置同步面板样式重构——页头拆成三层（标题+本机/云端徽标簇、版本 meta 与说明、右侧操作按钮），卡片/分区/按钮/输入/指标条统一内距、圆角与栅格节奏，分区标题加品牌蓝竖条锚点；状态徽标底色改用随主题翻转的 tertiary 色，dark 下文字对比度由最低 1.84:1 提升到 11~17:1，toast 与启动浮层全部改用 theme token；不新增依赖、不改同步行为。②含 0.3.54 三处性能提速：capture 用批量 FileInfo（大小+mtime）快筛替代逐文件双哈希（五万文件约 120s→约 4s，-DeepVerify 强制全量）；推送前历史超限扫描改为按提交缓存（-ScanHistory 强制全量）；拉取由 fetch+pull 改为 fetch+merge --ff-only，省一次网络往返。",
+  "notesEn": "0.3.55: (1) Config Sync panel restyle — the header is now three layers (title + local/cloud badge groups, version meta + lead, action buttons on the right), cards/sections/buttons/inputs/metrics share one spacing, radius and grid rhythm, section titles get a brand-blue anchor bar; status chips now use theme-flipping tertiary fills, lifting dark-mode text contrast from as low as 1.84:1 to 11–17:1, and the toast/startup overlay use theme tokens only. No new dependencies, no behaviour change. (2) Also ships the 0.3.54 performance work: capture uses batched FileInfo (size + mtime) prefiltering instead of hashing every file twice (~120 s -> ~4 s on 50k files; -DeepVerify forces a full pass), the pre-push oversized-history scan is cached per commit (-ScanHistory forces a full run), and pull is fetch + merge --ff-only instead of fetch + pull (one fewer round trip).",
+  "sha256": "c6e5f00a75f597e051cda81a662a6070936dcfc8e4a84749ddc3bd03034bd4bd",
+  "tgz": "releases/dsh-config-sync-0.3.55.tgz",
   "minClient": "0.2.2-rc.2"
 }

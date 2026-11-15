@@ -80,108 +80,125 @@ window.__ModuleLoader__.load({
       headText: { display: 'flex', flexDirection: 'column', gap: '2px', minWidth: 0 },
       title: { fontSize: '14px', lineHeight: '20px', color: 'var(--dsw-alias-label-primary)' },
       sub: { fontSize: '12px', lineHeight: '18px', color: 'var(--dsw-alias-label-tertiary)', wordBreak: 'break-all' },
-      chip: { fontSize: '12px', lineHeight: '18px', padding: '0 8px', borderRadius: '999px', whiteSpace: 'nowrap' },
+      chip: { display: 'inline-flex', alignItems: 'center', fontSize: '11px', lineHeight: '16px', padding: '2px 9px', borderRadius: '999px', whiteSpace: 'nowrap', letterSpacing: '0.2px' },
       btn: {
-        fontSize: '12px', lineHeight: '22px', padding: '3px 11px', borderRadius: '6px', cursor: 'pointer',
-        border: '1px solid var(--dsw-alias-border-l2)', background: 'transparent',
-        color: 'var(--dsw-alias-label-primary)',
+        fontSize: '12px', lineHeight: '20px', padding: '5px 13px', borderRadius: '8px', cursor: 'pointer',
+        border: '1px solid var(--dsw-alias-border-l2)', background: 'var(--dsw-alias-bg-base)',
+        color: 'var(--dsw-alias-label-primary)', transition: 'background .15s ease, border-color .15s ease',
       },
       btnPrimary: {
-        fontSize: '12px', lineHeight: '22px', padding: '3px 13px', borderRadius: '6px', cursor: 'pointer',
+        fontSize: '12px', lineHeight: '20px', padding: '5px 13px', borderRadius: '8px', cursor: 'pointer',
         border: '1px solid var(--dsw-alias-button-primary-fill)',
         background: 'var(--dsw-alias-button-primary-fill)',
-        color: 'var(--dsw-alias-label-primary-foreground)',
+        color: 'var(--dsw-alias-label-primary-foreground)', fontWeight: 600,
+        transition: 'background .15s ease, border-color .15s ease',
       },
       // 面板整页
       page: {
         height: '100%', overflowY: 'auto', boxSizing: 'border-box',
-        padding: '18px 22px 28px', background: 'var(--dsw-alias-bg-base)',
+        padding: '24px 28px 36px', background: 'var(--dsw-alias-bg-base)',
         color: 'var(--dsw-alias-label-primary)',
       },
-      pageInner: { maxWidth: '1120px', margin: '0 auto', display: 'flex', flexDirection: 'column', gap: '18px' },
-      pageTitle: { fontSize: '18px', lineHeight: '26px', fontWeight: 600, color: 'var(--dsw-alias-label-primary)' },
-      pageLead: { fontSize: '12px', lineHeight: '19px', color: 'var(--dsw-alias-label-tertiary)', margin: 0 },
+      pageInner: { maxWidth: '1140px', margin: '0 auto', display: 'flex', flexDirection: 'column', gap: '20px' },
+      pageTitle: { fontSize: '20px', lineHeight: '28px', fontWeight: 700, letterSpacing: '0.3px', color: 'var(--dsw-alias-label-primary)' },
+      pageLead: { fontSize: '12px', lineHeight: '19px', color: 'var(--dsw-alias-label-tertiary)', margin: 0, maxWidth: '820px' },
+      // 页头：左侧「标题 + 徽标 + 元信息 + 一句说明」，右侧独立操作区，底部一条分隔线
+      pageHeader: {
+        display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '20px', flexWrap: 'wrap',
+        padding: '2px 0 18px', borderBottom: '1px solid var(--dsw-alias-border-l1)',
+      },
+      pageHeaderMain: { display: 'flex', flexDirection: 'column', gap: '10px', minWidth: 0, flex: '1 1 460px' },
+      pageTitleRow: { display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' },
+      badgeGroup: { display: 'inline-flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' },
+      badgeKey: { fontSize: '11px', lineHeight: '16px', color: 'var(--dsw-alias-label-tertiary)' },
+      headerActions: { display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', paddingTop: '2px' },
       // 标题下的一行元信息：小灰点分隔，只放"一眼要看"的事实，长句一律不进这里
       meta: {
         display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '6px 10px',
         fontSize: '12px', lineHeight: '18px', color: 'var(--dsw-alias-label-tertiary)',
+        fontFamily: 'Consolas, ui-monospace, monospace',
       },
-      metaSep: { color: 'var(--dsw-alias-label-quaternary, var(--dsw-alias-label-tertiary))', opacity: 0.6 },
+      metaSep: { color: 'var(--dsw-alias-label-quaternary, var(--dsw-alias-label-tertiary))', opacity: 0.8 },
       // 指标条：替代原来两张 Kv 卡，5 个小格子一行看完
       strip: {
-        display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
-        gap: '1px', borderRadius: '10px', overflow: 'hidden',
+        display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(100px, 1fr))',
+        gap: '1px', borderRadius: '12px', overflow: 'hidden',
         border: '1px solid var(--dsw-alias-border-l1)',
         background: 'var(--dsw-alias-border-l1)',
       },
       metric: {
-        display: 'flex', flexDirection: 'column', gap: '2px', padding: '9px 12px', minWidth: 0,
+        display: 'flex', flexDirection: 'column', gap: '4px', padding: '11px 10px', minWidth: 0,
         background: 'var(--dsw-alias-settings-card-fill)',
       },
-      metricLabel: { fontSize: '11px', lineHeight: '16px', color: 'var(--dsw-alias-label-tertiary)', whiteSpace: 'nowrap' },
+      metricLabel: { fontSize: '11px', lineHeight: '16px', color: 'var(--dsw-alias-label-tertiary)', whiteSpace: 'nowrap', letterSpacing: '0.2px', overflow: 'hidden', textOverflow: 'ellipsis' },
       metricValue: {
-        fontSize: '13px', lineHeight: '19px', color: 'var(--dsw-alias-label-primary)',
+        fontSize: '14px', lineHeight: '20px', fontWeight: 600, color: 'var(--dsw-alias-label-primary)',
         fontFamily: 'Consolas, ui-monospace, monospace', wordBreak: 'break-all',
       },
       // 卡片标题行：标题 + 右侧状态/操作，统一成一行
       cardHead: { display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' },
       // 卡片底部的一行灰字（原先是整段解释，压缩成一句）
       footnote: { fontSize: '11px', lineHeight: '17px', color: 'var(--dsw-alias-label-tertiary)', overflowWrap: 'break-word' },
-      // 卡片分组：每组一个小标题 + 自适应网格（宽屏两列，窄了自动回落单列，卡片等高）
-      section: { display: 'flex', flexDirection: 'column', gap: '10px' },
-      sectionHead: { display: 'flex', alignItems: 'baseline', gap: '8px', flexWrap: 'wrap' },
-      sectionTitle: { fontSize: '13px', lineHeight: '20px', fontWeight: 600, color: 'var(--dsw-alias-label-primary)' },
+      // 卡片分组：小标题前面一根主色竖条当视觉锚点，网格宽屏两列 / 窄屏单列、卡片等高
+      section: { display: 'flex', flexDirection: 'column', gap: '12px' },
+      sectionHead: { display: 'flex', alignItems: 'baseline', gap: '10px', flexWrap: 'wrap' },
+      sectionTitle: {
+        display: 'flex', alignItems: 'center', gap: '9px',
+        paddingLeft: '10px', borderLeft: '3px solid var(--dsw-alias-toast-action)',
+        fontSize: '13px', lineHeight: '20px', fontWeight: 700, letterSpacing: '0.3px',
+        color: 'var(--dsw-alias-label-primary)',
+      },
       sectionHint: { fontSize: '11px', lineHeight: '18px', color: 'var(--dsw-alias-label-tertiary)' },
       grid: {
-        display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(330px, 1fr))',
-        gap: '10px', alignItems: 'stretch',
+        display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))',
+        gap: '12px', alignItems: 'stretch',
       },
       card: {
-        display: 'flex', flexDirection: 'column', gap: '9px', padding: '13px 14px', minWidth: 0,
-        border: '1px solid var(--dsw-alias-border-l1)', borderRadius: '10px',
+        display: 'flex', flexDirection: 'column', gap: '10px', padding: '15px 16px', minWidth: 0,
+        border: '1px solid var(--dsw-alias-border-l1)', borderRadius: '12px',
         background: 'var(--dsw-alias-settings-card-fill)',
       },
       cardTitle: { fontSize: '13px', lineHeight: '18px', fontWeight: 600, color: 'var(--dsw-alias-label-primary)' },
-      kvRow: { display: 'flex', gap: '8px', fontSize: '12px', lineHeight: '18px', alignItems: 'flex-start', padding: '1px 0' },
+      kvRow: { display: 'flex', gap: '10px', fontSize: '12px', lineHeight: '18px', alignItems: 'flex-start', padding: '2px 0' },
       kvKey: { minWidth: '100px', width: '100px', flexShrink: 0, color: 'var(--dsw-alias-label-tertiary)' },
       kvVal: { flex: 1, minWidth: 0, color: 'var(--dsw-alias-label-secondary)', overflowWrap: 'break-word' },
       advice: { fontSize: '12px', lineHeight: '19px', color: 'var(--dsw-alias-label-secondary)', margin: 0, paddingLeft: '18px', display: 'flex', flexDirection: 'column', gap: '2px' },
       actions: { display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' },
       hint: { fontSize: '12px', lineHeight: '19px', color: 'var(--dsw-alias-label-tertiary)', wordBreak: 'break-all' },
       code: {
-        fontSize: '12px', lineHeight: '18px', padding: '8px 10px', borderRadius: '6px',
-        background: 'var(--dsw-alias-fill-l1)', color: 'var(--dsw-alias-label-secondary)',
+        fontSize: '12px', lineHeight: '18px', padding: '9px 11px', borderRadius: '8px',
+        background: 'var(--dsw-alias-fill-l1, var(--dsw-alias-bg-layer-2))', color: 'var(--dsw-alias-label-secondary)',
         fontFamily: 'Consolas, ui-monospace, monospace', whiteSpace: 'pre-wrap', wordBreak: 'break-all',
       },
       panel: {
-        display: 'flex', flexDirection: 'column', gap: '8px', padding: '10px',
-        border: '1px solid var(--dsw-alias-border-l1)', borderRadius: '8px',
+        display: 'flex', flexDirection: 'column', gap: '10px', padding: '12px',
+        border: '1px solid var(--dsw-alias-border-l1)', borderRadius: '10px',
         background: 'var(--dsw-alias-settings-card-fill)',
       },
       input: {
-        flex: 1, minWidth: 0, fontSize: '12px', lineHeight: '18px', padding: '5px 8px',
-        borderRadius: '6px', border: '1px solid var(--dsw-alias-border-l1)',
+        flex: 1, minWidth: 0, fontSize: '12px', lineHeight: '18px', padding: '6px 10px',
+        borderRadius: '8px', border: '1px solid var(--dsw-alias-border-l1)',
         background: 'var(--dsw-alias-bg-base)', color: 'var(--dsw-alias-label-primary)',
-        fontFamily: 'Consolas, ui-monospace, monospace',
+        fontFamily: 'Consolas, ui-monospace, monospace', outline: 'none',
       },
       inputReadonly: {
-        flex: 1, minWidth: 0, fontSize: '12px', lineHeight: '18px', padding: '5px 8px',
-        borderRadius: '6px', border: '1px solid transparent',
+        flex: 1, minWidth: 0, fontSize: '12px', lineHeight: '18px', padding: '6px 10px',
+        borderRadius: '8px', border: '1px solid transparent',
         background: 'transparent', color: 'var(--dsw-alias-label-secondary)',
         fontFamily: 'Consolas, ui-monospace, monospace',
       },
     }
 
     function chipStyle(kind) {
-      // 底色只做"浅色染色"提示状态，文字一律用正文色：
-      // 原先把 state-*-primary 既当底色又当文字色，浅绿底 + 浅绿字，看不清（用户实际反馈过）
+      // 底色用随主题翻转的 tertiary（light 淡彩 / dark 深彩），文字一律用正文色：
+      // secondary 在 light/dark 都是同一批 400 级亮色、不翻转，dark 下亮底配近白字会看不清
       const map = {
-        ok: 'var(--dsw-alias-state-success-secondary)',
-        warn: 'var(--dsw-alias-state-warn-secondary)',
-        pull: 'var(--dsw-alias-state-warn-secondary)',
-        init: 'var(--dsw-alias-state-warn-secondary)',
-        error: 'var(--dsw-alias-state-error-secondary)',
-        idle: 'var(--dsw-alias-fill-l1)',
+        ok: 'var(--dsw-alias-state-success-tertiary)',
+        warn: 'var(--dsw-alias-state-warn-tertiary)',
+        pull: 'var(--dsw-alias-state-warn-tertiary)',
+        init: 'var(--dsw-alias-state-warn-tertiary)',
+        error: 'var(--dsw-alias-state-error-tertiary, var(--dsw-alias-file-diff-deleted-bg))',
+        idle: 'var(--dsw-alias-fill-l1, var(--dsw-alias-bg-base))',
       }
       return Object.assign({}, S.chip, {
         background: map[kind] || map.idle,
@@ -2423,57 +2440,67 @@ window.__ModuleLoader__.load({
 
       return h('div', { style: S.page },
         h('div', { style: S.pageInner },
-          h('div', { style: S.cardHead },
-            h('div', { style: S.pageTitle }, M('配置同步', 'Config Sync')),
-            h('span', { style: { ...S.footnote, marginLeft: '6px' } }, M('本机', 'local')),
-            h('span', { style: chipStyle(summary.kind) }, chipLabel(summary.kind)),
-            // 云端状态也放在标题行：跟左边同一个徽标样式（绿=一致、红=不一致），
-            // 自动检查：挂载即查 + 每 2 分钟复查，不需要手动点
-            h('span', { style: { ...S.footnote, marginLeft: '4px' } }, M('云端', 'cloud')),
-            h('span', { style: chipStyle(cloudLine.kind) }, cloudLabel),
-            h('div', { style: { flex: 1, minWidth: '8px' } }, null),
-            // 「本机路径」区唯一的入口：平时普通按钮，只有根外路径/被覆盖这两类告警才变橙并带数字
-            h('button', {
-              type: 'button',
-              style: (!showRoots && lpAlert > 0)
-                ? { ...S.btn, color: 'var(--dsw-alias-state-warn-primary)', borderColor: 'var(--dsw-alias-state-warn-primary)' }
-                : S.btn,
-              title: (!showRoots && lpAlert > 0)
-                ? M('本机路径有需要处理的告警（根外路径 / 被覆盖的配置），点开查看', 'Local paths need attention (outside-root paths / overwritten configs) - click to open')
-                : M('查看本机路径与占位符的对照', 'Show local paths and their placeholders'),
-              onClick: () => setShowRoots((v) => !v),
-            },
-              showRoots
-                ? M('收起本机路径', 'Hide local paths')
-                : (lpAlert > 0
-                  ? M(`本机路径 · ${lpAlert} 项告警`, `Local paths · ${lpAlert} alert(s)`)
-                  : M('本机路径', 'Local paths'))),
-            h('button', { type: 'button', style: S.btn, disabled: busy, onClick: refresh },
-              busy ? M('检测中…', 'Checking…') : M('重新检测', 'Re-check')),
+          h('div', { style: S.pageHeader },
+            h('div', { style: S.pageHeaderMain },
+              h('div', { style: S.pageTitleRow },
+                h('div', { style: S.pageTitle }, M('配置同步', 'Config Sync')),
+                h('div', { style: S.badgeGroup },
+                  h('span', { style: S.badgeKey }, M('本机', 'local')),
+                  h('span', { style: chipStyle(summary.kind) }, chipLabel(summary.kind)),
+                ),
+                // 云端状态：跟左边同一个徽标样式（绿=一致、红=不一致），挂载即查 + 每 2 分钟复查
+                h('div', { style: S.badgeGroup },
+                  h('span', { style: S.badgeKey }, M('云端', 'cloud')),
+                  h('span', { style: chipStyle(cloudLine.kind) }, cloudLabel),
+                ),
+              ),
+              // 一行元信息：版本与仓库位置。状态说明交给上面的徽标和下面的指标条，这里不再重复。
+              h('div', { style: S.meta },
+                data ? [
+                  h('span', { key: 'app' }, `app ${data.version.local || '?'} / Electron ${data.version.electron || '?'}`),
+                  data.repo && data.repo.exists
+                    ? [
+                      h('span', { key: 's2', style: S.metaSep }, '·'),
+                      h('span', { key: 'repo' }, `${data.repo.branch || '?'} @ ${(data.repo.head || '').split(' ')[0] || '?'}`),
+                    ]
+                    : null,
+                ] : h('span', null, summary.text),
+              ),
+              h('div', { style: S.pageLead },
+                M('配置在本机、仓库、云端三处流转：改完立即生效；写入与还原的脚本统一在退出客户端后执行。',
+                  'Configs flow between this machine, the repo and the cloud. Changes take effect at once; write and restore scripts run after the client quits.')),
+            ),
+            h('div', { style: S.headerActions },
+              // 「本机路径」区唯一的入口：平时普通按钮，只有根外路径/被覆盖这两类告警才变橙并带数字
+              h('button', {
+                type: 'button',
+                style: (!showRoots && lpAlert > 0)
+                  ? { ...S.btn, color: 'var(--dsw-alias-state-warn-primary)', borderColor: 'var(--dsw-alias-state-warn-primary)' }
+                  : S.btn,
+                title: (!showRoots && lpAlert > 0)
+                  ? M('本机路径有需要处理的告警（根外路径 / 被覆盖的配置），点开查看', 'Local paths need attention (outside-root paths / overwritten configs) - click to open')
+                  : M('查看本机路径与占位符的对照', 'Show local paths and their placeholders'),
+                onClick: () => setShowRoots((v) => !v),
+              },
+                showRoots
+                  ? M('收起本机路径', 'Hide local paths')
+                  : (lpAlert > 0
+                    ? M(`本机路径 · ${lpAlert} 项告警`, `Local paths · ${lpAlert} alert(s)`)
+                    : M('本机路径', 'Local paths'))),
+              h('button', { type: 'button', style: S.btn, disabled: busy, onClick: refresh },
+                busy ? M('检测中…', 'Checking…') : M('重新检测', 'Re-check')),
+            ),
           ),
-          // 一行元信息：版本与仓库位置。状态说明交给上面的两个徽标和下面的指标条，这里不再重复。
-          h('div', { style: S.meta },
-            data ? [
-              h('span', { key: 'app' }, `app ${data.version.local || '?'} / Electron ${data.version.electron || '?'}`),
-              data.repo && data.repo.exists
-                ? [
-                  h('span', { key: 's2', style: S.metaSep }, '·'),
-                  h('span', { key: 'repo' }, `${data.repo.branch || '?'} @ ${(data.repo.head || '').split(' ')[0] || '?'}`),
-                ]
-                : null,
-            ] : h('span', null, summary.text),
-          ),
-          h('div', { style: S.pageLead },
-            M('配置在本机、仓库、云端三处流转：改完立即生效；写入与还原的脚本统一在退出客户端后执行。',
-              'Configs flow between this machine, the repo and the cloud. Changes take effect at once; write and restore scripts run after the client quits.')),
           toast
             ? h('div', {
               style: {
                 position: 'fixed', left: '50%', top: '24px', transform: 'translateX(-50%)', zIndex: 9999,
                 padding: '10px 16px', borderRadius: '8px', fontSize: '13px', lineHeight: 1.5,
-                maxWidth: '70vw', boxShadow: '0 6px 18px rgba(0,0,0,.18)',
-                background: 'var(--dsw-alias-bg-panel, #fff)',
-                border: '1px solid var(--dsw-alias-border-secondary, #ddd)',
+                maxWidth: '70vw', wordBreak: 'break-all',
+                background: 'var(--dsw-alias-settings-card-fill)',
+                color: 'var(--dsw-alias-label-primary)',
+                border: '1px solid var(--dsw-alias-border-l2)',
+                boxShadow: '0 6px 18px var(--dsw-alias-border-l2)',
               },
             }, toast)
             : null,
@@ -3114,10 +3141,10 @@ window.__ModuleLoader__.load({
           'position:fixed', 'left:50%', 'top:24px', 'transform:translateX(-50%)',
           'z-index:2147483000', 'padding:10px 16px', 'border-radius:8px',
           'font-size:13px', 'line-height:1.5', 'max-width:70vw', 'word-break:break-all',
-          'box-shadow:0 6px 18px rgba(0,0,0,.18)',
-          'background:var(--dsw-alias-bg-panel, #fff)',
-          'border:1px solid var(--dsw-alias-border-secondary, #ddd)',
-          'color:var(--dsw-alias-label-primary, #111)', 'pointer-events:none',
+          'box-shadow:0 6px 18px var(--dsw-alias-border-l2)',
+          'background:var(--dsw-alias-settings-card-fill)',
+          'border:1px solid var(--dsw-alias-border-l2)',
+          'color:var(--dsw-alias-label-primary)', 'pointer-events:none',
         ].join('; ')
         document.body.appendChild(box)
         setTimeout(() => { try { box.remove() } catch { } }, 5000)
