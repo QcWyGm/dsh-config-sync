@@ -1,9 +1,9 @@
 {
-    "version":  "0.3.58",
+    "version":  "0.3.59",
     "releasedAt":  "2026-11-16",
-    "notes":  "0.3.58：正式新版本号，收录 0.3.56 修订的全部改动。①仓库与插件统一改名为 dsh-config-sync-plugin（GitHub 仓库、README 标题、market-index、自检脚本、自引用 URL 全部对齐）；②apply.ps1 会话 projcache 工作区映射改为按 sessions 目录反推（覆盖 15→46），无 Node 执行器时跳过会话还原加保护；③apply.ps1 本地插件映射 dsh-purge 版本对齐 1.4.0；④发布产物 releases\\dsh-config-sync-plugin-0.3.58.tgz。运行时兼容项不变：本机设置文件仍是 ~\\.dsh\\dsh-config-sync.json，备份目录仍按 dsh-config-sync 前缀识别。面板交互不变。",
-    "notesEn":  "0.3.58: a proper new version bundling all the 0.3.56-revision fixes. (1) Repo and plugin renamed to dsh-config-sync-plugin (GitHub repo, README titles, market-index, self-tests and self-referencing URLs all aligned); (2) apply.ps1 session projcache workspace mapping now also infers from sessions folders (coverage 15 to 46), with a guard on the no-Node skip-restore branch; (3) apply.ps1 local-plugin map aligned dsh-purge to 1.4.0; (4) artifact releases\\dsh-config-sync-plugin-0.3.58.tgz. Runtime compatibility unchanged: local settings file is still ~\\.dsh\\dsh-config-sync.json and backup detection still matches the dsh-config-sync prefix. Panel behaviour unchanged.",
-    "sha256":"2248c2644eff3faa475456ce9383ad72151f2e178878358eb1664aa41d996a71",
-    "tgz":  "releases/dsh-config-sync-plugin-0.3.58.tgz",
+    "notes":  "0.3.59：修复 apply.ps1 编码退化导致的 B 机拉取失败。此前编辑工具把 apply.ps1 从带 BOM 的 UTF-16/UTF-8 改成无 BOM UTF-8，Windows PowerShell 5.1 按 GBK 解析致中文注释乱码、脚本解析阶段即 ParserError。本版恢复 apply.ps1 的 UTF8-BOM，隔离环境实测 5 工作区还原、会话首帧 cwd 修正 44、projcache 修正 44 全部通过。0.3.58 及以前的功能（仓库改名、projcache 目录反推、dsh-purge 1.4.0 对齐）全部保留。产物 releases\\dsh-config-sync-plugin-0.3.59.tgz。",
+    "notesEn":  "0.3.59: fix apply.ps1 encoding regression that broke pull on the B machine. Earlier edits stripped the BOM from apply.ps1 (UTF-16/UTF-8 with BOM -\u003e UTF-8 without BOM); Windows PowerShell 5.1 then decoded it as GBK, garbling Chinese comments and raising ParserError at parse time. This build restores the UTF8-BOM on apply.ps1. Isolated replay verified: 5 workspaces restored, 44 session-header cwd fixes, 44 projcache fixes, all passing. All 0.3.58-and-earlier features retained (repo rename, projcache folder inference, dsh-purge 1.4.0 alignment). Artifact releases\\dsh-config-sync-plugin-0.3.59.tgz.",
+    "sha256":  "82223971de1ec759cd3633b4557e6ad5c197a9d53392fe9de5a7efb9e96788b1",
+    "tgz":  "releases/dsh-config-sync-plugin-0.3.59.tgz",
     "minClient":  "0.2.2-rc.2"
 }
