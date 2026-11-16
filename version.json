@@ -1,9 +1,9 @@
 {
-    "version":  "0.3.57",
+    "version":  "0.3.58",
     "releasedAt":  "2026-11-16",
-    "notes":  "0.3.57：正式新版本号，收录 0.3.56 修订的全部改动。①仓库与插件统一改名为 dsh-config-sync-plugin（GitHub 仓库、README 标题、market-index、自检脚本、自引用 URL 全部对齐）；②apply.ps1 会话 projcache 工作区映射改为按 sessions 目录反推（覆盖 15→46），无 Node 执行器时跳过会话还原加保护；③apply.ps1 本地插件映射 dsh-purge 版本对齐 1.4.0；④发布产物 releases\\dsh-config-sync-plugin-0.3.57.tgz。运行时兼容项不变：本机设置文件仍是 ~\\.dsh\\dsh-config-sync.json，备份目录仍按 dsh-config-sync 前缀识别。面板交互不变。",
-    "notesEn":  "0.3.57: a proper new version bundling all the 0.3.56-revision fixes. (1) Repo and plugin renamed to dsh-config-sync-plugin (GitHub repo, README titles, market-index, self-tests and self-referencing URLs all aligned); (2) apply.ps1 session projcache workspace mapping now also infers from sessions folders (coverage 15 to 46), with a guard on the no-Node skip-restore branch; (3) apply.ps1 local-plugin map aligned dsh-purge to 1.4.0; (4) artifact releases\\dsh-config-sync-plugin-0.3.57.tgz. Runtime compatibility unchanged: local settings file is still ~\\.dsh\\dsh-config-sync.json and backup detection still matches the dsh-config-sync prefix. Panel behaviour unchanged.",
-    "sha256":"45831879cfdcad5557c916f2d35d5e067272f8a31141f912c81da39a35e0fc22",
-    "tgz":  "releases/dsh-config-sync-plugin-0.3.57.tgz",
+    "notes":  "0.3.58：正式新版本号，收录 0.3.56 修订的全部改动。①仓库与插件统一改名为 dsh-config-sync-plugin（GitHub 仓库、README 标题、market-index、自检脚本、自引用 URL 全部对齐）；②apply.ps1 会话 projcache 工作区映射改为按 sessions 目录反推（覆盖 15→46），无 Node 执行器时跳过会话还原加保护；③apply.ps1 本地插件映射 dsh-purge 版本对齐 1.4.0；④发布产物 releases\\dsh-config-sync-plugin-0.3.58.tgz。运行时兼容项不变：本机设置文件仍是 ~\\.dsh\\dsh-config-sync.json，备份目录仍按 dsh-config-sync 前缀识别。面板交互不变。",
+    "notesEn":  "0.3.58: a proper new version bundling all the 0.3.56-revision fixes. (1) Repo and plugin renamed to dsh-config-sync-plugin (GitHub repo, README titles, market-index, self-tests and self-referencing URLs all aligned); (2) apply.ps1 session projcache workspace mapping now also infers from sessions folders (coverage 15 to 46), with a guard on the no-Node skip-restore branch; (3) apply.ps1 local-plugin map aligned dsh-purge to 1.4.0; (4) artifact releases\\dsh-config-sync-plugin-0.3.58.tgz. Runtime compatibility unchanged: local settings file is still ~\\.dsh\\dsh-config-sync.json and backup detection still matches the dsh-config-sync prefix. Panel behaviour unchanged.",
+    "sha256":"2248c2644eff3faa475456ce9383ad72151f2e178878358eb1664aa41d996a71",
+    "tgz":  "releases/dsh-config-sync-plugin-0.3.58.tgz",
     "minClient":  "0.2.2-rc.2"
 }

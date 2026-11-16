@@ -820,6 +820,7 @@ if ($dropped.Count -gt 0) { Ok "已剔除 $($dropped.Count) 个实验性 bundle�
 $localPluginMap = [ordered]@{
   'dsh-our-free-model-2.8.0'      = 'dsh-our-free-model'
   'dsh-purge-1.4.0'               = 'dsh-purge'
+  'dsh-config-sync-plugin-0.3.58' = 'dsh-config-sync-plugin'
   'dsh-config-sync-plugin-0.3.57' = 'dsh-config-sync-plugin'
   'dsh-config-sync-plugin-0.3.56' = 'dsh-config-sync-plugin'
   'dsh-config-sync-0.1.0'         = 'dsh-config-sync'
