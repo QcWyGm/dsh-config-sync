@@ -54,7 +54,7 @@ function loadClient(fetchImpl) {
   return loaded
 }
 
-console.log('== dsh-config-sync 客户端半身自检 ==')
+console.log('== dsh-config-sync-plugin 客户端半身自检 ==')
 
 // 无副作用的 fetch：组件在无数据状态下不该真的发请求（useEffect 在替身里是 noop）
 const noopFetch = async () => ({ ok: true, status: 200, text: async () => '{}' })

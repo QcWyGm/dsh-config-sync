@@ -79,10 +79,10 @@ const PLUGIN_VERSION = (() => {
 // **不要**用 jsDelivr 兜清单：它对 `@main` 这类分支别名有明显缓存（实测发版后仍返回上一版清单，purge 接口也没
 // 立刻刷新），拿它当清单源会让"有新版本"晚几小时才出现，比读不到更误导人。
 // 用户自己在设置里填了清单地址时只用他那一个 —— 不掺镜像，免得"读到的其实不是他指定的源"。
-const RAW_MANIFEST_URL = 'https://raw.githubusercontent.com/QcWyGm/dsh-config-sync/main/version.json'
+const RAW_MANIFEST_URL = 'https://raw.githubusercontent.com/QcWyGm/dsh-config-sync-plugin/main/version.json'
 const UPDATE_MANIFEST_MIRRORS = [
-  'https://gh-proxy.com/https://raw.githubusercontent.com/QcWyGm/dsh-config-sync/main/version.json',
-  'https://ghfast.top/https://raw.githubusercontent.com/QcWyGm/dsh-config-sync/main/version.json',
+  'https://gh-proxy.com/https://raw.githubusercontent.com/QcWyGm/dsh-config-sync-plugin/main/version.json',
+  'https://ghfast.top/https://raw.githubusercontent.com/QcWyGm/dsh-config-sync-plugin/main/version.json',
   RAW_MANIFEST_URL,
 ]
 const UPDATE_MANIFEST_URL = RAW_MANIFEST_URL
@@ -3833,7 +3833,7 @@ async function handleRoots(req, res, config) {
 // 面板里提交 → 直接建 issue（label=feedback，正文附环境块）；列表读 issue（含 open/closed）；
 // 点「已解决」就 PATCH 成 closed。网络不通时先进本机待发队列，下次点「补发」再建 issue。
 
-const GH_DEFAULT_REPO = 'QcWyGm/dsh-config-sync'
+const GH_DEFAULT_REPO = 'QcWyGm/dsh-config-sync-plugin'
 const GH_FEEDBACK_LABEL = 'feedback'
 
 /** 当前插件版本（读自己的 package.json；读不到就空串，不抛）。 */

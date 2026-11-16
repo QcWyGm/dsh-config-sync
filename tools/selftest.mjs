@@ -93,7 +93,7 @@ function check(label, cond, detail = '') {
   else { failures++; console.log(`  [X] ${label}${detail ? ' — ' + detail : ''}`) }
 }
 
-console.log('== dsh-config-sync 宿主半身自检 ==')
+console.log('== dsh-config-sync-plugin 宿主半身自检 ==')
 check('apply() 注册了路由', routes.size === 10 && routes.has('/config-sync/update') && routes.has('/config-sync/scope') && routes.has('/config-sync/extra-config') && routes.has('/config-sync/conflict') && routes.has('/config-sync/roots') && routes.has('/config-sync/feedback'), `实际 ${routes.size} 条：${[...routes.keys()].join(', ')}`)
 
 const status = await call('/config-sync/status', { headers: { host: 'localhost:3080' } })

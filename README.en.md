@@ -1,5 +1,4 @@
-﻿# dsh-config-sync
-
+﻿# dsh-config-sync-plugin
 [中文](README.md) | English
 
 A DSH plugin: it adds a **"Config Sync"** row to the sidebar (opening a full-page health-check panel), plus a summary row under **Settings → General**. It only **inspects and prepares commands** — the sync actions never run inside the app (except the automatic sync that relaunches the client).
@@ -107,14 +106,14 @@ The plugin is a standard DSH bundle; install it into the current profile:
 
 ```sh
 # Install from this repo's release package (no build needed: host, client and runtime scripts are already inside)
-dsh plugin add https://raw.githubusercontent.com/QcWyGm/dsh-config-sync/main/releases/dsh-config-sync-<version>.tgz   # latest on the Releases page
+dsh plugin add https://raw.githubusercontent.com/QcWyGm/dsh-config-sync-plugin/main/releases/dsh-config-sync-plugin-<version>.tgz   # latest on the Releases page
 ```
 
 Or add this repo's index under the official **Plugins → Discover → Index sources** (see "Using this repo as a market index source" below). **The third-party market plugin dshmarket does not read that index** — see that section for why.
 
 After installing, point it at your own config repo (common paths are auto-detected by default). The **Plugin update** card asks for a manifest URL and token only when needed — **this repo is public, so updates work without a token**.
 
-`apply.ps1` does three things on install: it unpacks `local-plugins\dsh-config-sync-<version>.tgz` into `<AppRoot>\dsh-config-sync-0.1.0`, adds a `link:` dependency and a `dsh.profile.bundles` entry to `package.json`, and a `config-sync` line to `cordis.patch.yml`.
+`apply.ps1` does three things on install: it unpacks `local-plugins\dsh-config-sync-plugin-<version>.tgz` into `<AppRoot>\dsh-config-sync-plugin-0.1.0`, adds a `link:` dependency and a `dsh.profile.bundles` entry to `package.json`, and a `config-sync` line to `cordis.patch.yml`.
 
 ## Contents
 
@@ -378,7 +377,7 @@ Two machines rarely share drive letters (one has `D:\DeepSeekHarness`, the other
 
 The Feedback card at the bottom of the panel. **GitHub Issues are the single source of truth** - no more json files in the config repo:
 
-1. Title + details → `POST /repos/QcWyGm/dsh-config-sync/issues` with label `feedback`; an environment block (plugin version, machine, time, platform, install root, config repo path) is appended to the body so nobody has to ask later;
+1. Title + details → `POST /repos/QcWyGm/dsh-config-sync-plugin/issues` with label `feedback`; an environment block (plugin version, machine, time, platform, install root, config repo path) is appended to the body so nobody has to ask later;
 2. The list reads the Issues directly (`GET /issues?state=all&labels=feedback`): open and closed both show, and the title is a link to the GitHub page;
 3. Resolve → `PATCH issue {state:'closed'}`. It is still the same thread on GitHub, so the discussion can continue there, and reopening is one click;
 4. The top row of the card is the connection state, in one of three forms: `signed in as xxx (submit and close)` / `token is not the owner (read and submit only)` / `anonymous read (submit via browser)`.
@@ -490,7 +489,7 @@ Default exclusions (50 entries, edit freely): `*.db` / `*.db-*` / `*.sqlite*` / 
 
 ## Plugin update (since 0.2.0)
 
-The **Plugin update** card shows the local version, the cloud version and one status line; the manifest and package live in this public repo (`version.json` + `releases/dsh-config-sync-<version>.tgz` — only a few hundred bytes are read, the package is not; cached 30 minutes, checked on mount and every 30 minutes after).
+The **Plugin update** card shows the local version, the cloud version and one status line; the manifest and package live in this public repo (`version.json` + `releases/dsh-config-sync-plugin-<version>.tgz` — only a few hundred bytes are read, the package is not; cached 30 minutes, checked on mount and every 30 minutes after).
 
 | Status | Meaning |
 |---|---|
@@ -503,7 +502,7 @@ The **Plugin update** card shows the local version, the cloud version and one st
 - **The manifest has several sources, tried in order**: the built-in candidates are `gh-proxy.com` → `ghfast.top` → GitHub raw; the first two are live proxies (a fresh manifest comes back within a second, and the tgz downloads through the same prefix). `raw.githubusercontent.com` is frequently unreachable from mainland networks, and the host's `fetch` is Node's built-in one that **ignores system proxies** — so the request gets aborted on timeout (that is exactly the `This operation was aborted` line on the card). The package download follows the same order (the source that served the manifest first, then the rest): a reachable manifest does not guarantee the package is reachable on the same domain. 30-second timeout per request.
 - **Do not use jsDelivr as a manifest source**: it caches branch aliases like `@main` for a long time and was still serving the previous `version.json` after a release (`purge.jsdelivr.net` did not refresh it either), so "new version available" would show up hours late — more misleading than a failed check. Versioned package files are unaffected by that cache, but the manifest is.
 - **Token**: this repo is public, so no token is needed. If `updateManifestUrl` points at a private Gitee mirror instead, fill in a Gitee personal token and both the manifest and the package switch to the API raw endpoint (`/api/v5/repos/<owner>/<repo>/raw/<path>?ref=main&access_token=…`), passing the branch as `ref` rather than in the path. A URL you fill in is used **alone**, with no mirrors mixed in. The token lives only in the local settings file, never in the repo; saving empty means "keep the stored token", and there is a separate "Clear stored token" button. A relative `tgz` resolves against **the manifest actually read**, so switching addresses cannot build the wrong domain.
-- The update is split into two steps (since 0.3.7): **download and install are separate**. "Download x.y.z" only saves the tgz into `~\.dsh\update-staging\dsh-config-sync-<version>.tgz` and verifies its sha256 — the host never touches the plugin directory, so DSH does not resync its plugin tree and the Config Sync page you are looking at never jumps away. The button then becomes "Restart & install": that one exits DSH (`spawnWatcher(-Mode update -UpdateTgz <local package> -UpdateSha256 …)`), and the post-exit script backs up the old directory (`~\.dsh\backups\plugin-<old version>-<time>`), installs, and relaunches the new version (`runtime\post-exit.ps1`, rolling back from the backup on failure). Installation happens after exit, so exactly one restart is needed.
+- The update is split into two steps (since 0.3.7): **download and install are separate**. "Download x.y.z" only saves the tgz into `~\.dsh\update-staging\dsh-config-sync-plugin-<version>.tgz` and verifies its sha256 — the host never touches the plugin directory, so DSH does not resync its plugin tree and the Config Sync page you are looking at never jumps away. The button then becomes "Restart & install": that one exits DSH (`spawnWatcher(-Mode update -UpdateTgz <local package> -UpdateSha256 …)`), and the post-exit script backs up the old directory (`~\.dsh\backups\plugin-<old version>-<time>`), installs, and relaunches the new version (`runtime\post-exit.ps1`, rolling back from the backup on failure). Installation happens after exit, so exactly one restart is needed.
 - Why the old path was dropped: 0.3.4–0.3.6 installed **while DSH kept running**, overwriting the plugin directory. In practice that made the host tear down the current panel — the page vanished mid-update and users had to click back before they could press restart. The logs line up: `11:41:55 覆盖安装` → `11:42:10 已启动 relaunch`, with a visible 15-second gap in between. `POST {action:'install-live'}` stays available for CLI/scripts but the panel no longer uses it; `POST {action:'apply'}` (exit first, then download and install) remains too.
 
 ## Using this repo as a market index source
@@ -511,17 +510,17 @@ The **Plugin update** card shows the local version, the cloud version and one st
 The root `market-index.json` is a ready-to-use DSH market index (`format: 1`, `source.type: git` with a 40-character commit; installing fetches the package from this repo, no build). Index URL:
 
 ```
-https://raw.githubusercontent.com/QcWyGm/dsh-config-sync/main/market-index.json
+https://raw.githubusercontent.com/QcWyGm/dsh-config-sync-plugin/main/market-index.json
 ```
 
 In DSH go to **Plugins → Discover → Index sources**, paste the URL above, and "Config Sync" shows up in the list; installing pulls this repo at that commit.
 
 - **Prerequisite**: this is an index source for the **official Discover page** (`@deepseek-ai/dsh-plugin-market`), which needs the official `@deepseek-ai/dsh-experimental-plugin-market-bundle` enabled in the profile. Without it, neither the Discover page nor the index-source entry exists.
 - **Not found in dshmarket is expected**: the third-party market plugin dshmarket lists only its own curated catalog (`awesome-dsh-plugin.com/plugins.json`, or the `dsh-plugin-catalog` npm package in China). Its source has no path for user-supplied indexes (`lib/registry.js` reads that single catalog per region on every call, `lib/sources.js` only parses entries of that catalog), and its installs are restricted to sources listed there — anything else is rejected. So a self-hosted index, however valid, never shows up in dshmarket's search. To appear there, open a PR against [awesome-dsh-plugin](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin) (its README says plainly: don't PR plugin entries against the market repo).
-- **Fetching the index from China**: `raw.githubusercontent.com` comes and goes; prefix it with `https://gh-proxy.com/` or `https://ghfast.top/`, or use jsDelivr's `https://cdn.jsdelivr.net/gh/QcWyGm/dsh-config-sync@main/market-index.json` — but jsDelivr caches branch aliases like `@main`, so a new release may take hours to appear there.
+- **Fetching the index from China**: `raw.githubusercontent.com` comes and goes; prefix it with `https://gh-proxy.com/` or `https://ghfast.top/`, or use jsDelivr's `https://cdn.jsdelivr.net/gh/QcWyGm/dsh-config-sync-plugin@main/market-index.json` — but jsDelivr caches branch aliases like `@main`, so a new release may take hours to appear there.
 - **Just want it on your own machine**: no market needed — `dsh plugin add` with the tgz from the install section above is the shortest path.
 
-Release flow: change code → `pwsh -File tools\pack-plugin.ps1` to pack `releases/dsh-config-sync-<version>.tgz` (it collects files from `package.json`'s `files` and writes the sha256 back into `version.json`) → bump `version` (and `notes`) in `version.json` → replace `version` and `commit` of the entry in `market-index.json` → push. The index only references a commit, so older versions stay installable. Run `node tools\selftest.mjs <repo path>` and `node tools\clientcheck.mjs` before releasing.
+Release flow: change code → `pwsh -File tools\pack-plugin.ps1` to pack `releases/dsh-config-sync-plugin-<version>.tgz` (it collects files from `package.json`'s `files` and writes the sha256 back into `version.json`) → bump `version` (and `notes`) in `version.json` → replace `version` and `commit` of the entry in `market-index.json` → push. The index only references a commit, so older versions stay installable. Run `node tools\selftest.mjs <repo path>` and `node tools\clientcheck.mjs` before releasing.
 
 ## Interfaces and paths
 
@@ -536,7 +535,7 @@ Release flow: change code → `pwsh -File tools\pack-plugin.ps1` to pack `releas
 
 Cross-origin requests get 403. The client only `fetch`es these routes, imports no `@deepseek-ai/dsh-client-*`, and styles with `--dsw-alias-*` tokens only. Every request carries `accept-language`, which the host turns into Chinese or English text (`node:async_hooks` `AsyncLocalStorage`, one language per request).
 
-Paths: the repo follows the priority above; the client root prefers `config.appRoot` and otherwise derives from the plugin's own location (`<AppRoot>\dsh-config-sync-0.1.0`), so moving machines needs no edit; `.dsh` is `config.dshHome` → `%DSH_HOME%` → `~\.dsh`. The sync state file `~\.dsh\config-sync-state.json` is written by `sync.ps1`; the plugin only reads it. Local-only files: `config-sync-roots.json` (confirmed roots), `config-sync-pending-paths.json` (files skipped for a missing root), `config-sync-absolute-paths.json` (0.3.36: stray roots-outside paths found after a push) and `config-sync-overwrite.json` (0.3.36: which local configs a pull overwrote, with backup paths), `config-sync-scope.json` (per-group checkboxes) and `config-sync-extra.json` (0.3.51: plugin-data rules and extra paths).
+Paths: the repo follows the priority above; the client root prefers `config.appRoot` and otherwise derives from the plugin's own location (`<AppRoot>\dsh-config-sync-plugin-0.1.0`), so moving machines needs no edit; `.dsh` is `config.dshHome` → `%DSH_HOME%` → `~\.dsh`. The sync state file `~\.dsh\config-sync-state.json` is written by `sync.ps1`; the plugin only reads it. Local-only files: `config-sync-roots.json` (confirmed roots), `config-sync-pending-paths.json` (files skipped for a missing root), `config-sync-absolute-paths.json` (0.3.36: stray roots-outside paths found after a push) and `config-sync-overwrite.json` (0.3.36: which local configs a pull overwrote, with backup paths), `config-sync-scope.json` (per-group checkboxes) and `config-sync-extra.json` (0.3.51: plugin-data rules and extra paths).
 
 **Boundary**: `capture` has to read `cordis.patch.yml` while DSH holds that file, so it would capture a half-written state; and after `apply` writes, DSH writes over it again on exit. Hence the fixed boundary: decide what to run and write the command now, double-click after DSH exits. The full explanation of the sync mechanism, directory layout, moving to another machine and troubleshooting lives in the config repo's root `README.md`; this document covers the plugin itself.
 

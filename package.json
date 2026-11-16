@@ -44,11 +44,11 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/QcWyGm/dsh-config-sync"
+    "url": "https://github.com/QcWyGm/dsh-config-sync-plugin"
   },
-  "homepage": "https://github.com/QcWyGm/dsh-config-sync#readme",
+  "homepage": "https://github.com/QcWyGm/dsh-config-sync-plugin#readme",
   "bugs": {
-    "url": "https://github.com/QcWyGm/dsh-config-sync/issues"
+    "url": "https://github.com/QcWyGm/dsh-config-sync-plugin/issues"
   },
   "publishConfig": {
     "access": "public"

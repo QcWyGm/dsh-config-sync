@@ -10,17 +10,17 @@
         "en": "Inspect the state of a DSH config repo versus this machine, and generate post-exit push/pull/restore scripts.",
         "zh": "在 DSH 面板里查看配置仓库与本机的同步状态，并生成退出后执行的推送/拉取/还原脚本。"
       },
-      "icon": "https://raw.githubusercontent.com/QcWyGm/dsh-config-sync/main/docs/panel.png",
+      "icon": "https://raw.githubusercontent.com/QcWyGm/dsh-config-sync-plugin/main/docs/panel.png",
       "author": "QcWyGm",
-      "homepage": "https://github.com/QcWyGm/dsh-config-sync#readme",
-      "repository": { "url": "https://github.com/QcWyGm/dsh-config-sync" },
+      "homepage": "https://github.com/QcWyGm/dsh-config-sync-plugin#readme",
+      "repository": { "url": "https://github.com/QcWyGm/dsh-config-sync-plugin" },
       "versions": [
         {
           "version": "0.3.1",
           "publishTimestamp": 1794585600,
           "source": {
             "type": "git",
-            "url": "https://github.com/QcWyGm/dsh-config-sync",
+            "url": "https://github.com/QcWyGm/dsh-config-sync-plugin",
             "commit": "0cd114c569c942cb534b220c1f077474a99b65bb"
           }
         },
@@ -29,7 +29,7 @@
           "publishTimestamp": 1794499200,
           "source": {
             "type": "git",
-            "url": "https://github.com/QcWyGm/dsh-config-sync",
+            "url": "https://github.com/QcWyGm/dsh-config-sync-plugin",
             "commit": "53a21a97d5d138c6b3bc2e7f20a57a2b27d7853c"
           }
         },
@@ -38,7 +38,7 @@
           "publishTimestamp": 1794412800,
           "source": {
             "type": "git",
-            "url": "https://github.com/QcWyGm/dsh-config-sync",
+            "url": "https://github.com/QcWyGm/dsh-config-sync-plugin",
             "commit": "f2fd2f41f8e2a613b6bf88ed4e98477297f2781b"
           },
           "engines": { "dsh": ">=0.2.1-rc.1" }
