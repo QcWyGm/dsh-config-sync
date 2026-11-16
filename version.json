@@ -1,9 +1,9 @@
 {
-  "version": "0.3.55",
-  "releasedAt": "2026-11-15",
-  "notes": "0.3.55：①配置同步面板样式重构——页头拆成三层（标题+本机/云端徽标簇、版本 meta 与说明、右侧操作按钮），卡片/分区/按钮/输入/指标条统一内距、圆角与栅格节奏，分区标题加品牌蓝竖条锚点；状态徽标底色改用随主题翻转的 tertiary 色，dark 下文字对比度由最低 1.84:1 提升到 11~17:1，toast 与启动浮层全部改用 theme token；不新增依赖、不改同步行为。②含 0.3.54 三处性能提速：capture 用批量 FileInfo（大小+mtime）快筛替代逐文件双哈希（五万文件约 120s→约 4s，-DeepVerify 强制全量）；推送前历史超限扫描改为按提交缓存（-ScanHistory 强制全量）；拉取由 fetch+pull 改为 fetch+merge --ff-only，省一次网络往返。",
-  "notesEn": "0.3.55: (1) Config Sync panel restyle — the header is now three layers (title + local/cloud badge groups, version meta + lead, action buttons on the right), cards/sections/buttons/inputs/metrics share one spacing, radius and grid rhythm, section titles get a brand-blue anchor bar; status chips now use theme-flipping tertiary fills, lifting dark-mode text contrast from as low as 1.84:1 to 11–17:1, and the toast/startup overlay use theme tokens only. No new dependencies, no behaviour change. (2) Also ships the 0.3.54 performance work: capture uses batched FileInfo (size + mtime) prefiltering instead of hashing every file twice (~120 s -> ~4 s on 50k files; -DeepVerify forces a full pass), the pre-push oversized-history scan is cached per commit (-ScanHistory forces a full run), and pull is fetch + merge --ff-only instead of fetch + pull (one fewer round trip).",
-  "sha256": "c6e5f00a75f597e051cda81a662a6070936dcfc8e4a84749ddc3bd03034bd4bd",
-  "tgz": "releases/dsh-config-sync-0.3.55.tgz",
+  "version": "0.3.56",
+  "releasedAt": "2026-11-16",
+  "notes": "0.3.56：插件改名并可发布到 npm。①包名/插件标识由 dsh-config-sync 改为 dsh-config-sync-plugin（npm 上 dsh-config-sync 是他人同名项目），package.json 的 name、cordis.patch.yml 的 insert name、index.js 的 PACKAGE_ID、client.js 的导出 id、apply.ps1 的安装目录映射五处一起改，插件安装目录随之变成 <客户端根>\\dsh-config-sync-plugin-<ver>；②运行时不改名的地方保持兼容：本机设置文件仍是 ~\\.dsh\\dsh-config-sync.json（换名不会丢 repoPath/sshKey），备份目录识别仍按 dsh-config-sync 前缀匹配，旧目录 dsh-config-sync-<ver> 继续能识别；③发布产物改为 releases\\dsh-config-sync-plugin-0.3.56.tgz，README 新增 npm / 市场 / tgz 三种安装说明。同步逻辑、面板交互一律不变。",
+  "notesEn": "0.3.56: the plugin is renamed and published to npm. (1) The package / plugin identity moves from dsh-config-sync to dsh-config-sync-plugin (the npm name dsh-config-sync belongs to someone else's project); five spots change together — package.json name, the cordis.patch.yml insert name, index.js PACKAGE_ID, the client.js export id, and apply.ps1's install-folder map — so the plugin installs into <client root>\\dsh-config-sync-plugin-<ver>. (2) What stays for compatibility: the local settings file is still ~\\.dsh\\dsh-config-sync.json (renaming does not lose repoPath / sshKey), backup-detection still matches the dsh-config-sync prefix, and old dsh-config-sync-<ver> folders are still recognised. (3) Release artifact is now releases\\dsh-config-sync-plugin-0.3.56.tgz, and the README gained npm / marketplace / tgz install instructions. Sync logic and panel behaviour are unchanged.",
+  "sha256":"613bfd55c66316d2da8fd7ea575d5d44715b80821a020b01b7245667396c06eb",
+  "tgz": "releases/dsh-config-sync-plugin-0.3.56.tgz",
   "minClient": "0.2.2-rc.2"
 }

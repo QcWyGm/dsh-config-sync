@@ -16,6 +16,8 @@ import { fileURLToPath } from 'node:url'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const source = readFileSync(join(here, '..', 'client.js'), 'utf8')
+// 期望的导出名直接取 package.json 的 name，改包名时这里跟着走，不用手工同步
+const pkgName = JSON.parse(readFileSync(join(here, '..', 'package.json'), 'utf8')).name
 
 let failures = 0
 function check(label, cond, detail = '') {
@@ -65,7 +67,7 @@ try {
   check('模块加载', false, String(e && e.message))
 }
 
-check('导出 name 正确', exportsObj && exportsObj.name === 'dsh-config-sync', String(exportsObj && exportsObj.name))
+check('导出 name 正确', exportsObj && exportsObj.name === pkgName, String(exportsObj && exportsObj.name))
 check('导出 inject 含 slots', Boolean(exportsObj && exportsObj.inject && exportsObj.inject.includes('slots')), JSON.stringify(exportsObj && exportsObj.inject))
 check('导出 apply 是函数', typeof (exportsObj && exportsObj.apply) === 'function')
 

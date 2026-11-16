@@ -10,6 +10,20 @@ DSH 插件：左侧栏多一行「配置同步」，点开是整页体检面板�
 
 ---
 
+## 安装
+
+插件包名是 **`dsh-config-sync-plugin`**（npm 上的 `dsh-config-sync` 是同名他人项目，不是本插件）。三种装法：
+
+| 方式 | 命令 / 入口 | 说明 |
+|---|---|---|
+| npm | `npm i dsh-config-sync-plugin` | 适合把它当依赖管理，或在 profile 的 `package.json` 里写 `"dsh-config-sync-plugin": "^0.3.56"` 后 `pnpm i`；包名与 `cordis.patch.yml` 里注册的名字、插件目录 `dsh-config-sync-plugin-<ver>` 一致 |
+| 插件市场 | 客户端「插件市场 → 发现」搜「配置同步」 | 走 `market-index.json` 登记的 git 提交，版本与 README 对齐 |
+| 离线 tgz | `releases\dsh-config-sync-plugin-<ver>.tgz` | GitHub Release 附件，适合内网机器；面板「更新」按钮下载的也是它 |
+
+装好后插件目录是 `<客户端根>\dsh-config-sync-plugin-<ver>`，`appRoot` 留空时由插件位置反推客户端根，不用手填。
+
+---
+
 ## 从零开始：让第二台机器跑起来
 
 全程两条命令，源机器推一次、目标机器拉一次。下面是从零实测走通的完整顺序（2026-11-14，隔离环境两台假机 + 本地裸库，未碰主力机）。

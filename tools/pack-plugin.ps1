@@ -1,8 +1,8 @@
 <#
-打包 dsh-config-sync 插件 tgz（发布用，自包含：只读本仓库）
+打包 dsh-config-sync-plugin 插件 tgz（发布用，自包含：只读本仓库）
 
 用法
-  pwsh -File tools\pack-plugin.ps1                  # 打 releases\dsh-config-sync-<version>.tgz，并把 sha256 回填 version.json
+  pwsh -File tools\pack-plugin.ps1                  # 打 releases\dsh-config-sync-plugin-<version>.tgz，并把 sha256 回填 version.json
   pwsh -File tools\pack-plugin.ps1 -NoManifest      # 只打包，不动 version.json
   pwsh -File tools\pack-plugin.ps1 -Output x.tgz    # 打到别处（不回填清单）
 
@@ -25,7 +25,7 @@ $pkgFile = Join-Path $RepoRoot 'package.json'
 if (-not (Test-Path -LiteralPath $pkgFile)) { throw "不是插件仓库根（缺 package.json）：$RepoRoot" }
 $pkg = Get-Content -LiteralPath $pkgFile -Raw -Encoding utf8 | ConvertFrom-Json
 $version = [string]$pkg.version
-if (-not $Output) { $Output = Join-Path $RepoRoot ("releases\dsh-config-sync-{0}.tgz" -f $version) }
+if (-not $Output) { $Output = Join-Path $RepoRoot ("releases\dsh-config-sync-plugin-{0}.tgz" -f $version) }
 $outFull = [IO.Path]::GetFullPath($Output)
 $outName = Split-Path -Leaf $outFull
 

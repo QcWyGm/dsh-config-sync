@@ -12,6 +12,20 @@ The UI is bilingual: it follows the client language (`zh-*` → Chinese, anythin
 
 > `README.md` (Chinese) is the trimmed, current reference; this English file mirrors the older per-version notes and keeps the same facts.
 
+---
+
+## Install
+
+The package name is **`dsh-config-sync-plugin`** (the `dsh-config-sync` name on npm belongs to a different project). Three ways:
+
+| Way | Command / entry | Notes |
+|---|---|---|
+| npm | `npm i dsh-config-sync-plugin` | Use it as a dependency, or add `"dsh-config-sync-plugin": "^0.3.56"` to the profile's `package.json` and run `pnpm i`. The name matches the `cordis.patch.yml` insert name and the install folder `dsh-config-sync-plugin-<ver>` |
+| Marketplace | client → Plugins → Discover → “Config Sync” | Installs from the git commit registered in `market-index.json` |
+| Offline tgz | `releases\dsh-config-sync-plugin-<ver>.tgz` | GitHub Release asset for air-gapped machines; the panel's Update button downloads the same file |
+
+After installing, the plugin lives in `<client root>\dsh-config-sync-plugin-<ver>`; leaving `appRoot` empty makes the plugin derive the client root from its own location.
+
 ## From scratch: bring up the second machine
 
 Two commands per machine: the source machine pushes once, the target machine pulls once. The order below is what the isolated end-to-end run actually walked through on 2026-11-14 (two fake clients + a local bare repo, main machine untouched).

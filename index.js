@@ -27,7 +27,7 @@ import { fileURLToPath } from 'node:url'
 
 const pluginRequire = createRequire(import.meta.url)
 
-const PACKAGE_ID = 'dsh-config-sync'
+const PACKAGE_ID = 'dsh-config-sync-plugin'
 const ROUTE_STATUS = '/config-sync/status'
 const ROUTE_PREPARE = '/config-sync/prepare'
 const ROUTE_SETTINGS = '/config-sync/settings'
@@ -60,7 +60,7 @@ function t(zh, en) {
 }
 
 // ---- 插件自身的版本与更新源 ----
-// 插件目录就是 index.js 所在目录（apply 会把它部署成 <AppRoot>\dsh-config-sync-<ver>\）。
+// 插件目录就是 index.js 所在目录（apply 会把它部署成 <AppRoot>\dsh-config-sync-plugin-<ver>\）。
 const PLUGIN_DIR = dirname(fileURLToPath(import.meta.url))
 const PLUGIN_VERSION = (() => {
   try {
@@ -92,7 +92,7 @@ const UPDATE_CHECK_TTL = 30 * 60 * 1000
 
 /**
  * 定位客户端根目录（AppRoot）。
- * 首选 config.appRoot；其次由插件自身位置反推（插件被 apply 部署在 <AppRoot>\dsh-config-sync-<ver>\，
+ * 首选 config.appRoot；其次由插件自身位置反推（插件被 apply 部署在 <AppRoot>\dsh-config-sync-plugin-<ver>\，
  * 上一级就是 AppRoot，换机不用改配置）；都对不上时按常见安装位置探测。
  * 判据：解包版有 resources\app\package.json，打包版有 resources\app.asar —— 只看目录名会让装错位置的情况蒙混过去，
  * 只认解包版又会让 asar 构建的机器全部落空（那台会把"插件所在目录"当成客户端根）。
@@ -619,8 +619,8 @@ function readSnapshotPkg(dir) {
  *
  * 备份根 ~\.dsh\backups 是**多用途共用**的，不只是配置快照：
  *   profile  apply / restore 打的整份配置快照     顶层 package.json，name = dsh-profile-<名字>，带 dependencies
- *   plugin   插件自更新前打的插件本体备份          顶层 package.json，name = dsh-config-sync（带 dsh 字段），
- *                                                  或只有一个 dsh-config-sync-<ver>\ 子目录（半截残留）
+ *   plugin   插件自更新前打的插件本体备份          顶层 package.json，name = dsh-config-sync-plugin（带 dsh 字段），
+ *                                                  或只有一个 dsh-config-sync-plugin-<ver>\ 子目录（半截残留）
  *   session  修会话前的会话目录备份                顶层全是 --<路径编码>-- 目录
  *   other    冲突对照 / 手工拷来的 / 认不出来的     只给手动还原指引
  *
@@ -829,7 +829,7 @@ function restorePreview(dshHome, snapshotDir, config) {
 function restorePreviewForKind(snap, dshHome) {
   const kind = snap.kind
   if (kind === 'plugin') {
-    // 半截备份会多一层 dsh-config-sync-<ver>\：真正要写回的是里面的内容
+    // 半截备份会多一层 dsh-config-sync-plugin-<ver>\：真正要写回的是里面的内容
     let srcRoot = snap.dir
     let entries = []
     try { entries = readdirSync(srcRoot, { withFileTypes: true }) } catch { }
@@ -976,9 +976,9 @@ async function inspect(config) {
   const remoteFiles = remoteProbe ? remoteProbe.files : null
   if (!appRoot) {
     advice.push(t(
-      '定位不到客户端根目录：插件不在 <客户端根> 下（如 D:\\DeepSeekHarness\\dsh-config-sync-0.1.0），'
+      '定位不到客户端根目录：插件不在 <客户端根> 下（如 D:\\DeepSeekHarness\\dsh-config-sync-plugin-0.3.56），'
       + '或客户端是打包版（resources\\app.asar）而这里没认出来 —— 三份同步脚本会因此生成不了',
-      'Cannot locate the client root: the plugin is not under <client root> (e.g. D:\\DeepSeekHarness\\dsh-config-sync-0.1.0), '
+      'Cannot locate the client root: the plugin is not under <client root> (e.g. D:\\DeepSeekHarness\\dsh-config-sync-plugin-0.3.56), '
       + 'or this is a packaged build (resources\\app.asar) that was not recognized — the three sync scripts cannot be generated.',
     ))
   }
@@ -1232,7 +1232,7 @@ function cmdHead(title) {
     '@echo off',
     `${CHCP} 65001 >nul`,
     'setlocal',
-    `echo 本脚本由 DSH 插件 dsh-config-sync 生成：${title}`,
+    `echo 本脚本由 DSH 插件 dsh-config-sync-plugin 生成：${title}`,
     ...PROC_GUARD,
     'echo.',
   ]
@@ -2256,7 +2256,7 @@ async function downloadPackage({ urls, sha256, version, dshHome }) {
   if (typeof fetch !== 'function') return { ok: false, error: t('当前运行环境没有 fetch，无法下载更新包', 'fetch is unavailable in this runtime — cannot download the update package') }
   const dir = join(dshHome, 'update-staging')
   try { mkdirSync(dir, { recursive: true }) } catch { }
-  const file = join(dir, `dsh-config-sync-${version}.tgz`)
+  const file = join(dir, `dsh-config-sync-plugin-${version}.tgz`)
   const want = String(sha256 || '').toLowerCase()
   const errors = []
   for (const rawUrl of urls) {
@@ -3477,9 +3477,9 @@ async function handlePrepare(req, res, config) {
     if (!appRoot) {
       throw new Error(t(
         '定位不到客户端根目录（要能找到 resources\\app\\package.json 或 resources\\app.asar）：'
-        + '请确认插件装在 <客户端根> 下（例如 D:\\DeepSeekHarness\\dsh-config-sync-0.1.0），或在设置里填客户端根 appRoot',
+        + '请确认插件装在 <客户端根> 下（例如 D:\\DeepSeekHarness\\dsh-config-sync-plugin-0.3.56），或在设置里填客户端根 appRoot',
         'Cannot locate the client root (needs resources\\app\\package.json or resources\\app.asar): '
-        + 'make sure the plugin is installed under <client root> (e.g. D:\\DeepSeekHarness\\dsh-config-sync-0.1.0), or set appRoot in the settings',
+        + 'make sure the plugin is installed under <client root> (e.g. D:\\DeepSeekHarness\\dsh-config-sync-plugin-0.3.56), or set appRoot in the settings',
       ))
     }
     const state = {...await repoState(repo), message}

@@ -788,9 +788,10 @@ catch { Die "剔除实验性 bundle 后 package.json 不再是合法 JSON（请�
 if ($dropped.Count -gt 0) { Ok "已剔除 $($dropped.Count) 个实验性 bundle，清单剩 $($finalBundles.Count) 项" }
 
 $localPluginMap = [ordered]@{
-  'dsh-our-free-model-2.8.0' = 'dsh-our-free-model'
-  'dsh-purge-1.1.92'         = 'dsh-purge'
-  'dsh-config-sync-0.1.0'    = 'dsh-config-sync'
+  'dsh-our-free-model-2.8.0'      = 'dsh-our-free-model'
+  'dsh-purge-1.1.92'              = 'dsh-purge'
+  'dsh-config-sync-plugin-0.3.56' = 'dsh-config-sync-plugin'
+  'dsh-config-sync-0.1.0'         = 'dsh-config-sync'
 }
 foreach ($dirName in $localPluginMap.Keys) {
   $pattern = 'link:[^"]*' + [regex]::Escape($dirName)
