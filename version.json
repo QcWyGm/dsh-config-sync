@@ -3,7 +3,7 @@
   "releasedAt": "2026-11-16",
   "notes": "0.3.56：插件改名并可发布到 npm。①包名/插件标识由 dsh-config-sync 改为 dsh-config-sync-plugin（npm 上 dsh-config-sync 是他人同名项目），package.json 的 name、cordis.patch.yml 的 insert name、index.js 的 PACKAGE_ID、client.js 的导出 id、apply.ps1 的安装目录映射五处一起改，插件安装目录随之变成 <客户端根>\\dsh-config-sync-plugin-<ver>；②运行时不改名的地方保持兼容：本机设置文件仍是 ~\\.dsh\\dsh-config-sync.json（换名不会丢 repoPath/sshKey），备份目录识别仍按 dsh-config-sync 前缀匹配，旧目录 dsh-config-sync-<ver> 继续能识别；③发布产物改为 releases\\dsh-config-sync-plugin-0.3.56.tgz，README 新增 npm / 市场 / tgz 三种安装说明。同步逻辑、面板交互一律不变。",
   "notesEn": "0.3.56: the plugin is renamed and published to npm. (1) The package / plugin identity moves from dsh-config-sync to dsh-config-sync-plugin (the npm name dsh-config-sync belongs to someone else's project); five spots change together — package.json name, the cordis.patch.yml insert name, index.js PACKAGE_ID, the client.js export id, and apply.ps1's install-folder map — so the plugin installs into <client root>\\dsh-config-sync-plugin-<ver>. (2) What stays for compatibility: the local settings file is still ~\\.dsh\\dsh-config-sync.json (renaming does not lose repoPath / sshKey), backup-detection still matches the dsh-config-sync prefix, and old dsh-config-sync-<ver> folders are still recognised. (3) Release artifact is now releases\\dsh-config-sync-plugin-0.3.56.tgz, and the README gained npm / marketplace / tgz install instructions. Sync logic and panel behaviour are unchanged.",
-  "sha256":"613bfd55c66316d2da8fd7ea575d5d44715b80821a020b01b7245667396c06eb",
+  "sha256":"ae6b1d5715ccc4bac590745350c074705da8751ab56159f77ba8eb3e95843986",
   "tgz": "releases/dsh-config-sync-plugin-0.3.56.tgz",
   "minClient": "0.2.2-rc.2"
 }

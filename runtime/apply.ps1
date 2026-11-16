@@ -1,4 +1,4 @@
-﻿<#
+<#
 DSH 配置同步 —— 应用脚本（把本仓库的配置还原到当前电脑）
 
 用法
@@ -480,6 +480,36 @@ function Sync-ConversationApply {
       foreach ($sid in @($w.sessionIds)) { if ($sid) { $projMap[[string]$sid] = $lid } }
     }
   }
+  # 登记表 sessionIds 可能滞后（会话是后来新建的、capture 只抄了当时的快照），
+  # 仅靠它会漏掉大量 projcache → 那些会话 cwd 仍指 A 机目录，点开历史会话跑偏。
+  # 兜底：直接按仓库 conversations\sessions 的 --ws-<工作区ID>--\<sessionId>\ 目录反推，
+  # sessionId 就是子目录名，工作区落点沿用 2b) 的 safeId 匹配。
+  if (Test-Path -LiteralPath $repoSessions) {
+    foreach ($wd in @(Get-ChildItem -LiteralPath $repoSessions -Directory -Force)) {
+      if ($wd.Name -notmatch '^--ws-(?<id>.+)--$') { continue }
+      $wid = $Matches['id']
+      $hit = $null
+      foreach ($k in @($idToLocal.Keys)) {
+        $safeId = ($k -replace '[^A-Za-z0-9_.-]', '_')
+        if ($safeId -eq $wid) { $hit = $k; break }
+      }
+      if (-not $hit) { continue }
+      if (-not (Test-SyncItemEnabled $Scope 'conversations' $hit)) { continue }
+      $lid = $idToLocal[$hit]
+      foreach ($sd in @(Get-ChildItem -LiteralPath $wd.FullName -Directory -Force)) {
+        $projMap[[string]$sd.Name] = $lid
+      }
+    }
+    # im 会话（--im-- 顶层）的 projcache 也要指到本机 .dsh\im，
+    # 否则这类会话的历史 cwd 仍写死 A 机用户目录，点开跑偏。
+    foreach ($wd in @(Get-ChildItem -LiteralPath $repoSessions -Directory -Force)) {
+      if ($wd.Name -eq '--im--') {
+        foreach ($sd in @(Get-ChildItem -LiteralPath $wd.FullName -Directory -Force)) {
+          $projMap[[string]$sd.Name] = $imLocal
+        }
+      }
+    }
+  }
   if ($cwdMap.Count -gt 0 -or $projMap.Count -gt 0) {
     if (-not (Test-Path -LiteralPath $cwdHelper)) {
       Warn ('缺少会话头部修正脚本 {0}，本次跳过会话还原（铺进去的会话 DSH 会判为损坏）' -f $cwdHelper)
@@ -789,7 +819,7 @@ if ($dropped.Count -gt 0) { Ok "已剔除 $($dropped.Count) 个实验性 bundle�
 
 $localPluginMap = [ordered]@{
   'dsh-our-free-model-2.8.0'      = 'dsh-our-free-model'
-  'dsh-purge-1.1.92'              = 'dsh-purge'
+  'dsh-purge-1.4.0'               = 'dsh-purge'
   'dsh-config-sync-plugin-0.3.56' = 'dsh-config-sync-plugin'
   'dsh-config-sync-0.1.0'         = 'dsh-config-sync'
 }
