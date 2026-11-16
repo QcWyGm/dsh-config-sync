@@ -976,9 +976,9 @@ async function inspect(config) {
   const remoteFiles = remoteProbe ? remoteProbe.files : null
   if (!appRoot) {
     advice.push(t(
-      '定位不到客户端根目录：插件不在 <客户端根> 下（如 D:\\DeepSeekHarness\\dsh-config-sync-plugin-0.3.59），'
+      '定位不到客户端根目录：插件不在 <客户端根> 下（如 D:\\DeepSeekHarness\\dsh-config-sync-plugin-0.3.60），'
       + '或客户端是打包版（resources\\app.asar）而这里没认出来 —— 三份同步脚本会因此生成不了',
-      'Cannot locate the client root: the plugin is not under <client root> (e.g. D:\\DeepSeekHarness\\dsh-config-sync-plugin-0.3.59), '
+      'Cannot locate the client root: the plugin is not under <client root> (e.g. D:\\DeepSeekHarness\\dsh-config-sync-plugin-0.3.60), '
       + 'or this is a packaged build (resources\\app.asar) that was not recognized — the three sync scripts cannot be generated.',
     ))
   }
@@ -3477,9 +3477,9 @@ async function handlePrepare(req, res, config) {
     if (!appRoot) {
       throw new Error(t(
         '定位不到客户端根目录（要能找到 resources\\app\\package.json 或 resources\\app.asar）：'
-        + '请确认插件装在 <客户端根> 下（例如 D:\\DeepSeekHarness\\dsh-config-sync-plugin-0.3.59），或在设置里填客户端根 appRoot',
+        + '请确认插件装在 <客户端根> 下（例如 D:\\DeepSeekHarness\\dsh-config-sync-plugin-0.3.60），或在设置里填客户端根 appRoot',
         'Cannot locate the client root (needs resources\\app\\package.json or resources\\app.asar): '
-        + 'make sure the plugin is installed under <client root> (e.g. D:\\DeepSeekHarness\\dsh-config-sync-plugin-0.3.59), or set appRoot in the settings',
+        + 'make sure the plugin is installed under <client root> (e.g. D:\\DeepSeekHarness\\dsh-config-sync-plugin-0.3.60), or set appRoot in the settings',
       ))
     }
     const state = {...await repoState(repo), message}

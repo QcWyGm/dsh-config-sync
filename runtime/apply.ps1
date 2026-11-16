@@ -112,6 +112,21 @@ function Expand-AppRootTree([string]$dir, [string]$rootFwd) {
 
 function Sync-WorkspaceApply {
   $wsDir = Join-Path $RepoRoot 'workspace'
+  # 登记表 sessionIds 常常滞后于实际会话目录（会话是后来新建的、capture 只抄了当时的快照）。
+  # DSH 归属权威就是这里的 sessionIds 成员：没登记的会话即便 cwd 改对也不会挂到工作区。
+  # 按 conversations\sessions\--ws-<workspaceId>--\<sessionId>\ 反推补齐，与会话还原段同源。
+  $sidByWsDir = @{}
+  $convSessionsDir = Join-Path $RepoRoot 'conversations\sessions'
+  if (Test-Path -LiteralPath $convSessionsDir) {
+    foreach ($wd in @(Get-ChildItem -LiteralPath $convSessionsDir -Directory -Force)) {
+      if ($wd.Name -notmatch '^--ws-(?<id>.+)--$') { continue }
+      $wid = $Matches['id']
+      if (-not $sidByWsDir.ContainsKey($wid)) { $sidByWsDir[$wid] = @() }
+      foreach ($sd in @(Get-ChildItem -LiteralPath $wd.FullName -Directory -Force)) {
+        $sidByWsDir[$wid] += [string]$sd.Name
+      }
+    }
+  }
   $manifestPath = Join-Path $wsDir 'workspace-registry.json'
   if (-not (Test-Path -LiteralPath $manifestPath)) {
     Warn ('仓库里没有 {0}，跳过工作区还原（仓库里没有工作区资料）' -f $manifestPath)
@@ -258,6 +273,11 @@ function Sync-WorkspaceApply {
   foreach ($e in $plan) {
     # 运行时字段取「仓库 + 本机」并集：既把 A 机历史会话带过来，也不丢 B 机自建会话
     $repoSess = @($e.SessionIds)
+    # 补进按会话目录反推出来的 sid（登记表快照里没有的那些），让 DSH 把这些历史会话
+    # 显式登记到本工作区；会话组未勾选同步时不补，尊重同步范围选择。
+    if ($sidByWsDir.ContainsKey($e.Id) -and (Test-SyncItemEnabled $Scope 'conversations' $e.Id)) {
+      $repoSess += @($sidByWsDir[$e.Id])
+    }
     $repoArch = @($e.ArchivedSessionIds)
     $repoPin  = @($e.PinnedSessionIds)
     $created = $e.CreatedAt; $updated = $e.UpdatedAt
@@ -820,6 +840,7 @@ if ($dropped.Count -gt 0) { Ok "已剔除 $($dropped.Count) 个实验性 bundle�
 $localPluginMap = [ordered]@{
   'dsh-our-free-model-2.8.0'      = 'dsh-our-free-model'
   'dsh-purge-1.4.0'               = 'dsh-purge'
+  'dsh-config-sync-plugin-0.3.60' = 'dsh-config-sync-plugin'
   'dsh-config-sync-plugin-0.3.59' = 'dsh-config-sync-plugin'
   'dsh-config-sync-plugin-0.3.58' = 'dsh-config-sync-plugin'
   'dsh-config-sync-plugin-0.3.57' = 'dsh-config-sync-plugin'
@@ -923,6 +944,7 @@ $overwriteItems = New-Object System.Collections.ArrayList
 if (Test-SyncGroupEnabled $Scope 'settings') {
 foreach ($m in $settingsMap) {
   if (-not (Test-SyncItemEnabled $Scope 'settings' ($m.Repo -replace '^settings\\', ''))) { continue }
+  if ($m.Repo -eq 'settings\dsh-workspaces.json' -and (Test-SyncGroupEnabled $Scope 'workspace')) { continue } # workspace registry merged by Sync-WorkspaceApply; do not overwrite with stale repo snapshot
   $srcRepo = Join-Path $RepoRoot $m.Repo
   if (-not (Test-Path -LiteralPath $srcRepo)) { Warn ("仓库里没有 " + $m.Repo + "，跳过"); continue }
   $txt = [IO.File]::ReadAllText($srcRepo)
