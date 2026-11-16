@@ -10,7 +10,7 @@
   },
   "plugins": [
     {
-      "name": "dsh-config-sync",
+      "name": "dsh-config-sync-plugin",
       "title": {
         "en": "Config Sync",
         "zh": "配置同步"
@@ -26,6 +26,15 @@
         "url": "https://github.com/QcWyGm/dsh-config-sync"
       },
       "versions": [
+        {
+          "version": "0.3.56",
+          "publishTimestamp": 1794828380,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/QcWyGm/dsh-config-sync",
+            "commit": "74dafb3675fded2e41935f32a763facae8718723"
+          }
+        },
         {
           "version": "0.3.55",
           "publishTimestamp": 1794745575,
