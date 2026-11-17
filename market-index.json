@@ -8,7 +8,11 @@
                         "en":  "DSH plugins by QcWyGm.",
                         "zh":  "QcWyGm 的 DSH 插件。"
                     },
-    "plugins":  [
+    "plugins":    {
+    "version": "0.3.61",
+    "publishTimestamp": 1794918180,
+    "commit": "TODO_COMMIT_0361"
+  },
                     {
                         "name":  "dsh-config-sync-plugin",
                         "title":  {
@@ -25,9 +29,13 @@
                         "repository":  {
                                            "url":  "https://github.com/QcWyGm/dsh-config-sync-plugin"
                                        },
-                        "versions":  [
+                        "versions":    {
+    "version": "0.3.61",
+    "publishTimestamp": 1794918180,
+    "commit": "TODO_COMMIT_0361"
+  },
                                          {
-                                             "version":  "0.3.60",
+                                             "version":  "0.3.61",
                                              "publishTimestamp":  1794852193,
                                              "source":  {
                                                  "type":  "git",

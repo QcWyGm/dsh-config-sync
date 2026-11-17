@@ -1,9 +1,9 @@
-{
-    "version":  "0.3.60",
+﻿{
+    "sha256":"192615D06E97AD79A402C7F32FCD573D1A7EA2D48C8CC046D394ABE31B79CECB",
+    "version":  "0.3.61",
     "releasedAt":  "2026-11-17",
-    "notes":  "0.3.60：修复 B 机拉取后会话没有归入对应工作区。根因是两个叠加问题：(1) apply.ps1 的 Sync-WorkspaceApply 合并且只采用 workspace-registry.json 快照里的 sessionIds，没有把 conversations/sessions/--ws-\u003cid\u003e--/\u003csid\u003e/ 目录反推出的会话 id 补进各工作区的 sessionIds；(2) settings 段又把仓库里 settings/dsh-workspaces.json 旧快照整份写回 storages/workspace.json，把刚补全的 sessionIds 打回原样。本版在合并阶段按会话目录反推把 sid 并入 sessionIds，并让工作区登记表由 Sync-WorkspaceApply 独家负责、不再被旧快照覆盖。隔离环境实测 sessionIds 由 16 增至 54（覆盖 54/56，剩 2 个属于 A 机注册表里不存在的幽灵工作区，属正常例外），会话首帧 cwd 修正 46、projcache 修正 46、bundle 24 项全可解析。0.3.59 及以前的功能（apply.ps1 UTF8-BOM、仓库改名、projcache 目录反推、dsh-purge 1.4.0 对齐）全部保留。产物 releases\\dsh-config-sync-plugin-0.3.60.tgz。",
-    "notesEn":  "0.3.60: fix sessions not being filed under their workspaces on the B machine after pull. Two stacked causes: (1) Sync-WorkspaceApply merged only the sessionIds from the workspace-registry.json snapshot and never added session ids inferred from conversations/sessions/--ws-\u003cid\u003e--/\u003csid\u003e/ folders into each workspace sessionIds; (2) the settings block then overwrote storages/workspace.json wholesale with the stale settings/dsh-workspaces.json snapshot, reverting the just-augmented sessionIds. This build infers sids from session folders into sessionIds during merge, and makes the workspace registry owned solely by Sync-WorkspaceApply so the stale snapshot no longer clobbers it. Isolated replay: sessionIds 16 -\u003e 54 (54/56 coverage; the 2 remaining belong to a ghost workspace absent from the A-machine registry, an expected exception), 46 session-header cwd fixes, 46 projcache fixes, all 24 bundles resolvable. All 0.3.59-and-earlier features retained (apply.ps1 UTF8-BOM, repo rename, projcache folder inference, dsh-purge 1.4.0 alignment). Artifact releases\\dsh-config-sync-plugin-0.3.60.tgz.",
-    "sha256":  "131375690e4c188ecd2e1ccb10cfacc9bfcecbbace9142faa7a282406ca1c1dc",
-    "tgz":  "releases/dsh-config-sync-plugin-0.3.60.tgz",
-    "minClient":  "0.2.2-rc.2"
+    "notesEn":  "0.3.61: Fix context overflow after B-machine sync. Root cause: sync restores projcache carrying A-machine token measurement cache (surfaceTokens \u003e contextWindow), causing B-machine compaction to fail (missing model config / no contextWindow) -\u003e throws TargetPressureConfigError, only warns, no compaction -\u003e full surface sent to provider -\u003e CONTEXT_WINDOW_EXCEEDED. Fix: apply.ps1 skips session_projcache sync, letting DSH rebuild from session log on boot (using B-machine actual model config). projcache is a rebuildable coldSnapshot; dsh-session-manager Step 2 re-folds on boot.",
+    "tgz":  "releases/dsh-config-sync-plugin-0.3.61.tgz",
+    "minClient":  "0.2.2-rc.2",
+    "notes":  "0.3.61: ?? B ????????????:???? projcache ?? A ? token ????(surfaceTokens \u003e contextWindow),?? B ? compaction ????(?????/? contextWindow) -\u003e ? TargetPressureConfigError ? warn ??? -\u003e ?? surface ?? provider -\u003e CONTEXT_WINDOW_EXCEEDED???:apply.ps1 ?? session_projcache ??,? DSH ???? session log ??(?? B ???????)?projcache ????? coldSnapshot,dsh-session-manager ?? Step 2 ?????"
 }

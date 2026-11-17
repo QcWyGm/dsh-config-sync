@@ -544,7 +544,10 @@ function Sync-ConversationApply {
   $blocks = @(
     @{ Repo = 'sessions';                     Dst = (Join-Path $DshHome 'sessions');                                         Remap = $true  },
     @{ Repo = 'attachments';                  Dst = (Join-Path $DshHome 'attachments');                                      Remap = $false },
-    @{ Repo = 'session_projcache';            Dst = (Join-Path $DshHome 'storages\session_projcache\sessions');             Remap = $false },
+    # session_projcache 是可重建的缓存（coldSnapshot）；
+    # 同步旧 projcache 会带来 A 机的 token 计量状态（如超长 surfaceTokens），
+    # 导致 B 机 compaction 无法触发、直接把全量 surface 发给 provider 报 context overflow。
+    # 这里跳过同步，让 DSH 启动时从 session log 重建（基于 B 机实际模型配置）。
     @{ Repo = 'vision_router_session_policy'; Dst = (Join-Path $DshHome 'storages\vision_router_session_policy\policies');  Remap = $false }
   )
   $nAdd = 0; $nBk = 0
@@ -840,7 +843,7 @@ if ($dropped.Count -gt 0) { Ok "已剔除 $($dropped.Count) 个实验性 bundle�
 $localPluginMap = [ordered]@{
   'dsh-our-free-model-2.8.0'      = 'dsh-our-free-model'
   'dsh-purge-1.4.0'               = 'dsh-purge'
-  'dsh-config-sync-plugin-0.3.60' = 'dsh-config-sync-plugin'
+  'dsh-config-sync-plugin-0.3.61' = 'dsh-config-sync-plugin'
   'dsh-config-sync-plugin-0.3.59' = 'dsh-config-sync-plugin'
   'dsh-config-sync-plugin-0.3.58' = 'dsh-config-sync-plugin'
   'dsh-config-sync-plugin-0.3.57' = 'dsh-config-sync-plugin'
