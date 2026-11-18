@@ -565,6 +565,23 @@ pwsh -File sync.ps1 push -ScanHistory
 
 ## 实测记录
 
+### 2026-11-18：隔离环境 B 机全新拉取回归（工作区 / 会话归属 / 上下文超长）
+
+用干净的隔离 B 机（approot / dshome / wshome + 内置 node 执行器）模拟「全新机器首次拉取」：先清掉 `sessions`、`storages/workspace.json`、`session_projcache`，再用配置仓库最新 `apply.ps1` 跑完整还原。结果逐项核对通过：
+
+| 验证项 | 结果 |
+|---|---|
+| apply 执行 | `EXIT=0`，73 秒（拉取提速生效，之前 340s） |
+| 工作区挂载 | 5 个工作区全部还原，path 均指向本机 `_iso_b\approot\*`，登记表按 ID 合并 ✅ |
+| 会话归属 | 工作区登记表 sessionIds 共 71 个；sessions 目录反推 73 个，只差 2 个（幽灵工作区 + forward-confirm 特殊会话，正常例外）✅ |
+| projcache | B 机 **不存在**（FILES=0）——仓库里明明有超窗会话的 projcache，但未同步过来 ✅ |
+| 会话 cwd | 64 个会话，63 个首帧 cwd 正确；唯一 1 个是 forward-confirm passthrough（正常例外）✅ |
+| bundle | 24 项全部可解析；3 个 link 插件显示「本地插件已存在」，不再反复解压 ✅ |
+
+**上下文超长闭环**：之前因 A 机 token 计量缓存超窗的 3 个会话，现在都正确归到对应工作区——`session-58db748a`（1,553,981 tokens）→ DSH破甲、`session-bbf3e5c9`（1,080,398）→ SquadLink、`session-a1061521`（1,001,058）→ dsh-config-sync。同时 B 机 projcache 为空，DSH 启动时会从会话日志按 B 机实际模型配置重建 token 计量并触发 compaction，不会再把 A 机超窗缓存直接怼给 provider。
+
+非故障警告（日志已确认无害）：`--D-DeepSeekHarness-comfyUI--` / `--dsh-im-forward-confirm--` 找不到对应工作区（特殊会话目录）；`-SkipInstall` 跳过 21 个 registry 插件（隔离环境离线，真机有网时不加即补齐）；`dsh-config-sync-0.1.0` / `extra/manifest.json` 无归档正常跳过；`dsh-config-sync` 槽位有本机多出的残留文件（加 `-PruneWorkspace` 才删）。
+
 ### 2026-11-18：发版 0.3.64（还原备份修复 + 失败原因集中展示 + 自动关窗）
 
 - **还原备份 bug 修复**：`apply.ps1` 备份插件设置时只留文件名（如 `workspace.json`），`restore.ps1` 还原时全堆到 `~\.dsh` 根目录，`storages\workspace.json`、`our-free-model\settings.json`、`redteam\preset-declare.json` 等回不到原位。现在备份时写一份 `__backup_manifest.json` 记录「备份文件名 → 相对 DshHome 的原路径」，还原按清单写回原位；无清单的老快照退化为写回根目录并明确告警。隔离回归：profile 5 文件 + settings 3 文件原位还原、根目录零残留、时点回退移走新增文件并写 rollback 清单，全部通过。

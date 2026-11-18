@@ -589,6 +589,23 @@ The log shows which path ran: `文件比较（快筛）：比对 N 个，深哈�
 
 ## Test log (2026-11-11, isolated environment)
 
+### 2026-11-18: isolated B-machine fresh-pull regression (workspaces / session membership / context overflow)
+
+A clean isolated B machine (approot / dshome / wshome + bundled node runner) simulated a "fresh machine first pull": `sessions`, `storages/workspace.json` and `session_projcache` were wiped first, then the config repo's latest `apply.ps1` ran a full restore. Every check passed:
+
+| Check | Result |
+|---|---|
+| apply run | `EXIT=0`, 73 s (pull speedup active; was 340 s) |
+| Workspace mount | all 5 workspaces restored, paths all point at this machine's `_iso_b\approot\*`, registry merged by ID ✅ |
+| Session membership | workspace registry holds 71 sessionIds; sessions directories yield 73 — only 2 missing (ghost workspace + forward-confirm special session, expected exceptions) ✅ |
+| projcache | absent on B (**FILES=0**) — the repo does carry the over-window sessions' projcache, but it is not synced ✅ |
+| Session cwd | 64 sessions, 63 first-frame cwd correct; the single exception is the forward-confirm passthrough session ✅ |
+| bundle | all 24 entries resolve; the 3 link plugins report "already present locally" and are not re-extracted ✅ |
+
+**Context-overflow loop closed**: the three sessions that used to blow the window with A-machine token metering are now correctly filed — `session-58db748a` (1,553,981 tokens) -> DSH破甲, `session-bbf3e5c9` (1,080,398) -> SquadLink, `session-a1061521` (1,001,058) -> dsh-config-sync. With no projcache on B, DSH rebuilds token metering from the session logs using B's actual model config on startup and triggers compaction, instead of pushing A's stale over-window cache straight to the provider.
+
+Benign warnings (confirmed in the log): `--D-DeepSeekHarness-comfyUI--` / `--dsh-im-forward-confirm--` map to no workspace (special session dirs); `-SkipInstall` skipped 21 registry plugins (isolated offline run — without the flag on a networked machine they install); `dsh-config-sync-0.1.0` / `extra/manifest.json` have no archive/definition and are skipped; the `dsh-config-sync` slot has extra local leftovers (removed only with `-PruneWorkspace`).
+
 ### 2026-11-18: release 0.3.64 (backup restore fix + failure summary + auto-close)
 
 - **Backup restore bug fixed**: `apply.ps1` backed up plugin settings by filename only (e.g. `workspace.json`), and `restore.ps1` dumped them all into `~\.dsh` root, so `storages\workspace.json`, `our-free-model\settings.json`, `redteam\preset-declare.json` never returned to their original directories. Backup now writes `__backup_manifest.json` mapping backup filename -> original path relative to DshHome, and restore writes each file back in place; old snapshots without the manifest fall back to root with a clear warning. Isolated regression: 5 profile files + 3 settings restored in place, zero stray root files, point-in-time rollback moved new files and wrote its manifest — all pass.
