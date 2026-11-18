@@ -193,6 +193,35 @@ function Show-NoticesSummary {
   Write-Host '--------------------------------------------------------' -ForegroundColor Yellow
 }
 
+# 失败原因集中展示：从本次日志里挑出 Die 的红字 [X] 行（含紧随的多行详情）+ 相关警告，
+# 统一打在窗口末尾，用户不必再从几十行进度里翻失败点。只在失败时调用。
+function Show-FailureSummary {
+  if (-not (Test-Path -LiteralPath $LogFile)) { return }
+  $lines = @()
+  try { $lines = @(Get-Content -LiteralPath $LogFile -Encoding utf8) } catch { return }
+  if ($lines.Count -eq 0) { return }
+  $errIdx = @()
+  for ($i = 0; $i -lt $lines.Count; $i++) {
+    if ($lines[$i] -match '\[X\]' -or $lines[$i] -match '执行体调用异常|ParserError|终止错误|fatal:|NativeCommandError|未正常结束|没正常跑完|badTimezone') { $errIdx += $i }
+  }
+  $warns = @($lines | Where-Object { $_ -match '\[!\]' })
+  if ($errIdx.Count -eq 0 -and $warns.Count -eq 0) { return }
+  Write-Host ''
+  Write-Host '================ 失败原因集中展示 ================' -ForegroundColor Red
+  $printed = New-Object 'System.Collections.Generic.HashSet[int]'
+  foreach ($i in ($errIdx | Select-Object -First 6)) {
+    for ($j = $i; $j -lt [Math]::Min($i + 6, $lines.Count); $j++) {
+      if ($printed.Add($j)) { Write-Host ('  ' + $lines[$j].TrimEnd()) -ForegroundColor Red }
+    }
+  }
+  if ($warns.Count -gt 0) {
+    Write-Host ('  --- 相关警告（前 8 条）---') -ForegroundColor Yellow
+    foreach ($w in ($warns | Select-Object -First 8)) { Write-Host ('  ' + $w.TrimEnd()) -ForegroundColor Yellow }
+  }
+  Write-Host ('  完整日志：{0}' -f $LogFile)
+  Write-Host '==================================================' -ForegroundColor Red
+}
+
 function Finish([int]$code, [string]$note) {
   Log ("结束：{0}（退出码 {1}）" -f $note, $code)
   Log ("日志：{0}" -f $LogFile)
@@ -205,26 +234,21 @@ function Finish([int]$code, [string]$note) {
     }
   } catch { }
 
-  # 推送 / 拉取 / 插件更新：**不自动关窗**，把结果留在屏幕上让用户自己关。
-  # 为什么敢一直挂着：客户端是在这之前的 RestartClient 里用 explorer 代启的，跟本窗口没有父子/作业关系，
-  # 所以窗口留多久、还是被点 × 直接结束，都不会把客户端带走。
-  # 只有 relaunch（纯重启，窗口里没有可看的结果）仍旧停 3 秒自动关。
+  # 结果展示后窗口随进程自动关闭：不再要求「按任意键」（远程桌面/无焦点时 ReadKey 会一直卡住）。
+  # 用户可直接点右上角 × 提前关闭；客户端由 explorer 代启，与本窗口无父子关系，关窗不会带走它。
   if ($Mode -eq 'pull' -or $Mode -eq 'push' -or $Mode -eq 'update' -or $Mode -eq 'restore') {
     $title = if ($Mode -eq 'update') { '插件更新已完成' } elseif ($Mode -eq 'restore') { '还原已完成' } else { '同步已完成' }
     try {
       Show-NoticesSummary
+      if ($code -ne 0) { Show-FailureSummary }
       Write-Host ''
       Write-Host ("================ {0} ================" -f $title)
-      Write-Host '  这个窗口不会自动关闭：看完按任意键，或点右上角 × 关闭。'
-      Write-Host '  客户端已在后台由 explorer 拉起，关掉这个窗口不会影响它。'
+      Write-Host '  窗口将在 6 分钟后自动关闭；也可直接点右上角 × 关闭（客户端在后台运行，不受影响）。'
+      if ($code -ne 0) { Write-Host '  失败原因已集中在上面「失败原因集中展示」一段，不必再翻日志。' -ForegroundColor Red }
       Write-Host '==========================================='
-      $null = $Host.UI.RawUI.ReadKey('NoEcho,IncludeKeyDown')
-    } catch {
-      # 不是真控制台（被重定向/无窗口）时 ReadKey 会抛，退化成长时间挂起而不是立刻消失
-      try { Start-Sleep -Seconds 3600 } catch { }
-    }
+    } catch { }
+    try { Start-Sleep -Seconds 360 } catch { }
   } else {
-    # 窗口跟着进程一起关，停 3 秒让用户看清成功/失败与日志路径
     try { Start-Sleep -Seconds 3 } catch { }
   }
   exit $code

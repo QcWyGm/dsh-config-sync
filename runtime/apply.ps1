@@ -744,13 +744,24 @@ foreach ($f in @('AGENTS.md', 'prompt-inject.md')) {
   $src = Join-Path $DshHome $f
   if (Test-Path -LiteralPath $src) { Copy-Item -LiteralPath $src -Destination (Join-Path $BackupDir $f) -Force; $backedUp++ }
 }
+$settingsBackupManifest = [ordered]@{}
 foreach ($m in $settingsMap) {
   if (Test-Path -LiteralPath $m.Src) {
     $bc = Join-Path $BackupDir 'settings'
     if (-not (Test-Path -LiteralPath $bc)) { New-Item -ItemType Directory -Path $bc -Force | Out-Null }
-    Copy-Item -LiteralPath $m.Src -Destination (Join-Path $bc (Split-Path -Leaf $m.Src)) -Force
+    $leaf = Split-Path -Leaf $m.Src
+    Copy-Item -LiteralPath $m.Src -Destination (Join-Path $bc $leaf) -Force
+    # 记下「备份文件名 → 相对 DshHome 的原路径」。旧版只留文件名，还原时全堆到 DshHome 根
+    # （storages\workspace.json 变根 workspace.json），这里把原位记进清单，还原按它写回。
+    $settingsBackupManifest[$leaf] = $m.Src.Substring($DshHome.Length).TrimStart([char]92, [char]47)
     $backedUp++
   }
+}
+if ($settingsBackupManifest.Count -gt 0) {
+  try {
+    $mfPath = Join-Path (Join-Path $BackupDir 'settings') '__backup_manifest.json'
+    [IO.File]::WriteAllText($mfPath, ($settingsBackupManifest | ConvertTo-Json -Depth 3), (New-Object Text.UTF8Encoding($false)))
+  } catch { Warn ('写 settings 备份清单失败（还原时只能按旧规则写回根）：' + $_.Exception.Message) }
 }
 if ($backedUp -gt 0) {
   Ok "已备份 $backedUp 个文件到 $BackupDir"
@@ -845,6 +856,7 @@ if ($dropped.Count -gt 0) { Ok "已剔除 $($dropped.Count) 个实验性 bundle�
 $localPluginMap = [ordered]@{
   'dsh-our-free-model-2.8.0'      = 'dsh-our-free-model'
   'dsh-purge-1.4.0'               = 'dsh-purge'
+  'dsh-config-sync-plugin-0.3.64' = 'dsh-config-sync-plugin'
   'dsh-config-sync-plugin-0.3.63' = 'dsh-config-sync-plugin'
   'dsh-config-sync-plugin-0.3.62' = 'dsh-config-sync-plugin'
   'dsh-config-sync-plugin-0.3.61' = 'dsh-config-sync-plugin'

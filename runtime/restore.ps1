@@ -300,14 +300,29 @@ if ($mode -eq 'git') {
 
   $bkSettings = Join-Path $BackupDir 'settings'
   if (Test-Path -LiteralPath $bkSettings) {
-    if ($DryRun) { Say "  将写回 settings\ 下的插件设置文件" }
+    # 0.3.64 修复：apply 备份时把「备份文件名 → 相对 DshHome 的原路径」写进了清单。
+    # 旧版只留文件名、还原全堆到 DshHome 根（storages\workspace.json 变根 workspace.json），
+    # 现按清单写回原目录；没有清单的老快照退化为写回根（至少文件还在），并明确告警。
+    $bkManifest = $null
+    $mfPath = Join-Path $bkSettings '__backup_manifest.json'
+    if (Test-Path -LiteralPath $mfPath) {
+      try { $bkManifest = Get-Content -LiteralPath $mfPath -Raw -Encoding utf8 | ConvertFrom-Json } catch { $bkManifest = $null }
+    } else {
+      Warn "这份快照没有 settings 备份清单（老版本备份）：设置文件只能写回 $DshHome 根目录，可能要手动挪回原位"
+    }
+    if ($DryRun) { Say "  将写回 settings\ 下的插件设置文件到各自原位" }
     else {
       $cnt = 0
-      Get-ChildItem -LiteralPath $bkSettings -File -Force | ForEach-Object {
-        Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $DshHome $_.Name) -Force
+      Get-ChildItem -LiteralPath $bkSettings -File -Force | Where-Object { $_.Name -ne '__backup_manifest.json' } | ForEach-Object {
+        $prop = if ($bkManifest) { $bkManifest.PSObject.Properties[$_.Name] } else { $null }
+        $rel = if ($prop) { [string]$prop.Value } else { $_.Name }
+        $dest = Join-Path $DshHome $rel
+        $destDir = Split-Path -Parent $dest
+        if ($destDir -and -not (Test-Path -LiteralPath $destDir)) { New-Item -ItemType Directory -Path $destDir -Force | Out-Null }
+        Copy-Item -LiteralPath $_.FullName -Destination $dest -Force
         $cnt++
       }
-      Ok "已写回 settings 下 $cnt 个插件设置文件"
+      Ok "已写回 settings 下 $cnt 个插件设置文件到各自原位"
     }
   }
 }

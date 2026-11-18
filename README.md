@@ -15,7 +15,7 @@ DSH 插件：左侧栏多一行「配置同步」，点开是整页体检面板�
 
 | 方式 | 命令 / 入口 | 说明 |
 |---|---|---|
-| npm | `npm i dsh-config-sync-plugin` | 适合把它当依赖管理，或在 profile 的 `package.json` 里写 `"dsh-config-sync-plugin": "^0.3.63"` 后 `pnpm i`；包名与 `cordis.patch.yml` 里注册的名字、插件目录 `dsh-config-sync-plugin-<ver>` 一致 |
+| npm | `npm i dsh-config-sync-plugin` | 适合把它当依赖管理，或在 profile 的 `package.json` 里写 `"dsh-config-sync-plugin": "^0.3.64"` 后 `pnpm i`；包名与 `cordis.patch.yml` 里注册的名字、插件目录 `dsh-config-sync-plugin-<ver>` 一致 |
 | 插件市场 | 客户端「插件市场 → 发现」搜「配置同步」 | 走 `market-index.json` 登记的 git 提交，版本与 README 对齐 |
 | 离线 tgz | `releases\dsh-config-sync-plugin-<ver>.tgz` | GitHub Release 附件，适合内网机器；面板「更新」按钮下载的也是它 |
 
@@ -564,6 +564,13 @@ pwsh -File sync.ps1 push -ScanHistory
 - `pwsh -File tools\pack-plugin.ps1`：打包并把 sha256 回填 `version.json`。**必须用 PowerShell 7**（脚本是无 BOM UTF-8，5.1 按 GBK 读会把中文认错）。
 
 ## 实测记录
+
+### 2026-11-18：发版 0.3.64（还原备份修复 + 失败原因集中展示 + 自动关窗）
+
+- **还原备份 bug 修复**：`apply.ps1` 备份插件设置时只留文件名（如 `workspace.json`），`restore.ps1` 还原时全堆到 `~\.dsh` 根目录，`storages\workspace.json`、`our-free-model\settings.json`、`redteam\preset-declare.json` 等回不到原位。现在备份时写一份 `__backup_manifest.json` 记录「备份文件名 → 相对 DshHome 的原路径」，还原按清单写回原位；无清单的老快照退化为写回根目录并明确告警。隔离回归：profile 5 文件 + settings 3 文件原位还原、根目录零残留、时点回退移走新增文件并写 rollback 清单，全部通过。
+- **失败原因集中展示**：推送/拉取失败时，`post-exit.ps1` 收尾新增 `Show-FailureSummary`，从执行日志抽取 `[X]` 错误行及后续详情、最近的 `[!]` 警告，红/黄集中打印在末尾，不用再翻日志找原因。
+- **自动关窗**：推送/拉取/更新/还原脚本结束后，展示结果 6 分钟后自动退出关窗，不再要求「按任意键」（远程桌面/无焦点时 `ReadKey` 会一直卡住）；也可直接点右上角 × 提前关闭。
+- **边界说明**：`apply` 拉取前备份的 workspace/conversations/skills/presets/plugin-data 属数据目录，不纳入「配置还原」回退范围（有各自的同步/会话路径，强塞会引入路径映射与大目录遍历开销）。
 
 ### 2026-11-18：推送提速发版 0.3.63（Get-RelPath 快 10 倍）
 

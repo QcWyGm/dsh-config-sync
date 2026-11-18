@@ -19,7 +19,7 @@ The package name is **`dsh-config-sync-plugin`** (the `dsh-config-sync` name on 
 
 | Way | Command / entry | Notes |
 |---|---|---|
-| npm | `npm i dsh-config-sync-plugin` | Use it as a dependency, or add `"dsh-config-sync-plugin": "^0.3.63"` to the profile's `package.json` and run `pnpm i`. The name matches the `cordis.patch.yml` insert name and the install folder `dsh-config-sync-plugin-<ver>` |
+| npm | `npm i dsh-config-sync-plugin` | Use it as a dependency, or add `"dsh-config-sync-plugin": "^0.3.64"` to the profile's `package.json` and run `pnpm i`. The name matches the `cordis.patch.yml` insert name and the install folder `dsh-config-sync-plugin-<ver>` |
 | Marketplace | client → Plugins → Discover → “Config Sync” | Installs from the git commit registered in `market-index.json` |
 | Offline tgz | `releases\dsh-config-sync-plugin-<ver>.tgz` | GitHub Release asset for air-gapped machines; the panel's Update button downloads the same file |
 
@@ -588,6 +588,13 @@ The log shows which path ran: `文件比较（快筛）：比对 N 个，深哈�
 - `pwsh -File tools\pack-plugin.ps1`: packs the tgz and writes the sha256 back into `version.json`. **PowerShell 7 is required** (the script is UTF-8 without a BOM, and 5.1 reads the Chinese text as GBK and fails).
 
 ## Test log (2026-11-11, isolated environment)
+
+### 2026-11-18: release 0.3.64 (backup restore fix + failure summary + auto-close)
+
+- **Backup restore bug fixed**: `apply.ps1` backed up plugin settings by filename only (e.g. `workspace.json`), and `restore.ps1` dumped them all into `~\.dsh` root, so `storages\workspace.json`, `our-free-model\settings.json`, `redteam\preset-declare.json` never returned to their original directories. Backup now writes `__backup_manifest.json` mapping backup filename -> original path relative to DshHome, and restore writes each file back in place; old snapshots without the manifest fall back to root with a clear warning. Isolated regression: 5 profile files + 3 settings restored in place, zero stray root files, point-in-time rollback moved new files and wrote its manifest — all pass.
+- **Failure summary**: on push/pull failure, `post-exit.ps1` now adds `Show-FailureSummary`, extracting `[X]` error lines with detail and recent `[!]` warnings from the run log and printing them together at the end — no more digging through logs.
+- **Auto-close**: after push/pull/update/restore, the window closes automatically 6 minutes after showing results; no more "press any key" (which hangs under remote desktop / unfocused windows). You can also click the × button to close early.
+- **Boundary**: workspace/conversations/skills/presets/plugin-data backed up before apply are data directories, not part of "config restore" rollback (they have their own sync/session paths; folding them in would add path mapping and heavy directory walking).
 
 ### 2026-11-18: push speed release 0.3.63 (Get-RelPath ~10x faster)
 

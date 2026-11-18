@@ -1,9 +1,9 @@
 {
-    "sha256":"825e288e4fe7255063641f2dd2fc0dc7da8256fc58d132bae886bbef976fc0c4",
-    "version":  "0.3.63",
-    "releasedAt":  "2026-11-18",
-    "notesEn":  "0.3.63: Speed up the shared Get-RelPath hot path (~10x) used by both push and pull. dsh-sync-common.ps1 Get-RelPath used two -split + Where-Object per file; on a 49k-file workspace push comparison alone cost 11.7s. Now a StartsWith + Substring fast path (with fallback to the original segment-count logic for case / 8.3 short-path mismatches). 49,138 files compared with 0 output differences; microbench 5.08s -\u003e 0.51s (9.9x). All three dsh-sync-common.ps1 copies (source / config repo / plugin runtime) updated. 0.3.62 pull speedups and 0.3.61 projcache skip preserved.",
-    "tgz":  "releases/dsh-config-sync-plugin-0.3.63.tgz",
-    "minClient":  "0.2.2-rc.2",
-    "notes":  "0.3.63: 推送和拉取公共热路径 Get-RelPath 提速约 10 倍。dsh-sync-common.ps1 的 Get-RelPath 原来每个文件做两次 -split + Where-Object，5 万文件工作区下推送比对单独占 11.7s；改为 StartsWith + Substring 快路径（大小写/8.3 短路径不一致时回退原逻辑）。49138 文件全量比对与老版输出 0 差异，微基准 5.08s → 0.51s（9.9 倍）。三处 dsh-sync-common.ps1（源码/配置仓库/插件副本）同步。0.3.62 拉取提速与 0.3.61 跳过 projcache 保持不变。"
+    "sha256":"c29cba7b14690bc026a1938b657b90081ba0bf86f2e34d6ec672236bb54735fb",
+    "version": "0.3.64",
+    "releasedAt": "2026-11-18",
+    "notesEn": "0.3.64: Backup restore fix — apply.ps1 now writes __backup_manifest.json so settings files restore to their original paths (storages\\workspace.json etc.) instead of piling into the DshHome root; old snapshots without the manifest fall back to root with a warning. Failure summary — post-exit prints [X] errors and recent warnings together at the end on push/pull failure. Auto-close — push/pull/update/restore windows now close automatically 6 minutes after showing results (no more press-any-key, which hangs without focus); click × to close early. Boundary: data dirs (workspace/conversations/skills/presets/plugin-data) are not part of config restore.",
+    "tgz": "releases/dsh-config-sync-plugin-0.3.64.tgz",
+    "minClient": "0.2.2-rc.2",
+    "notes": "0.3.64: 还原备份修复——apply.ps1 备份设置文件时写 __backup_manifest.json，restore.ps1 按清单把 storages\\workspace.json 等写回原位（不再堆到 DshHome 根）；无清单老快照退化写回根并告警。失败原因集中展示——推送/拉取失败时 post-exit 末尾集中打印 [X] 错误与最近的 [!] 警告。自动关窗——推送/拉取/更新/还原展示结果 6 分钟后自动退出关窗，不再要求按任意键（无焦点时会卡住），可点 × 提前关。边界：数据目录（workspace/conversations/skills/presets/plugin-data）不纳入配置还原。"
 }
