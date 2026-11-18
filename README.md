@@ -15,7 +15,7 @@ DSH 插件：左侧栏多一行「配置同步」，点开是整页体检面板�
 
 | 方式 | 命令 / 入口 | 说明 |
 |---|---|---|
-| npm | `npm i dsh-config-sync-plugin` | 适合把它当依赖管理，或在 profile 的 `package.json` 里写 `"dsh-config-sync-plugin": "^0.3.64"` 后 `pnpm i`；包名与 `cordis.patch.yml` 里注册的名字、插件目录 `dsh-config-sync-plugin-<ver>` 一致 |
+| npm | `npm i dsh-config-sync-plugin` | 适合把它当依赖管理，或在 profile 的 `package.json` 里写 `"dsh-config-sync-plugin": "^0.3.65"` 后 `pnpm i`；包名与 `cordis.patch.yml` 里注册的名字、插件目录 `dsh-config-sync-plugin-<ver>` 一致 |
 | 插件市场 | 客户端「插件市场 → 发现」搜「配置同步」 | 走 `market-index.json` 登记的 git 提交，版本与 README 对齐 |
 | 离线 tgz | `releases\dsh-config-sync-plugin-<ver>.tgz` | GitHub Release 附件，适合内网机器；面板「更新」按钮下载的也是它 |
 
@@ -582,6 +582,10 @@ pwsh -File sync.ps1 push -ScanHistory
 
 非故障警告（日志已确认无害）：`--D-DeepSeekHarness-comfyUI--` / `--dsh-im-forward-confirm--` 找不到对应工作区（特殊会话目录）；`-SkipInstall` 跳过 21 个 registry 插件（隔离环境离线，真机有网时不加即补齐）；`dsh-config-sync-0.1.0` / `extra/manifest.json` 无归档正常跳过；`dsh-config-sync` 槽位有本机多出的残留文件（加 `-PruneWorkspace` 才删）。
 
+### 2026-11-18：发版 0.3.65（刷新按钮反馈）
+- **顶部「重新检测」**：点击后无论数据是否变化都给明确 toast 反馈——成功显示「已重新检测，数据已是最新（时间）」，失败显示具体原因，复用 5 秒自动消失的提示条。此前状态本就是最新时页面看起来毫无变化，用户会以为没点上。
+- **卡片「刷新」按钮**：同步冲突、插件数据、同步内容、问题反馈、设置摘要行五处刷新按钮，点击后文字变「刷新中…」并禁用，结束恢复「刷新」。其中同步冲突 / 同步内容 / 问题反馈三处原来的 `load()` 根本没驱动 `busy`（按钮文字永远不变），本次补齐 `setBusy`；顶部与本机路径的「检测中…/读取中…」保持不变。
+- `node --check` 与客户端半身自检全过，纯前端交互修复，行为与数据不变。
 ### 2026-11-18：发版 0.3.64（还原备份修复 + 失败原因集中展示 + 自动关窗）
 
 - **还原备份 bug 修复**：`apply.ps1` 备份插件设置时只留文件名（如 `workspace.json`），`restore.ps1` 还原时全堆到 `~\.dsh` 根目录，`storages\workspace.json`、`our-free-model\settings.json`、`redteam\preset-declare.json` 等回不到原位。现在备份时写一份 `__backup_manifest.json` 记录「备份文件名 → 相对 DshHome 的原路径」，还原按清单写回原位；无清单的老快照退化为写回根目录并明确告警。隔离回归：profile 5 文件 + settings 3 文件原位还原、根目录零残留、时点回退移走新增文件并写 rollback 清单，全部通过。

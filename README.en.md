@@ -19,7 +19,7 @@ The package name is **`dsh-config-sync-plugin`** (the `dsh-config-sync` name on 
 
 | Way | Command / entry | Notes |
 |---|---|---|
-| npm | `npm i dsh-config-sync-plugin` | Use it as a dependency, or add `"dsh-config-sync-plugin": "^0.3.64"` to the profile's `package.json` and run `pnpm i`. The name matches the `cordis.patch.yml` insert name and the install folder `dsh-config-sync-plugin-<ver>` |
+| npm | `npm i dsh-config-sync-plugin` | Use it as a dependency, or add `"dsh-config-sync-plugin": "^0.3.65"` to the profile's `package.json` and run `pnpm i`. The name matches the `cordis.patch.yml` insert name and the install folder `dsh-config-sync-plugin-<ver>` |
 | Marketplace | client → Plugins → Discover → “Config Sync” | Installs from the git commit registered in `market-index.json` |
 | Offline tgz | `releases\dsh-config-sync-plugin-<ver>.tgz` | GitHub Release asset for air-gapped machines; the panel's Update button downloads the same file |
 
@@ -606,6 +606,10 @@ A clean isolated B machine (approot / dshome / wshome + bundled node runner) sim
 
 Benign warnings (confirmed in the log): `--D-DeepSeekHarness-comfyUI--` / `--dsh-im-forward-confirm--` map to no workspace (special session dirs); `-SkipInstall` skipped 21 registry plugins (isolated offline run — without the flag on a networked machine they install); `dsh-config-sync-0.1.0` / `extra/manifest.json` have no archive/definition and are skipped; the `dsh-config-sync` slot has extra local leftovers (removed only with `-PruneWorkspace`).
 
+### 2026-11-18: release 0.3.65 (refresh button feedback)
+- **Top "Re-check"**: now always shows a clear toast after a click, whether or not data changed - success shows "Re-checked, data is up to date (time)", failure shows the reason, reusing the 5-second auto-dismiss notice. Previously, when the state was already current the page looked unchanged and users thought the click did nothing.
+- **Card "Refresh" buttons**: the five refresh buttons (sync conflicts, plugin data, sync content, feedback, settings summary row) now switch their label to "Refreshing..." and disable while running, then return to "Refresh". Three of them (sync conflicts / sync content / feedback) had `load()` functions that never drove `busy` (label never changed) - fixed by adding `setBusy`; the top bar's "Checking..." and the local-path "Reading..." stay as they were.
+- `node --check` and the client self-check all pass; front-end interaction only, no behaviour or data changes.
 ### 2026-11-18: release 0.3.64 (backup restore fix + failure summary + auto-close)
 
 - **Backup restore bug fixed**: `apply.ps1` backed up plugin settings by filename only (e.g. `workspace.json`), and `restore.ps1` dumped them all into `~\.dsh` root, so `storages\workspace.json`, `our-free-model\settings.json`, `redteam\preset-declare.json` never returned to their original directories. Backup now writes `__backup_manifest.json` mapping backup filename -> original path relative to DshHome, and restore writes each file back in place; old snapshots without the manifest fall back to root with a clear warning. Isolated regression: 5 profile files + 3 settings restored in place, zero stray root files, point-in-time rollback moved new files and wrote its manifest — all pass.

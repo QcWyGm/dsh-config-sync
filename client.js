@@ -499,10 +499,18 @@ window.__ModuleLoader__.load({
       const [busy, setBusy] = react.useState(false)
       const [made, setMade] = react.useState(null)
 
-      const refresh = react.useCallback(async () => {
+      const refresh = react.useCallback(async (done) => {
         setBusy(true)
         setErr('')
-        try { setData(await callStatus()) } catch (e) { setErr(String((e && e.message) || e)) } finally { setBusy(false) }
+        try {
+          const d = await callStatus()
+          setData(d)
+          if (typeof done === 'function') done(null, d)
+        } catch (e) {
+          const msg = String((e && e.message) || e)
+          setErr(msg)
+          if (typeof done === 'function') done(msg, null)
+        } finally { setBusy(false) }
       }, [])
 
       react.useEffect(() => {
@@ -921,7 +929,7 @@ window.__ModuleLoader__.load({
       }
       // 「手动还原」指引里的目标位置：认不出类型时按内容猜不到，索性把三类常见落点都摆出来
       const manualTargets = () => [
-        M('插件本体 → 插件安装目录（如 D:\\DeepSeekHarness\\dsh-config-sync-plugin-0.3.64）', 'Plugin files → the plugin install folder (e.g. D:\\DeepSeekHarness\\dsh-config-sync-plugin-0.3.64)'),
+        M('插件本体 → 插件安装目录（如 D:\\DeepSeekHarness\\dsh-config-sync-plugin-0.3.65）', 'Plugin files → the plugin install folder (e.g. D:\\DeepSeekHarness\\dsh-config-sync-plugin-0.3.65)'),
         M('会话目录（--xxx--）→ ~\\.dsh\\sessions', 'Session folders (--xxx--) → ~\\.dsh\\sessions'),
         M('配置五件套（package.json / pnpm-lock.yaml / cordis.yml…）→ ~\\.dsh\\profiles\\desktop', 'Config files (package.json / pnpm-lock.yaml / cordis.yml…) → ~\\.dsh\\profiles\\desktop'),
       ]
@@ -1185,7 +1193,8 @@ window.__ModuleLoader__.load({
       const [msg, setMsg] = react.useState('')
 
       const load = async () => {
-        try { setState(await callConflict()) } catch (e) { setErr(String((e && e.message) || e)) }
+        setBusy(true); setErr('')
+        try { setState(await callConflict()) } catch (e) { setErr(String((e && e.message) || e)) } finally { setBusy(false) }
       }
       react.useEffect(() => { load() }, [])
 
@@ -1334,7 +1343,7 @@ window.__ModuleLoader__.load({
           h('span', { style: { ...S.footnote } },
             M(`${items.length} 个文件挡住拉取`, `${items.length} file(s) blocking the pull`)),
           h('div', { style: { flex: 1 } }, null),
-          h('button', { type: 'button', style: S.btn, disabled: busy, onClick: load }, M('刷新', 'Refresh')),
+          h('button', { type: 'button', style: S.btn, disabled: busy, onClick: load }, busy ? M('刷新中…', 'Refreshing…') : M('刷新', 'Refresh')),
         ),
         h('div', { style: S.hint },
           M(
@@ -1485,7 +1494,7 @@ window.__ModuleLoader__.load({
             ]
             : [
               h('button', { key: 'edit', type: 'button', style: S.btn, disabled: busy, onClick: () => { setEditing(true); setMsg(''); setErr('') } }, M('修改', 'Edit')),
-              h('button', { key: 'reload', type: 'button', style: S.btn, disabled: busy, onClick: load }, M('刷新', 'Refresh')),
+              h('button', { key: 'reload', type: 'button', style: S.btn, disabled: busy, onClick: load }, busy ? M('刷新中…', 'Refreshing…') : M('刷新', 'Refresh')),
             ],
         ),
         h('div', { style: S.footnote },
@@ -1570,13 +1579,14 @@ window.__ModuleLoader__.load({
       const [err, setErr] = react.useState('')
 
       const load = async () => {
+        setBusy(true)
         try {
           const r = await callScope()
           setState({ deleteCloud: r.deleteCloud === true, path: r.path || '', groups: r.groups || [] })
           setErr('')
         } catch (e) {
           setErr(String((e && e.message) || e))
-        }
+        } finally { setBusy(false) }
       }
       react.useEffect(() => { load() }, [])
 
@@ -1652,7 +1662,7 @@ window.__ModuleLoader__.load({
           editing
             ? null
             : h('button', { type: 'button', style: S.btn, disabled: busy, onClick: () => { setMsg(''); setErr(''); setEditing(true) } }, M('修改', 'Edit')),
-          h('button', { type: 'button', style: S.btn, disabled: busy, onClick: load }, M('刷新', 'Refresh')),
+          h('button', { type: 'button', style: S.btn, disabled: busy, onClick: load }, busy ? M('刷新中…', 'Refreshing…') : M('刷新', 'Refresh')),
         ),
         h('label', { style: { display: 'flex', gap: '8px', alignItems: 'flex-start', cursor: editing ? 'pointer' : 'default' } },
           h('input', {
@@ -2014,6 +2024,17 @@ window.__ModuleLoader__.load({
         if (toastTimer.current) clearTimeout(toastTimer.current)
         toastTimer.current = setTimeout(() => setToast(''), 5000)
       }
+
+      // 「重新检测」按钮：必须给明确反馈。状态本就是最新时数据不会变，按钮只是闪一下
+      // 「检测中…」就恢复，用户会以为点了没反应；这里成功/失败都弹一条 toast。
+      const doRefresh = () => refresh((failure) => {
+        if (failure) {
+          showToast(M(`重新检测失败：${failure}`, `Re-check failed: ${failure}`))
+        } else {
+          const t = new Date().toLocaleTimeString()
+          showToast(M(`已重新检测，数据已是最新（${t}）`, `Re-checked, data is up to date (${t})`))
+        }
+      })
 
       // 「下载更新」= 只下载，不动插件目录（宿主 action: prepare）：
       // 下到 <DshHome>\update-staging\ 并校验 sha256。插件文件一个字节都没改，
@@ -2487,7 +2508,7 @@ window.__ModuleLoader__.load({
                   : (lpAlert > 0
                     ? M(`本机路径 · ${lpAlert} 项告警`, `Local paths · ${lpAlert} alert(s)`)
                     : M('本机路径', 'Local paths'))),
-              h('button', { type: 'button', style: S.btn, disabled: busy, onClick: refresh },
+              h('button', { type: 'button', style: S.btn, disabled: busy, onClick: doRefresh },
                 busy ? M('检测中…', 'Checking…') : M('重新检测', 'Re-check')),
             ),
           ),
@@ -2819,13 +2840,14 @@ window.__ModuleLoader__.load({
       const [kw, setKw] = react.useState('')
 
       const load = async () => {
+        setBusy(true)
         try {
           const r = await callFeedback(null)
           setSt({ ...empty, ...r })
           setErr(String(r.error || ''))
         } catch (e) {
           setErr(String((e && e.message) || e))
-        }
+        } finally { setBusy(false) }
       }
       react.useEffect(() => { load() }, [])
 
@@ -2920,7 +2942,7 @@ window.__ModuleLoader__.load({
           h('div', { style: S.cardTitle }, M('问题反馈', 'Feedback')),
           h('div', { style: { flex: 1 } }, null),
           h('span', { style: S.chip }, M(`${open} 待处理 / 共 ${total}`, `${open} open / ${total} total`)),
-          h('button', { type: 'button', style: S.btn, disabled: busy, onClick: load }, M('刷新', 'Refresh')),
+          h('button', { type: 'button', style: S.btn, disabled: busy, onClick: load }, busy ? M('刷新中…', 'Refreshing…') : M('刷新', 'Refresh')),
         ),
         h('div', { style: S.kvRow },
           h('div', { style: S.kvKey }, M('连接', 'Connect')),
@@ -3058,7 +3080,7 @@ window.__ModuleLoader__.load({
         h('div', { style: { display: 'flex', gap: '8px', alignItems: 'center', flexShrink: 0 } },
           h('span', { style: chipStyle(summary.kind) }, chipLabel(summary.kind)),
           h('button', { type: 'button', style: S.btn, onClick: () => setOpen((v) => !v) }, open ? M('收起', 'Collapse') : M('查看', 'View')),
-          h('button', { type: 'button', style: S.btn, disabled: busy, onClick: refresh }, M('刷新', 'Refresh')),
+          h('button', { type: 'button', style: S.btn, disabled: busy, onClick: refresh }, busy ? M('刷新中…', 'Refreshing…') : M('刷新', 'Refresh')),
         ),
       )
 
