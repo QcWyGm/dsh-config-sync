@@ -921,7 +921,7 @@ window.__ModuleLoader__.load({
       }
       // 「手动还原」指引里的目标位置：认不出类型时按内容猜不到，索性把三类常见落点都摆出来
       const manualTargets = () => [
-        M('插件本体 → 插件安装目录（如 D:\\DeepSeekHarness\\dsh-config-sync-plugin-0.3.62）', 'Plugin files → the plugin install folder (e.g. D:\\DeepSeekHarness\\dsh-config-sync-plugin-0.3.62)'),
+        M('插件本体 → 插件安装目录（如 D:\\DeepSeekHarness\\dsh-config-sync-plugin-0.3.63）', 'Plugin files → the plugin install folder (e.g. D:\\DeepSeekHarness\\dsh-config-sync-plugin-0.3.63)'),
         M('会话目录（--xxx--）→ ~\\.dsh\\sessions', 'Session folders (--xxx--) → ~\\.dsh\\sessions'),
         M('配置五件套（package.json / pnpm-lock.yaml / cordis.yml…）→ ~\\.dsh\\profiles\\desktop', 'Config files (package.json / pnpm-lock.yaml / cordis.yml…) → ~\\.dsh\\profiles\\desktop'),
       ]

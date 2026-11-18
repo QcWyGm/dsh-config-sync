@@ -1,9 +1,9 @@
-﻿{
-    "sha256": "9431ED403AE721DE9B2230BAE4E6AE9921179612540B4685733CEA6A239B16AC",
-    "version": "0.3.62",
-    "releasedAt": "2026-11-18",
-    "notesEn": "0.3.62: Speed up pull by ~3.1x (341s -> 109s on a 49k-file workspace with 100k orphan files). Fixes in runtime/apply.ps1: (1) defer per-file backup until a file is actually going to be overwritten (was backing up the whole workspace unconditionally); (2) replace Get-FileHash with .NET SHA256.ComputeHash (~6x faster); (3) fix archive plugin version regex to accept Windows backslash paths in zip (was re-deploying 3 link plugins every pull); (4) replace $extra += array (O(n^2), ~5.1B copies over 100k orphan files) with Generic.List[string].Add. Also repairs historical market-index.json: 0.3.61 entry commit was a TODO placeholder and the plugins structure was malformed; both fixed. projcache is still skipped (context-overflow fix from 0.3.61 preserved).",
-    "tgz": "releases/dsh-config-sync-plugin-0.3.62.tgz",
-    "minClient": "0.2.2-rc.2",
-    "notes": "0.3.62: 拉取提速约 3.1 倍（49110 文件 + 10 万孤儿文件工作区：341 秒降到 109 秒）。runtime/apply.ps1 修复：(1) 备份延后到文件即将被覆盖时才逐个备份（原来无条件全量备份整个工作区）；(2) Get-FileHash 换成 .NET SHA256.ComputeHash（约快 6 倍）；(3) 修正归档插件版本正则以兼容 zip 里的反斜杠路径（原来每次拉取都重新解压 3 个 link 插件）；(4) $extra += 数组是 O(n²)（10 万孤儿文件约 51 亿次拷贝），换成 Generic.List[string].Add。同时修复历史遗留的 market-index.json：0.3.61 条目 commit 是 TODO 占位符且 plugins 结构损坏，均已修正。0.3.61 的跳过 projcache（上下文超长修复）保持不变。"
+{
+    "sha256":"825e288e4fe7255063641f2dd2fc0dc7da8256fc58d132bae886bbef976fc0c4",
+    "version":  "0.3.63",
+    "releasedAt":  "2026-11-18",
+    "notesEn":  "0.3.63: Speed up the shared Get-RelPath hot path (~10x) used by both push and pull. dsh-sync-common.ps1 Get-RelPath used two -split + Where-Object per file; on a 49k-file workspace push comparison alone cost 11.7s. Now a StartsWith + Substring fast path (with fallback to the original segment-count logic for case / 8.3 short-path mismatches). 49,138 files compared with 0 output differences; microbench 5.08s -\u003e 0.51s (9.9x). All three dsh-sync-common.ps1 copies (source / config repo / plugin runtime) updated. 0.3.62 pull speedups and 0.3.61 projcache skip preserved.",
+    "tgz":  "releases/dsh-config-sync-plugin-0.3.63.tgz",
+    "minClient":  "0.2.2-rc.2",
+    "notes":  "0.3.63: 推送和拉取公共热路径 Get-RelPath 提速约 10 倍。dsh-sync-common.ps1 的 Get-RelPath 原来每个文件做两次 -split + Where-Object，5 万文件工作区下推送比对单独占 11.7s；改为 StartsWith + Substring 快路径（大小写/8.3 短路径不一致时回退原逻辑）。49138 文件全量比对与老版输出 0 差异，微基准 5.08s → 0.51s（9.9 倍）。三处 dsh-sync-common.ps1（源码/配置仓库/插件副本）同步。0.3.62 拉取提速与 0.3.61 跳过 projcache 保持不变。"
 }

@@ -15,7 +15,7 @@ DSH 插件：左侧栏多一行「配置同步」，点开是整页体检面板�
 
 | 方式 | 命令 / 入口 | 说明 |
 |---|---|---|
-| npm | `npm i dsh-config-sync-plugin` | 适合把它当依赖管理，或在 profile 的 `package.json` 里写 `"dsh-config-sync-plugin": "^0.3.62"` 后 `pnpm i`；包名与 `cordis.patch.yml` 里注册的名字、插件目录 `dsh-config-sync-plugin-<ver>` 一致 |
+| npm | `npm i dsh-config-sync-plugin` | 适合把它当依赖管理，或在 profile 的 `package.json` 里写 `"dsh-config-sync-plugin": "^0.3.63"` 后 `pnpm i`；包名与 `cordis.patch.yml` 里注册的名字、插件目录 `dsh-config-sync-plugin-<ver>` 一致 |
 | 插件市场 | 客户端「插件市场 → 发现」搜「配置同步」 | 走 `market-index.json` 登记的 git 提交，版本与 README 对齐 |
 | 离线 tgz | `releases\dsh-config-sync-plugin-<ver>.tgz` | GitHub Release 附件，适合内网机器；面板「更新」按钮下载的也是它 |
 
@@ -564,6 +564,10 @@ pwsh -File sync.ps1 push -ScanHistory
 - `pwsh -File tools\pack-plugin.ps1`：打包并把 sha256 回填 `version.json`。**必须用 PowerShell 7**（脚本是无 BOM UTF-8，5.1 按 GBK 读会把中文认错）。
 
 ## 实测记录
+
+### 2026-11-18：推送提速发版 0.3.63（Get-RelPath 快 10 倍）
+
+推送/拉取共用的 `Get-RelPath` 原来对每个文件做两次 `-split` + `Where-Object`；5 万文件工作区下，推送比对单独占 11.7s。改为 `StartsWith` + `Substring` 快路径，大小写或 8.3 短路径不一致时回退原段数比对逻辑。49138 文件全量比对与老版输出 0 差异，微基准 5.08s → 0.51s（约 9.9 倍）。三处 `dsh-sync-common.ps1`（源码 / 配置仓库 / 插件副本）同步。
 
 ### 2026-11-18：拉取提速发版 0.3.62（341s → 109s，约 3.1×）
 

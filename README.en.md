@@ -1,4 +1,4 @@
-# dsh-config-sync-plugin
+﻿# dsh-config-sync-plugin
 [中文](README.md) | English
 
 A DSH plugin: it adds a **"Config Sync"** row to the sidebar (opening a full-page health-check panel), plus a summary row under **Settings → General**. It only **inspects and prepares commands** — the sync actions never run inside the app (except the automatic sync that relaunches the client).
@@ -19,7 +19,7 @@ The package name is **`dsh-config-sync-plugin`** (the `dsh-config-sync` name on 
 
 | Way | Command / entry | Notes |
 |---|---|---|
-| npm | `npm i dsh-config-sync-plugin` | Use it as a dependency, or add `"dsh-config-sync-plugin": "^0.3.62"` to the profile's `package.json` and run `pnpm i`. The name matches the `cordis.patch.yml` insert name and the install folder `dsh-config-sync-plugin-<ver>` |
+| npm | `npm i dsh-config-sync-plugin` | Use it as a dependency, or add `"dsh-config-sync-plugin": "^0.3.63"` to the profile's `package.json` and run `pnpm i`. The name matches the `cordis.patch.yml` insert name and the install folder `dsh-config-sync-plugin-<ver>` |
 | Marketplace | client → Plugins → Discover → “Config Sync” | Installs from the git commit registered in `market-index.json` |
 | Offline tgz | `releases\dsh-config-sync-plugin-<ver>.tgz` | GitHub Release asset for air-gapped machines; the panel's Update button downloads the same file |
 
@@ -588,6 +588,10 @@ The log shows which path ran: `文件比较（快筛）：比对 N 个，深哈�
 - `pwsh -File tools\pack-plugin.ps1`: packs the tgz and writes the sha256 back into `version.json`. **PowerShell 7 is required** (the script is UTF-8 without a BOM, and 5.1 reads the Chinese text as GBK and fails).
 
 ## Test log (2026-11-11, isolated environment)
+
+### 2026-11-18: push speed release 0.3.63 (Get-RelPath ~10x faster)
+
+The shared `Get-RelPath` used by push and pull ran two `-split` + `Where-Object` per file; on a 49k-file workspace push comparison alone cost 11.7s. Now a `StartsWith` + `Substring` fast path, falling back to the original segment-count logic when case or 8.3 short paths disagree. 49,138 files compared with 0 output differences; microbench 5.08s -> 0.51s (~9.9x). All three `dsh-sync-common.ps1` copies (source / config repo / plugin runtime) updated.
 
 ### 2026-11-18: pull speed release 0.3.62 (341s → 109s, ~3.1×)
 

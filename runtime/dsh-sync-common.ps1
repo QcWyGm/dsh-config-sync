@@ -158,7 +158,18 @@ function Get-GitExe {
 }
 
 # 求 $full 相对 $base 的路径：按路径段数取尾巴，避免 8.3 短路径（ADMINI~1）或大小写差异导致 Substring 算错
-function Get-RelPath([string]$base, [string]$full) {  $b = @($base -split '\\' | Where-Object { $_ -ne '' })
+function Get-RelPath([string]$base, [string]$full) {
+  # Fast path: $full is under $base from the same enumeration (99.9%). Substring avoids two -split + Where-Object.
+  if ($full.StartsWith($base, [StringComparison]::OrdinalIgnoreCase)) {
+    $tail = $full.Substring($base.Length)
+    if ($tail.Length -gt 0 -and ($tail[0] -eq '\' -or $tail[0] -eq '/')) {
+      $rel = $tail.TrimStart('\','/')
+      if ($rel) { return $rel }
+    }
+    return $null
+  }
+  # Fallback: base/full disagree on case or 8.3 short path (ADMINI~1). Count path segments instead.
+  $b = @($base -split '\\' | Where-Object { $_ -ne '' })
   $f = @($full -split '\\' | Where-Object { $_ -ne '' })
   if ($f.Count -le $b.Count) { return $null }
   return ($f[$b.Count..($f.Count - 1)] -join '\')
