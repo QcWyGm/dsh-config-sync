@@ -1,9 +1,9 @@
 ﻿{
-    "sha256":"192615D06E97AD79A402C7F32FCD573D1A7EA2D48C8CC046D394ABE31B79CECB",
-    "version":  "0.3.61",
-    "releasedAt":  "2026-11-17",
-    "notesEn":  "0.3.61: Fix context overflow after B-machine sync. Root cause: sync restores projcache carrying A-machine token measurement cache (surfaceTokens \u003e contextWindow), causing B-machine compaction to fail (missing model config / no contextWindow) -\u003e throws TargetPressureConfigError, only warns, no compaction -\u003e full surface sent to provider -\u003e CONTEXT_WINDOW_EXCEEDED. Fix: apply.ps1 skips session_projcache sync, letting DSH rebuild from session log on boot (using B-machine actual model config). projcache is a rebuildable coldSnapshot; dsh-session-manager Step 2 re-folds on boot.",
-    "tgz":  "releases/dsh-config-sync-plugin-0.3.61.tgz",
-    "minClient":  "0.2.2-rc.2",
-    "notes":  "0.3.61: ?? B ????????????:???? projcache ?? A ? token ????(surfaceTokens \u003e contextWindow),?? B ? compaction ????(?????/? contextWindow) -\u003e ? TargetPressureConfigError ? warn ??? -\u003e ?? surface ?? provider -\u003e CONTEXT_WINDOW_EXCEEDED???:apply.ps1 ?? session_projcache ??,? DSH ???? session log ??(?? B ???????)?projcache ????? coldSnapshot,dsh-session-manager ?? Step 2 ?????"
+    "sha256": "9431ED403AE721DE9B2230BAE4E6AE9921179612540B4685733CEA6A239B16AC",
+    "version": "0.3.62",
+    "releasedAt": "2026-11-18",
+    "notesEn": "0.3.62: Speed up pull by ~3.1x (341s -> 109s on a 49k-file workspace with 100k orphan files). Fixes in runtime/apply.ps1: (1) defer per-file backup until a file is actually going to be overwritten (was backing up the whole workspace unconditionally); (2) replace Get-FileHash with .NET SHA256.ComputeHash (~6x faster); (3) fix archive plugin version regex to accept Windows backslash paths in zip (was re-deploying 3 link plugins every pull); (4) replace $extra += array (O(n^2), ~5.1B copies over 100k orphan files) with Generic.List[string].Add. Also repairs historical market-index.json: 0.3.61 entry commit was a TODO placeholder and the plugins structure was malformed; both fixed. projcache is still skipped (context-overflow fix from 0.3.61 preserved).",
+    "tgz": "releases/dsh-config-sync-plugin-0.3.62.tgz",
+    "minClient": "0.2.2-rc.2",
+    "notes": "0.3.62: 拉取提速约 3.1 倍（49110 文件 + 10 万孤儿文件工作区：341 秒降到 109 秒）。runtime/apply.ps1 修复：(1) 备份延后到文件即将被覆盖时才逐个备份（原来无条件全量备份整个工作区）；(2) Get-FileHash 换成 .NET SHA256.ComputeHash（约快 6 倍）；(3) 修正归档插件版本正则以兼容 zip 里的反斜杠路径（原来每次拉取都重新解压 3 个 link 插件）；(4) $extra += 数组是 O(n²)（10 万孤儿文件约 51 亿次拷贝），换成 Generic.List[string].Add。同时修复历史遗留的 market-index.json：0.3.61 条目 commit 是 TODO 占位符且 plugins 结构损坏，均已修正。0.3.61 的跳过 projcache（上下文超长修复）保持不变。"
 }

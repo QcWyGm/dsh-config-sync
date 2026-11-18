@@ -8,11 +8,7 @@
                         "en":  "DSH plugins by QcWyGm.",
                         "zh":  "QcWyGm 的 DSH 插件。"
                     },
-    "plugins":    {
-    "version": "0.3.61",
-    "publishTimestamp": 1794918180,
-    "commit": "TODO_COMMIT_0361"
-  },
+    "plugins":  [
                     {
                         "name":  "dsh-config-sync-plugin",
                         "title":  {
@@ -29,13 +25,27 @@
                         "repository":  {
                                            "url":  "https://github.com/QcWyGm/dsh-config-sync-plugin"
                                        },
-                        "versions":    {
-    "version": "0.3.61",
-    "publishTimestamp": 1794918180,
-    "commit": "TODO_COMMIT_0361"
-  },
+                        "versions":  [
+                                                                                  {
+                                             "version":  "0.3.62",
+                                             "publishTimestamp":  1795006149,
+                                             "source":  {
+                                                 "type":  "git",
+                                                 "url":  "https://github.com/QcWyGm/dsh-config-sync-plugin",
+                                                 "commit":  "TODO_COMMIT_0362"
+                                             }
+                                         },
                                          {
                                              "version":  "0.3.61",
+                                             "publishTimestamp":  1794918180,
+                                             "source":  {
+                                                 "type":  "git",
+                                                 "url":  "https://github.com/QcWyGm/dsh-config-sync-plugin",
+                                                 "commit":  "8f078742fe79659b2e838ee0f7a79af33d8bebcd"
+                                             }
+                                         },
+{
+                                             "version":  "0.3.60",
                                              "publishTimestamp":  1794852193,
                                              "source":  {
                                                  "type":  "git",

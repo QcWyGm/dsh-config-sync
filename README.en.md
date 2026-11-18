@@ -1,4 +1,4 @@
-﻿# dsh-config-sync-plugin
+# dsh-config-sync-plugin
 [中文](README.md) | English
 
 A DSH plugin: it adds a **"Config Sync"** row to the sidebar (opening a full-page health-check panel), plus a summary row under **Settings → General**. It only **inspects and prepares commands** — the sync actions never run inside the app (except the automatic sync that relaunches the client).
@@ -19,7 +19,7 @@ The package name is **`dsh-config-sync-plugin`** (the `dsh-config-sync` name on 
 
 | Way | Command / entry | Notes |
 |---|---|---|
-| npm | `npm i dsh-config-sync-plugin` | Use it as a dependency, or add `"dsh-config-sync-plugin": "^0.3.61"` to the profile's `package.json` and run `pnpm i`. The name matches the `cordis.patch.yml` insert name and the install folder `dsh-config-sync-plugin-<ver>` |
+| npm | `npm i dsh-config-sync-plugin` | Use it as a dependency, or add `"dsh-config-sync-plugin": "^0.3.62"` to the profile's `package.json` and run `pnpm i`. The name matches the `cordis.patch.yml` insert name and the install folder `dsh-config-sync-plugin-<ver>` |
 | Marketplace | client → Plugins → Discover → “Config Sync” | Installs from the git commit registered in `market-index.json` |
 | Offline tgz | `releases\dsh-config-sync-plugin-<ver>.tgz` | GitHub Release asset for air-gapped machines; the panel's Update button downloads the same file |
 
@@ -588,6 +588,21 @@ The log shows which path ran: `文件比较（快筛）：比对 N 个，深哈�
 - `pwsh -File tools\pack-plugin.ps1`: packs the tgz and writes the sha256 back into `version.json`. **PowerShell 7 is required** (the script is UTF-8 without a BOM, and 5.1 reads the Chinese text as GBK and fails).
 
 ## Test log (2026-11-11, isolated environment)
+
+### 2026-11-18: pull speed release 0.3.62 (341s → 109s, ~3.1×)
+
+One machine had 49,110 files in a workspace and 101,097 orphan files piled up in another workspace slot; "pull" stalled at "workspace restored" for minutes. Segment tracing found four avoidable costs, all in `runtime\apply.ps1`. Behaviour is unchanged (files committed to the repo, config results and decisions are byte-identical); only "how it computes" changed:
+
+| Step | Result |
+|---|---|
+| End-to-end | 340.9s → 108.5s (same environment and input, ~3.1×); all functional assertions pass: 5 workspaces restored, 0 writes/updates, 0 backups, 56 session cwd fixes, 24 bundles resolvable, `EXIT=0` |
+| ① Unconditional full backup | It used to back up the whole workspace before restoring each one (49,110 files × 1.99ms ≈ 98s), yet a second pull finds source and target byte-identical and needs 0 backups. Now a single file is backed up only when it is actually about to be overwritten → backups 49,110 → 0 |
+| ② Hash API | `Get-FileHash` measured 0.957ms/file vs streaming .NET `SHA256.ComputeHash` 0.16ms/file (~6×); workspace/session header comparisons switched to streaming SHA256 |
+| ③ zip version regex | The `package.json` path inside a `Compress-Archive` zip uses backslashes, but the version regex only accepted `/`, so the archive version was unreadable and a `git fetch` mtime refresh made every pull think "local plugin has a new version" and re-extract 3 link plugins. Changed to `[\\/]`; now all three consistently report "plugin already present" |
+| ④ **Root cause: O(n²) array append** | The extra-path scan did `$extra = @()` + `$extra += $lf.FullName`; 101,097 orphan files ≈ 5.1 billion array copies, alone costing 264s (the dsh-config-sync slot has only 16 synced files yet took 264s). Replaced with `[System.Collections.Generic.List[string]]::new()` + `$extra.Add(...)` → O(n) |
+| Remaining 108s | Hashing + copying 49,110 files in DSH破甲 takes 71s of real disk I/O; cutting further needs option ③ "git HEAD short-circuit" (high risk, not implemented) |
+| Also fixed | A historical `market-index.json` structure bug (0.3.61 release wrote `plugins` as a mixed object/array) and that entry's `TODO_COMMIT_0361` placeholder commit; 0.3.61's "skip projcache sync" (context-overflow fix) is preserved |
+| Lessons | Timestamp tracing through a PowerShell `ForEach-Object` pipeline gets swallowed by output buffering — write to stderr (`[Console]::Error.WriteLine`) for live traces; a BOM'd UTF-8 script must be read/written only as UTF8 — ISO-8859-1 round-trips force .NET to UTF8-decode then re-encode, turning all Chinese into `?` and dropping the BOM |
 
 ### 2026-11-15: performance release 0.3.54 (three speedups, behaviour unchanged)
 

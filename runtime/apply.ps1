@@ -110,6 +110,13 @@ function Expand-AppRootTree([string]$dir, [string]$rootFwd) {
 # 一律 Copy-Item -LiteralPath 原样拷；登记表里的路径占位符在这里展开成本机绝对路径。
 # （$BS / $WorkspaceHomeToken / $wsSkip* / Test-WorkspaceIgnored 都在 dsh-sync-common.ps1 里，两个脚本共用）
 
+# 快速 SHA256：复用单个静态实例，比 Get-FileHash cmdlet 快约 6 倍（大批量逐文件比对是拉取主要瓶颈）
+$_dshSha256 = [System.Security.Cryptography.SHA256]::Create()
+function Get-FileHashFast([string]$path) {
+  $fs = [System.IO.File]::Open($path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite)
+  try { return [Convert]::ToBase64String($_dshSha256.ComputeHash($fs)) }
+  finally { $fs.Dispose() }
+}
 function Sync-WorkspaceApply {
   $wsDir = Join-Path $RepoRoot 'workspace'
   # 登记表 sessionIds 常常滞后于实际会话目录（会话是后来新建的、capture 只抄了当时的快照）。
@@ -182,23 +189,8 @@ function Sync-WorkspaceApply {
       }
       $repoRels[$rel] = $f.FullName
     }
-    # 备份本机现有资料（覆盖前的完整快照）
-    # 但排除「不参与同步」的东西（models/、*.whl、>100MB 之类）：备份它们会把磁盘写满，
-    # 而且它们本来就不会被覆盖，没有备份价值（真实事故：13.8GB 模型被备份进 ~\.dsh\backups，C 盘直接满）。
-    if (Test-Path -LiteralPath $e.LocalPath) {
-      $bk = Join-Path $BackupDir ("workspace\" + $e.Slot)
-      foreach ($lf in @(Get-ChildItem -LiteralPath $e.LocalPath -Recurse -File -Force -ErrorAction SilentlyContinue)) {
-        $rel = Get-RelPath $e.LocalPath $lf.FullName
-        if (-not $rel) { continue }
-        if (Test-WorkspaceIgnored $rel) { continue }
-        if ($lf.Length -gt $wsMaxFileBytes) { continue }
-        $bd = Join-Path $bk $rel
-        $bdd = Split-Path -Parent $bd
-        if (-not (Test-Path -LiteralPath $bdd)) { New-Item -ItemType Directory -Path $bdd -Force | Out-Null }
-        Copy-Item -LiteralPath $lf.FullName -Destination $bd -Force
-        $nBk++
-      }
-    }
+    # 备份策略：不再无条件全量备份整个工作区（二次拉取 4.9 万文件全量备份白耗 ~100 秒）。
+    # 真正的回滚点只在文件「即将被覆盖」时逐个备份，见下方 if ($need) 分支。
     if (-not (Test-Path -LiteralPath $e.LocalPath)) { New-Item -ItemType Directory -Path $e.LocalPath -Force | Out-Null }
     foreach ($rel in @($repoRels.Keys)) {
       $s = $repoRels[$rel]
@@ -207,14 +199,24 @@ function Sync-WorkspaceApply {
       if (-not (Test-Path -LiteralPath $dd)) { New-Item -ItemType Directory -Path $dd -Force | Out-Null }
       $need = $false
       if (-not (Test-Path -LiteralPath $d)) { $need = $true }
-      elseif ((Get-FileHash -LiteralPath $s -Algorithm SHA256).Hash -ne (Get-FileHash -LiteralPath $d -Algorithm SHA256).Hash) { $need = $true }
-      if ($need) { Copy-Item -LiteralPath $s -Destination $d -Force; $nAdd++ }
+      elseif ((Get-FileHashFast $s) -ne (Get-FileHashFast $d)) { $need = $true }
+      if ($need) {
+        # 仅覆盖前备份这一个文件（目标存在说明是改动而非新增）
+        if (Test-Path -LiteralPath $d) {
+          $bd = Join-Path (Join-Path $BackupDir ("workspace\" + $e.Slot)) $rel
+          $bdd = Split-Path -Parent $bd
+          if (-not (Test-Path -LiteralPath $bdd)) { New-Item -ItemType Directory -Path $bdd -Force | Out-Null }
+          Copy-Item -LiteralPath $d -Destination $bd -Force
+          $nBk++
+        }
+        Copy-Item -LiteralPath $s -Destination $d -Force; $nAdd++
+      }
     }
     # 本机多出的文件：默认不动只提示，加 -PruneWorkspace 才删
-    $extra = @()
+    $extra = [System.Collections.Generic.List[string]]::new()
     foreach ($lf in @(Get-ChildItem -LiteralPath $e.LocalPath -Recurse -File -Force -ErrorAction SilentlyContinue)) {
       $rel = Get-RelPath $e.LocalPath $lf.FullName
-      if ($rel -and -not $repoRels.ContainsKey($rel) -and -not (Test-WorkspaceIgnored $rel)) { $extra += $lf.FullName }
+      if ($rel -and -not $repoRels.ContainsKey($rel) -and -not (Test-WorkspaceIgnored $rel)) { $extra.Add([string]$lf.FullName) }
     }
     if ($extra.Count -gt 0) {
       if ($PruneWorkspace) {
@@ -575,7 +577,7 @@ function Sync-ConversationApply {
       if (-not (Test-Path -LiteralPath $dd)) { New-Item -ItemType Directory -Path $dd -Force | Out-Null }
       $need = $false
       if (-not (Test-Path -LiteralPath $d)) { $need = $true }
-      elseif ((Get-FileHash -LiteralPath $f.FullName -Algorithm SHA256).Hash -ne (Get-FileHash -LiteralPath $d -Algorithm SHA256).Hash) { $need = $true }
+      elseif ((Get-FileHashFast $f.FullName) -ne (Get-FileHashFast $d)) { $need = $true }
       if ($need) {
         # 覆盖前备份本机已有文件
         if (Test-Path -LiteralPath $d) {
@@ -843,6 +845,7 @@ if ($dropped.Count -gt 0) { Ok "已剔除 $($dropped.Count) 个实验性 bundle�
 $localPluginMap = [ordered]@{
   'dsh-our-free-model-2.8.0'      = 'dsh-our-free-model'
   'dsh-purge-1.4.0'               = 'dsh-purge'
+  'dsh-config-sync-plugin-0.3.62' = 'dsh-config-sync-plugin'
   'dsh-config-sync-plugin-0.3.61' = 'dsh-config-sync-plugin'
   'dsh-config-sync-plugin-0.3.59' = 'dsh-config-sync-plugin'
   'dsh-config-sync-plugin-0.3.58' = 'dsh-config-sync-plugin'
@@ -1187,8 +1190,8 @@ function Get-ArchivePluginVersion([string]$archPath, [string]$dirName) {
       try { Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction Stop } catch { }
       $zip = [IO.Compression.ZipFile]::OpenRead($archPath)
       try {
-        $entry = $zip.Entries | Where-Object { $_.FullName -match ("(^|/)" + [regex]::Escape($dirName) + "/package\.json$") } | Select-Object -First 1
-        if (-not $entry) { $entry = $zip.Entries | Where-Object { $_.FullName -match '^(package/)?package\.json$' } | Select-Object -First 1 }
+        $entry = $zip.Entries | Where-Object { $_.FullName -match ("(^|[\\/])" + [regex]::Escape($dirName) + "[\\/]package\.json$") } | Select-Object -First 1
+        if (-not $entry) { $entry = $zip.Entries | Where-Object { $_.FullName -match '^(package[\\/])?package\.json$' } | Select-Object -First 1 }
         if (-not $entry) { return $null }
         $sr = New-Object IO.StreamReader($entry.Open())
         try { return [string](($sr.ReadToEnd()) | ConvertFrom-Json).version } finally { $sr.Dispose() }

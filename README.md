@@ -1,4 +1,4 @@
-﻿# dsh-config-sync-plugin
+# dsh-config-sync-plugin
 中文 | [English](README.en.md)
 
 DSH 插件：左侧栏多一行「配置同步」，点开是整页体检面板；「设置 → 通用」另有一行摘要。插件**只做体检 + 备命令**，同步动作在客户端退出后由 `runtime\sync.ps1` 执行（自动同步那一路会自己拉起客户端）。
@@ -15,7 +15,7 @@ DSH 插件：左侧栏多一行「配置同步」，点开是整页体检面板�
 
 | 方式 | 命令 / 入口 | 说明 |
 |---|---|---|
-| npm | `npm i dsh-config-sync-plugin` | 适合把它当依赖管理，或在 profile 的 `package.json` 里写 `"dsh-config-sync-plugin": "^0.3.61"` 后 `pnpm i`；包名与 `cordis.patch.yml` 里注册的名字、插件目录 `dsh-config-sync-plugin-<ver>` 一致 |
+| npm | `npm i dsh-config-sync-plugin` | 适合把它当依赖管理，或在 profile 的 `package.json` 里写 `"dsh-config-sync-plugin": "^0.3.62"` 后 `pnpm i`；包名与 `cordis.patch.yml` 里注册的名字、插件目录 `dsh-config-sync-plugin-<ver>` 一致 |
 | 插件市场 | 客户端「插件市场 → 发现」搜「配置同步」 | 走 `market-index.json` 登记的 git 提交，版本与 README 对齐 |
 | 离线 tgz | `releases\dsh-config-sync-plugin-<ver>.tgz` | GitHub Release 附件，适合内网机器；面板「更新」按钮下载的也是它 |
 
@@ -564,6 +564,21 @@ pwsh -File sync.ps1 push -ScanHistory
 - `pwsh -File tools\pack-plugin.ps1`：打包并把 sha256 回填 `version.json`。**必须用 PowerShell 7**（脚本是无 BOM UTF-8，5.1 按 GBK 读会把中文认错）。
 
 ## 实测记录
+
+### 2026-11-18：拉取提速发版 0.3.62（341s → 109s，约 3.1×）
+
+一台机器上工作区有 49110 个文件、另一个工作区槽位堆积了 101097 个孤儿文件，点「拉取」时卡在「已还原工作区」好几分钟。逐段打点后定位到 4 个浪费点，全部在 `runtime\apply.ps1`，行为不变（落到仓库的文件、提交内容、配置结果逐字节一致），只改「怎么算」：
+
+| 环节 | 结果 |
+|---|---|
+| 端到端总耗时 | 340.9s → 108.5s（同环境同输入，约 3.1×）；功能断言全过：5 工作区还原、写入/更新 0、备份 0、会话 cwd 修正 56、bundle 24 项可解析、`EXIT=0` |
+| ① 无条件全量备份 | 原来每个工作区还原前把整个工作区备份一遍（49110 文件 × 1.99ms ≈ 98s），而二次拉取时源与目标内容全一致、实际需备份 0 个。改为「确认某个文件即将被覆盖时才备份这一个」→ 备份 49110 → 0 |
+| ② 哈希 API | `Get-FileHash` 实测 0.957ms/文件，.NET `SHA256.ComputeHash` 流式 0.16ms/文件（约 6×）；会话首帧与工作区比对的哈希统一换成流式 SHA256 |
+| ③ zip 版本正则 | 归档内 `package.json` 路径在 `Compress-Archive` 打出的 zip 里是反斜杠，而版本正则只认 `/` → 读不到归档版本、`git fetch` 刷新 mtime 后每轮误判「本地插件有新版本」，反复重解压 3 个 link 插件。改成 `[\\/]` 兼容两种分隔符后，三插件稳定显示「本地插件已存在」 |
+| ④ **真凶：O(n²) 数组追加** | extra 扫描里 `$extra = @()` + `$extra += $lf.FullName`，101097 个孤儿文件约 51 亿次数组拷贝，单独占 264s（dsh-config-sync 槽位仅 16 个同步文件却耗时 264s）。换成 `[System.Collections.Generic.List[string]]::new()` + `$extra.Add(...)` → O(n) |
+| 剩余 108s | DSH破甲 49110 文件的哈希 + 复制 71s 是实打实的磁盘 I/O；再压需要方案③「git HEAD 增量短路」，风险高、默认未做 |
+| 顺手修 | 历史遗留的 `market-index.json` 结构损坏（0.3.61 发版时把 `plugins` 数组写成了对象/数组混合）与该条目 commit 的 `TODO_COMMIT_0361` 占位符，本次一并修正；0.3.61 的「跳过 projcache 同步」（上下文超长修复）保持不变 |
+| 教训 | PowerShell 管道 `ForEach-Object` 打时间戳会被输出缓冲吞掉，实时打点要写 stderr（`[Console]::Error.WriteLine`）；带 BOM 的 UTF-8 脚本全程只能用 UTF8 读写，用 ISO-8859-1 读写会把中文 `.NET` 强制 UTF8 解码后再写回全变 `?` 并丢 BOM |
 
 ### 2026-11-15：性能发版 0.3.54（三处提速，行为不变）
 
