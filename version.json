@@ -1,5 +1,5 @@
 {
-  "sha256":"8cb31dc7146e29dba3efe9f50de7b699f47cac79eb6a03244cd47d734128c8ed",
+  "sha256":"8417b4888f71aec93f33ccdc4bce093a60c9fd475e2d9294a5a5a5ebb9057f92",
   "version": "0.3.68",
   "releasedAt": "2026-11-19",
   "notesEn": "0.3.68: session projection-cache guard. When DSH refuses to create a session with 'session/agent-busy: ... is owned by subagent routing', the plugin now (1) catches it in the client by wrapping sessions.create, reports the session id to the host, drops the stale sessionId and retries once; (2) host-side clears <DshHome>/storages/session_projcache/sessions/<id>.json by MOVING it to <DshHome>/logs/session-cache-guard-backup/ (never deleted) so DSH rebuilds it from the session log; (3) a timer sweeps every 3 minutes for the same class of stale cache (cache says blank while the log already has turn/start or user/message and a newer seq). New route /config-sync/cache-guard (GET read-only scan; POST scan|sweep|clear|busy) and a cacheGuard switch in settings, default on.",

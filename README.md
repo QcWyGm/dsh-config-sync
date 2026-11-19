@@ -15,7 +15,7 @@ DSH 插件：左侧栏多一行「配置同步」，点开是整页体检面板�
 
 | 方式 | 命令 / 入口 | 说明 |
 |---|---|---|
-| npm | `npm i dsh-config-sync-plugin` | 适合把它当依赖管理，或在 profile 的 `package.json` 里写 `"dsh-config-sync-plugin": "^0.3.67"` 后 `pnpm i`；包名与 `cordis.patch.yml` 里注册的名字、插件目录 `dsh-config-sync-plugin-<ver>` 一致 |
+| npm | `npm i dsh-config-sync-plugin` | 适合把它当依赖管理，或在 profile 的 `package.json` 里写 `"dsh-config-sync-plugin": "^0.3.68"` 后 `pnpm i`；包名与 `cordis.patch.yml` 里注册的名字、插件目录 `dsh-config-sync-plugin-<ver>` 一致 |
 | 插件市场 | 客户端「插件市场 → 发现」搜「配置同步」 | 走 `market-index.json` 登记的 git 提交，版本与 README 对齐 |
 | 离线 tgz | `releases\dsh-config-sync-plugin-<ver>.tgz` | GitHub Release 附件，适合内网机器；面板「更新」按钮下载的也是它 |
 
@@ -581,6 +581,33 @@ pwsh -File sync.ps1 push -ScanHistory
 **上下文超长闭环**：之前因 A 机 token 计量缓存超窗的 3 个会话，现在都正确归到对应工作区——`session-58db748a`（1,553,981 tokens）→ DSH破甲、`session-bbf3e5c9`（1,080,398）→ SquadLink、`session-a1061521`（1,001,058）→ dsh-config-sync。同时 B 机 projcache 为空，DSH 启动时会从会话日志按 B 机实际模型配置重建 token 计量并触发 compaction，不会再把 A 机超窗缓存直接怼给 provider。
 
 非故障警告（日志已确认无害）：`--D-DeepSeekHarness-comfyUI--` / `--dsh-im-forward-confirm--` 找不到对应工作区（特殊会话目录）；`-SkipInstall` 跳过 21 个 registry 插件（隔离环境离线，真机有网时不加即补齐）；`dsh-config-sync-0.1.0` / `extra/manifest.json` 无归档正常跳过；`dsh-config-sync` 槽位有本机多出的残留文件（加 `-PruneWorkspace` 才删）。
+
+### 2026-11-19：发版 0.3.68（会话投影缓存守卫，治 agent-busy 建会话失败）
+
+**问题**：DSH 的「新建会话」并不每次都真建——客户端会先在工作区里找一条**空白会话**复用（`client-ui-workspace/createInWorkspace()` → `sessions.ids.find(summary.blank && …)` → `createNamed({ sessionId: blank })`）。而 `summary.blank` 来自投影缓存 `session_projcache\sessions\<id>.json` 里的 `record.rows.sessionListMetadata.val.blank`。
+
+缓存是「写一半就停」的产物：某次建会话时写出了 `blank:true / seq:-1`，之后日志继续追加（有了 `turn/start`、`user/message`），缓存却没跟着推进。于是列表仍把这条会话当空白，UI 挑它复用，宿主抛：
+
+```
+session/agent-busy: session "<id>" is owned by subagent routing
+```
+
+新建会话直接失败，且刷不回来（缓存一直被复用）。跨机同步会放大这个问题——A 机的陈旧缓存被 pull 到 B 机，B 机同样中招。
+
+**修复**：三层，都不碰日志、不碰工作区登记，只做缓存文件操作。
+
+| 层 | 触发 | 动作 |
+|---|---|---|
+| 客户端 | `sessions.create` 撞上 `agent-busy` | 包一层 `sessions.create`：捞出撞车的 `sessionId` 报给宿主，去掉旧 `sessionId` 后**重试一次**。正常路径零开销 |
+| 宿主 | 收到客户端上报 | 把 `<DshHome>/storages/session_projcache/sessions/<id>.json` **挪到** `<DshHome>/logs/session-cache-guard-backup/`（只挪不删），DSH 下次读列表时按完整日志重建缓存，`blank` 自然变 `false` |
+| 定时 | 每 3 分钟 | 主动扫同类陈旧缓存，条件四重全中才算（宁可漏判不可误删）：①缓存能解析且 `blank===true` ②能找到对应 `session.v*.jsonl.zstd` ③日志里确有 `turn/start` 或 `user/message` ④日志末事件 `seq` > 缓存记录的最大 `seq` |
+
+新增路由 `/config-sync/cache-guard`：`GET` 只读扫描；`POST` 支持 `scan` / `sweep` / `clear` / `busy`。设置里新增 `cacheGuard` 开关，**默认开**；关掉后既不定时扫描，也不理会客户端的 `agent-busy` 上报。
+
+实现：`runtime/tools/session-cache-guard.mjs`（`scanSessionCaches` / `clearSessionCaches` / `runGuard` / `indexSessionLogs`），客户端半身在 `client.js` 的 `0.3.68：会话缓存守卫` 段。
+
+**手动兜底**：面板「会话缓存守卫」卡可以直接扫一遍、看到候选与判定依据，再决定清哪几条；缓存永远只备份不删除，清错了从 `<DshHome>/logs/session-cache-guard-backup/` 拷回去就行。
+
 
 ### 2026-11-19：发版 0.3.67（会话日志 seq 对账护栏）
 

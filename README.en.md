@@ -19,7 +19,7 @@ The package name is **`dsh-config-sync-plugin`** (the `dsh-config-sync` name on 
 
 | Way | Command / entry | Notes |
 |---|---|---|
-| npm | `npm i dsh-config-sync-plugin` | Use it as a dependency, or add `"dsh-config-sync-plugin": "^0.3.67"` to the profile's `package.json` and run `pnpm i`. The name matches the `cordis.patch.yml` insert name and the install folder `dsh-config-sync-plugin-<ver>` |
+| npm | `npm i dsh-config-sync-plugin` | Use it as a dependency, or add `"dsh-config-sync-plugin": "^0.3.68"` to the profile's `package.json` and run `pnpm i`. The name matches the `cordis.patch.yml` insert name and the install folder `dsh-config-sync-plugin-<ver>` |
 | Marketplace | client → Plugins → Discover → “Config Sync” | Installs from the git commit registered in `market-index.json` |
 | Offline tgz | `releases\dsh-config-sync-plugin-<ver>.tgz` | GitHub Release asset for air-gapped machines; the panel's Update button downloads the same file |
 
@@ -605,6 +605,33 @@ A clean isolated B machine (approot / dshome / wshome + bundled node runner) sim
 **Context-overflow loop closed**: the three sessions that used to blow the window with A-machine token metering are now correctly filed — `session-58db748a` (1,553,981 tokens) -> DSH破甲, `session-bbf3e5c9` (1,080,398) -> SquadLink, `session-a1061521` (1,001,058) -> dsh-config-sync. With no projcache on B, DSH rebuilds token metering from the session logs using B's actual model config on startup and triggers compaction, instead of pushing A's stale over-window cache straight to the provider.
 
 Benign warnings (confirmed in the log): `--D-DeepSeekHarness-comfyUI--` / `--dsh-im-forward-confirm--` map to no workspace (special session dirs); `-SkipInstall` skipped 21 registry plugins (isolated offline run — without the flag on a networked machine they install); `dsh-config-sync-0.1.0` / `extra/manifest.json` have no archive/definition and are skipped; the `dsh-config-sync` slot has extra local leftovers (removed only with `-PruneWorkspace`).
+
+### 2026-11-19: release 0.3.68 (session projection-cache guard, fixes agent-busy session creation)
+
+**Problem**: DSH's "new session" does not always create one. The client first looks for a **blank session** in the workspace to reuse (`client-ui-workspace/createInWorkspace()` → `sessions.ids.find(summary.blank && …)` → `createNamed({ sessionId: blank })`), and `summary.blank` comes from `record.rows.sessionListMetadata.val.blank` in the projection cache `session_projcache\sessions\<id>.json`.
+
+That cache can be a half-written artifact: a session creation once wrote `blank:true / seq:-1`, the log afterwards kept appending (`turn/start`, `user/message`), but the cache never advanced. The list therefore still treats the session as blank, the UI picks it for reuse, and the host throws:
+
+```
+session/agent-busy: session "<id>" is owned by subagent routing
+```
+
+Session creation fails outright and refreshing does not help (the same cache keeps being reused). Cross-machine sync amplifies it: machine A's stale cache is pulled into machine B, which then hits the same wall.
+
+**Fix**: three layers, none of which touch the log or the workspace registry — pure cache-file operations.
+
+| Layer | Trigger | Action |
+|---|---|---|
+| Client | `sessions.create` hits `agent-busy` | Wraps `sessions.create`: extracts the colliding `sessionId`, reports it to the host, drops the stale `sessionId` and **retries once**. Zero overhead on the normal path |
+| Host | Receives the client report | **Moves** `<DshHome>/storages/session_projcache/sessions/<id>.json` to `<DshHome>/logs/session-cache-guard-backup/` (move only, never delete) so DSH rebuilds the cache from the full log and `blank` becomes `false` |
+| Timer | Every 3 minutes | Proactively sweeps the same class of stale cache. All four conditions must hold (miss rather than mis-delete): (1) cache parses and `blank===true`; (2) a matching `session.v*.jsonl.zstd` exists; (3) the log really has `turn/start` or `user/message`; (4) the log's last event `seq` > the cache's max recorded `seq` |
+
+New route `/config-sync/cache-guard`: `GET` is a read-only scan; `POST` accepts `scan` / `sweep` / `clear` / `busy`. A `cacheGuard` switch was added to settings, **on by default**; when off, neither the timer nor the client `agent-busy` report does anything.
+
+Implementation: `runtime/tools/session-cache-guard.mjs` (`scanSessionCaches` / `clearSessionCaches` / `runGuard` / `indexSessionLogs`); the client half lives in the `0.3.68：会话缓存守卫` block of `client.js`.
+
+**Manual fallback**: the "Session cache guard" card in the panel scans on demand, shows each candidate with its evidence, and lets you pick what to clear. Cache files are only ever backed up, never deleted — a wrong clear is reversible from `<DshHome>/logs/session-cache-guard-backup/`.
+
 
 ### 2026-11-19: release 0.3.67 (seq reconciliation guard for session logs)
 
