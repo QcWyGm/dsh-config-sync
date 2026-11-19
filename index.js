@@ -24,6 +24,8 @@ import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, r
 import { homedir, hostname, tmpdir } from 'node:os'
 import { basename, dirname, isAbsolute, join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
+// 0.3.68：会话投影缓存守卫（agent-busy 自动清缓存，让缓存按日志重建）
+import { runGuard, clearSessionCaches, appendGuardLog } from './runtime/tools/session-cache-guard.mjs'
 
 const pluginRequire = createRequire(import.meta.url)
 
@@ -37,6 +39,8 @@ const ROUTE_CONFLICT = '/config-sync/conflict'
 // 0.3.30：跨机路径确认（每台机器把自己的根目录报给插件一次）与问题反馈（落仓库 feedback\ 再推 GitHub）
 const ROUTE_ROOTS = '/config-sync/roots'
 const ROUTE_FEEDBACK = '/config-sync/feedback'
+// 0.3.68：会话投影缓存守卫（GET 只读扫描 / POST scan|sweep|clear|busy）
+const ROUTE_CACHE_GUARD = '/config-sync/cache-guard'
 const SETTINGS_NAME = 'dsh-config-sync.json'
 /** 本插件自己的安装目录（插件根，含 runtime\ 与 index.js）—— 插件备份还原时的目标。 */
 const PLUGIN_ROOT = fileURLToPath(new URL('.', import.meta.url)).replace(/[\\/]+$/, '')
@@ -233,6 +237,8 @@ function readSettings(dshHome) {
     // 同步完成重启前把 DSH 的「默认工作区」校正到谁：
     // 留空 = 自动找名字/路径是 default-workspace 的工作区；可填工作区路径或 ID；填 off 关闭。
     defaultWorkspace: typeof raw.defaultWorkspace === 'string' ? raw.defaultWorkspace : '',
+    // 0.3.68：会话投影缓存守卫，默认开。关掉后既不定时扫描，也不理会客户端的 agent-busy 上报。
+    cacheGuard: raw.cacheGuard !== false,
   }
 }
 
@@ -254,6 +260,7 @@ function writeSettings(dshHome, s) {
     updateToken: s.updateToken || '',
     backupRoot: s.backupRoot || '',
     defaultWorkspace: s.defaultWorkspace || '',
+    cacheGuard: s.cacheGuard !== false,
   }, null, 2) + '\n'
   writeFileSync(settingsPath(dshHome), payload, 'utf8')
 }
@@ -1173,6 +1180,8 @@ async function inspect(config) {
       const pending = c.items.filter((it) => !it.choice).length
       return { exists: true, total: c.items.length, pending, at: c.at || '', backupDir: c.backupDir || '' }
     })(),
+    // 0.3.68：会话投影缓存守卫状态（面板「会话缓存守卫」卡用）
+    cacheGuard: cacheGuardSnapshot(config),
   }
 }
 
@@ -1953,20 +1962,22 @@ async function handleSettings(req, res, config) {
     const autoPull = has('autoPull') ? body.autoPull === true : before.autoPull
     const autoPush = has('autoPush') ? body.autoPush === true : before.autoPush
     const autoRestart = has('autoRestart') ? body.autoRestart !== false : before.autoRestart
+    // 0.3.68：会话投影缓存守卫开关，字段没给就沿用原值
+    const cacheGuard = has('cacheGuard') ? body.cacheGuard !== false : before.cacheGuard
 
     if (!has('repoPath') && !has('remoteUrl') && !has('sshKey') &&
         !has('autoPull') && !has('autoPush') && !has('autoRestart') &&
-        !has('backupRoot') && !has('defaultWorkspace') &&
+        !has('backupRoot') && !has('defaultWorkspace') && !has('cacheGuard') &&
         !has('updateToken') && !has('updateManifestUrl') && body.clearUpdateToken !== true && body.clearUpdateManifestUrl !== true && body.clearBackupRoot !== true && body.clearDefaultWorkspace !== true) {
       throw new Error(t(
-        '没有要保存的字段（repoPath / remoteUrl / sshKey / autoPull / autoPush / autoRestart / backupRoot / defaultWorkspace / updateToken / updateManifestUrl 至少给一个）',
-        'Nothing to save (provide at least one of repoPath / remoteUrl / sshKey / autoPull / autoPush / autoRestart / backupRoot / defaultWorkspace / updateToken / updateManifestUrl)',
+        '没有要保存的字段（repoPath / remoteUrl / sshKey / autoPull / autoPush / autoRestart / backupRoot / defaultWorkspace / cacheGuard / updateToken / updateManifestUrl 至少给一个）',
+        'Nothing to save (provide at least one of repoPath / remoteUrl / sshKey / autoPull / autoPush / autoRestart / backupRoot / defaultWorkspace / cacheGuard / updateToken / updateManifestUrl)',
       ))
     }
 
     // 新仓库路径一落盘，后面的 git remote 要对它做，别用改之前解析出来的旧仓库。
     const repo = repoPath || (resolveRepo(config?.repoPath, dshHome).repo || '')
-    writeSettings(dshHome, { repoPath, remoteUrl, sshKey, autoPull, autoPush, autoRestart, updateToken, updateManifestUrl, backupRoot, defaultWorkspace })
+    writeSettings(dshHome, { repoPath, remoteUrl, sshKey, autoPull, autoPush, autoRestart, updateToken, updateManifestUrl, backupRoot, defaultWorkspace, cacheGuard })
 
     const changed = {
       repoPath: before.repoPath !== repoPath,
@@ -1976,6 +1987,7 @@ async function handleSettings(req, res, config) {
       autoPush: before.autoPush !== autoPush,
       backupRoot: before.backupRoot !== backupRoot,
       defaultWorkspace: before.defaultWorkspace !== defaultWorkspace,
+      cacheGuard: before.cacheGuard !== cacheGuard,
     }
     let gitSet = null
     if (repo && isDir(join(repo, '.git')) && remoteUrl) {
@@ -4010,6 +4022,192 @@ function newIssueUrl(repo, title, text, config) {
   return `https://github.com/${repo}/issues/new?${q}`
 }
 
+// ============================ 0.3.68：会话投影缓存守卫 ============================
+// 背景：UI 点「新建会话」时会挑一条 summary.blank===true 的会话复用，挑中了 origin=subagent
+// 的子会话就会被宿主拒绝（session/agent-busy：is owned by subagent routing）。
+// 起因是投影缓存停在 session/created 那一刻（blank=true、seq=-1），而会话日志早就推进过，
+// 两边不一致。这里的处理：发现这种「缓存说空、日志有货」的陈旧缓存就把它挪走，让宿主按日志重建。
+let loggerRef = null
+function ctxLoggerInfo(text) {
+  try { loggerRef?.info?.(text) } catch { /* 没有 logger 就算了 */ }
+}
+
+const cacheGuardState = {
+  timer: null,
+  interval: null,
+  scans: 0,
+  lastScanAt: 0,
+  lastApplyAt: 0,
+  lastStale: 0,
+  lastRemoved: [],
+  lastError: '',
+  lastTrigger: '',
+  busyHits: [],
+}
+
+function dshHomeOf(config) {
+  return config?.dshHome || process.env.DSH_HOME || join(homedir(), '.dsh')
+}
+
+/** 跑一次扫描。apply=false 只报告不动手；apply=true 会把陈旧缓存挪到备份目录。 */
+function cacheGuardRun(config, opts = {}) {
+  const apply = opts.apply === true
+  const dshHome = dshHomeOf(config)
+  try {
+    const report = runGuard(dshHome, {
+      apply,
+      source: opts.source || '',
+      ids: Array.isArray(opts.ids) && opts.ids.length > 0 ? opts.ids : undefined,
+      deep: true,
+    })
+    cacheGuardState.scans += 1
+    cacheGuardState.lastScanAt = Date.now()
+    cacheGuardState.lastTrigger = opts.source || ''
+    cacheGuardState.lastStale = report.staleCount || 0
+    cacheGuardState.lastError = (report.errors || []).join('; ')
+    if (apply) {
+      cacheGuardState.lastApplyAt = Date.now()
+      cacheGuardState.lastRemoved = (report.removed || []).map((x) => ({ id: x.id, to: x.to }))
+      if (cacheGuardState.lastRemoved.length > 0) {
+        ctxLoggerInfo(`[dsh-config-sync-plugin] 已清理 ${cacheGuardState.lastRemoved.length} 条陈旧会话投影缓存：${cacheGuardState.lastRemoved.map((x) => x.id).join(', ')}`)
+      }
+    }
+    return report
+  } catch (error) {
+    const message = String((error && error.message) || error)
+    cacheGuardState.scans += 1
+    cacheGuardState.lastScanAt = Date.now()
+    cacheGuardState.lastTrigger = opts.source || ''
+    cacheGuardState.lastError = message
+    return { ok: false, scanned: 0, blank: 0, staleCount: 0, stale: [], removed: [], errors: [message] }
+  }
+}
+
+/** 客户端报某条会话撞了 agent-busy：先把它的缓存定点点掉，再全盘扫一遍同类陈旧项。 */
+function cacheGuardOnBusy(config, sessionId) {
+  const dshHome = dshHomeOf(config)
+  const id = String(sessionId || '').trim()
+  const out = { ok: true, sessionId: id, cleared: false, report: null }
+  if (id) {
+    try {
+      const res = clearSessionCaches(dshHome, [id], { reason: 'agent-busy' })
+      out.cleared = Array.isArray(res.removed) && res.removed.length > 0
+      if (out.cleared) {
+        appendGuardLog(dshHome, `[agent-busy] 客户端报 session/agent-busy，已清掉 ${id} 的投影缓存`)
+        ctxLoggerInfo(`[dsh-config-sync-plugin] agent-busy：已清掉 ${id} 的投影缓存，下次新建会话会按日志重建`)
+      }
+    } catch (error) {
+      out.ok = false
+      out.error = String((error && error.message) || error)
+    }
+  }
+  out.report = cacheGuardRun(config, { apply: true, source: 'agent-busy' })
+  cacheGuardState.busyHits.unshift({ at: Date.now(), sessionId: id, cleared: out.cleared })
+  if (cacheGuardState.busyHits.length > 20) cacheGuardState.busyHits.length = 20
+  return out
+}
+
+/** 启动后 12 秒首扫一次，之后每 3 分钟一次；设置里关掉就完全不启动。 */
+function scheduleCacheGuard(config) {
+  try {
+    if (cacheGuardState.timer) return
+    if (readSettings(dshHomeOf(config)).cacheGuard === false) return
+    const run = () => {
+      try { cacheGuardRun(config, { apply: true, source: 'timer' }) } catch { /* 定时任务不抛 */ }
+    }
+    cacheGuardState.timer = setTimeout(run, 12 * 1000)
+    try { cacheGuardState.timer.unref?.() } catch { }
+    cacheGuardState.interval = setInterval(run, 3 * 60 * 1000)
+    try { cacheGuardState.interval.unref?.() } catch { }
+  } catch { /* 定时器起不来不影响插件其它功能 */ }
+}
+
+function cacheGuardSnapshot(config) {
+  const dshHome = dshHomeOf(config)
+  const settings = readSettings(dshHome)
+  return {
+    enabled: settings.cacheGuard !== false,
+    scans: cacheGuardState.scans,
+    lastScanAt: cacheGuardState.lastScanAt,
+    lastApplyAt: cacheGuardState.lastApplyAt,
+    lastStale: cacheGuardState.lastStale,
+    lastRemoved: cacheGuardState.lastRemoved,
+    lastError: cacheGuardState.lastError,
+    lastTrigger: cacheGuardState.lastTrigger,
+    busyHits: cacheGuardState.busyHits.slice(0, 5),
+    backupDir: join(dshHome, 'logs', 'session-cache-guard-backup'),
+    logPath: join(dshHome, 'logs', 'session-cache-guard.log'),
+  }
+}
+
+async function handleCacheGuard(req, res, config) {
+  if (req.method === 'GET') {
+    const report = cacheGuardRun(config, { apply: false, source: 'panel' })
+    sendJson(res, 200, {
+      ok: true,
+      applied: false,
+      state: cacheGuardSnapshot(config),
+      scanned: report.scanned,
+      blank: report.blank,
+      staleCount: report.staleCount,
+      stale: report.stale || [],
+      removed: [],
+      errors: report.errors || [],
+    })
+    return
+  }
+  if (req.method !== 'POST') { sendJson(res, 405, { ok: false, error: 'GET/POST only' }); return }
+  if (!originAllowed(req)) { sendJson(res, 403, { ok: false, error: 'cross-origin request rejected' }); return }
+  try {
+    const raw = await readBody(req)
+    const body = raw.trim() ? JSON.parse(raw) : {}
+    const action = String(body.action || 'scan')
+    if (action === 'scan') {
+      const report = cacheGuardRun(config, { apply: false, source: 'panel' })
+      sendJson(res, 200, {
+        ok: true,
+        applied: false,
+        state: cacheGuardSnapshot(config),
+        scanned: report.scanned,
+        blank: report.blank,
+        staleCount: report.staleCount,
+        stale: report.stale || [],
+        errors: report.errors || [],
+      })
+      return
+    }
+    if (action === 'sweep') {
+      const report = cacheGuardRun(config, { apply: true, source: 'panel' })
+      sendJson(res, 200, {
+        ok: true,
+        applied: true,
+        state: cacheGuardSnapshot(config),
+        scanned: report.scanned,
+        blank: report.blank,
+        staleCount: report.staleCount,
+        stale: report.stale || [],
+        removed: report.removed || [],
+        errors: report.errors || [],
+      })
+      return
+    }
+    if (action === 'clear') {
+      const ids = Array.isArray(body.ids) ? body.ids.map((x) => String(x || '').trim()).filter(Boolean) : []
+      if (ids.length === 0) throw new Error(t('ids 不能为空', 'ids must not be empty'))
+      const out = clearSessionCaches(dshHomeOf(config), ids, { reason: 'panel' })
+      sendJson(res, 200, { ok: true, applied: true, removed: out.removed || [], errors: out.errors || [], state: cacheGuardSnapshot(config) })
+      return
+    }
+    if (action === 'busy') {
+      const out = cacheGuardOnBusy(config, body.sessionId)
+      sendJson(res, 200, out)
+      return
+    }
+    throw new Error(t('action 只能是 scan / sweep / clear / busy', 'action must be one of scan / sweep / clear / busy'))
+  } catch (error) {
+    sendJson(res, 400, { ok: false, error: String((error && error.message) || error) })
+  }
+}
 
 async function handleFeedback(req, res, config) {
   const dshHome = config?.dshHome || process.env.DSH_HOME || join(homedir(), '.dsh')
@@ -4177,6 +4375,7 @@ async function handleFeedback(req, res, config) {
 
 export function apply(ctx, config) {
   try {
+    try { loggerRef = ctx?.logger || null } catch { }
     ctx.inject(['webServer'], (scoped) => {
       // 每个请求按 accept-language 决定返回中文还是英文：AsyncLocalStorage 让 t() 在
       // 任何异步后续里都能读到本次请求的语言，不用把语言参数一层层往下传。
@@ -4231,6 +4430,12 @@ export function apply(ctx, config) {
         path: ROUTE_FEEDBACK,
         handler: withLang(handleFeedback),
       }))
+      // 0.3.68：会话投影缓存守卫（GET 只读扫描 / POST scan|sweep|clear|busy）
+      scoped.effect(() => scoped.webServer.register({
+        kind: 'exact',
+        path: ROUTE_CACHE_GUARD,
+        handler: withLang(handleCacheGuard),
+      }))
     })
     // 开关打开才排一次启动检查（默认关 = 什么都不做）
     scheduleAutoStart(config)
@@ -4238,6 +4443,8 @@ export function apply(ctx, config) {
     // status 不用再为首屏那 2.5 秒的 ls-remote 埋单。
     typeof setTimeout === 'function' ? setTimeout(() => { try { warmRemoteProbe(config) } catch { } }, 300) : null
     installQuitWhenAllWindowsClosed(ctx)
+    // 0.3.68：会话投影缓存守卫的定时扫描（默认开，设置里可关）
+    scheduleCacheGuard(config)
   } catch (error) {
     // 不抛：缺 webServer 的 profile 里这个插件静默不激活即可
     try { ctx.logger?.warn?.(`[${PACKAGE_ID}] webServer 不可用，设置页面板不会出现：${error}`) } catch { }

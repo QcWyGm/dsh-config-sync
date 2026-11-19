@@ -94,7 +94,7 @@ function check(label, cond, detail = '') {
 }
 
 console.log('== dsh-config-sync-plugin 宿主半身自检 ==')
-check('apply() 注册了路由', routes.size === 10 && routes.has('/config-sync/update') && routes.has('/config-sync/scope') && routes.has('/config-sync/extra-config') && routes.has('/config-sync/conflict') && routes.has('/config-sync/roots') && routes.has('/config-sync/feedback'), `实际 ${routes.size} 条：${[...routes.keys()].join(', ')}`)
+check('apply() 注册了路由', routes.size === 11 && routes.has('/config-sync/update') && routes.has('/config-sync/scope') && routes.has('/config-sync/extra-config') && routes.has('/config-sync/conflict') && routes.has('/config-sync/roots') && routes.has('/config-sync/feedback') && routes.has('/config-sync/cache-guard'), `实际 ${routes.size} 条：${[...routes.keys()].join(', ')}`)
 
 const status = await call('/config-sync/status', { headers: { host: 'localhost:3080' } })
 const body = JSON.parse(status.body || '{}')
@@ -1457,6 +1457,70 @@ console.log('== 0.3.54：三处纯性能改动（行为不变） ==')
   check('空扫描结果不写成 `,$res`（否则空仓库误报 1 个超限文件 0.0 MB）',
     sync54.includes('function Get-OversizedHistory') && !/^\s*return ,\$res\b/m.test(sync54),
     'Get-OversizedHistory 的返回值')
+}
+
+console.log('== 0.3.68：会话投影缓存守卫（agent-busy 自动清缓存） ==')
+{
+  const guardSrc = readFileSync(join(pluginRootSelf, 'runtime', 'tools', 'session-cache-guard.mjs'), 'utf8')
+  const indexSrc = readFileSync(join(pluginRootSelf, 'index.js'), 'utf8')
+  const clientSrc = readFileSync(join(pluginRootSelf, 'client.js'), 'utf8')
+
+  check('守卫库导出 runGuard / clearSessionCaches / appendGuardLog / scanSessionCaches',
+    /export function runGuard/.test(guardSrc) && /export function clearSessionCaches/.test(guardSrc)
+    && /export function appendGuardLog/.test(guardSrc) && /export function scanSessionCaches/.test(guardSrc))
+  check('判定同时要求：缓存标空 + 日志里有对话 + 日志比缓存新',
+    guardSrc.includes('if (rec.blank !== true) continue')
+    && guardSrc.includes('const progressed = head.hasTurn || head.hasUser')
+    && guardSrc.includes('head.tailSeq <= rec.maxSeq'), '守卫的三重判据')
+  check('清理只挪走不改内容：写备份目录、全程不 unlink',
+    guardSrc.includes("'session-cache-guard-backup'") && guardSrc.includes('renameSync')
+    && !guardSrc.includes('unlinkSync'), '只 rename 到备份目录')
+  check('宿主导入守卫库并注册 /config-sync/cache-guard',
+    indexSrc.includes("from './runtime/tools/session-cache-guard.mjs'")
+    && indexSrc.includes("const ROUTE_CACHE_GUARD = '/config-sync/cache-guard'")
+    && indexSrc.includes('handleCacheGuard'), 'index.js 的接线')
+  check('设置里有 cacheGuard 开关（默认开：raw.cacheGuard !== false）',
+    indexSrc.includes('cacheGuard: raw.cacheGuard !== false')
+    && indexSrc.includes('cacheGuard: s.cacheGuard !== false'), 'readSettings / writeSettings')
+  check('启动后挂定时扫描，且受开关控制',
+    indexSrc.includes('function scheduleCacheGuard(config)')
+    && indexSrc.includes('scheduleCacheGuard(config)')
+    && indexSrc.includes("readSettings(dshHomeOf(config)).cacheGuard === false"), 'scheduleCacheGuard')
+  check('status 里带 cacheGuard 状态快照',
+    indexSrc.includes('cacheGuard: cacheGuardSnapshot(config)'), 'inspect() 的返回体')
+  check('四种 action：scan / sweep / clear / busy',
+    indexSrc.includes("action === 'scan'") && indexSrc.includes("action === 'sweep'")
+    && indexSrc.includes("action === 'clear'") && indexSrc.includes("action === 'busy'"), 'handleCacheGuard 的分支')
+  check('客户端包了 sessions.create，撞 agent-busy 才介入',
+    clientSrc.includes('function guardSessionCreate(sessions)')
+    && clientSrc.includes('sessions.create = async function patchedCreate')
+    && clientSrc.includes("const BUSY_RE = /session\\/agent-busy"), 'client.js 的守卫')
+  check('重试前去掉旧 sessionId（否则会再撞同一堵墙）',
+    clientSrc.includes('delete retry.sessionId'), 'patchedCreate 的重试参数')
+  check('客户端把 sessionId 上报给宿主',
+    clientSrc.includes("action: 'busy', sessionId: sessionId || ''"), 'reportAgentBusy')
+
+  const gGet = await call('/config-sync/cache-guard', { headers: { host: 'localhost:3080' } })
+  const gBody = JSON.parse(gGet.body || '{}')
+  check('GET /config-sync/cache-guard 返回 200 且只读',
+    gGet.statusCode === 200 && gBody.ok === true && typeof gBody.scanned === 'number'
+    && Array.isArray(gBody.stale) && typeof gBody.staleCount === 'number', gGet.body.slice(0, 200))
+  check('GET 不动手：applied=false 且 removed 为空',
+    gBody.applied === false && Array.isArray(gBody.removed) && gBody.removed.length === 0, gGet.body.slice(0, 200))
+  const gCross = await call('/config-sync/cache-guard', {
+    method: 'POST',
+    headers: { host: 'localhost:3080', 'sec-fetch-site': 'cross-site' },
+    body: JSON.stringify({ action: 'sweep' }),
+  })
+  check('跨站 POST 被 403 挡住', gCross.statusCode === 403, String(gCross.statusCode))
+  const gClear = await call('/config-sync/cache-guard', {
+    method: 'POST',
+    headers: { host: 'localhost:3080' },
+    body: JSON.stringify({ action: 'clear', ids: [] }),
+  })
+  const gClearBody = JSON.parse(gClear.body || '{}')
+  check('clear 不给 ids 时 400 且 ok=false',
+    gClear.statusCode === 400 && gClearBody.ok === false, gClear.body.slice(0, 160))
 }
 
 console.log('')

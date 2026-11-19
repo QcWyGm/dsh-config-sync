@@ -3185,6 +3185,67 @@ window.__ModuleLoader__.load({
       } catch { /* 插件路由还没起好就静默跳过，面板里仍会显示同一结果 */ }
     }
 
+    // ==================== 0.3.68：会话缓存守卫（客户端半身） ====================
+    // 宿主侧没法拦 agent-busy（它是 sessionController 内部抛的 RemoteError），
+    // 所以在这里包一层 sessions.create：撞上就上报、清缓存、去掉旧 sessionId 重试一次。
+    const BUSY_RE = /session\/agent-busy|is owned by subagent routing/i
+
+    /** 从错误里抠出撞车的 sessionId；不是 agent-busy 就返回空串。 */
+    function busySessionId(error) {
+      const text = String((error && (error.message || error)) || '')
+      if (!BUSY_RE.test(text)) return ''
+      const quoted = text.match(/session\s+"([^"]+)"/i) || text.match(/session\s+'([^']+)'/i)
+      return quoted ? String(quoted[1] || '') : ''
+    }
+
+    /** 告诉宿主半身「这条会话撞了 agent-busy」，让它清缓存。失败也不影响新建会话。 */
+    async function reportAgentBusy(sessionId) {
+      try {
+        const res = await fetch('/config-sync/cache-guard', {
+          method: 'POST',
+          cache: 'no-store',
+          credentials: 'same-origin',
+          headers: jsonHeaders,
+          body: JSON.stringify({ action: 'busy', sessionId: sessionId || '' }),
+        })
+        if (!res.ok) return false
+        const body = await res.json()
+        return Boolean(body && body.ok)
+      } catch { return false }
+    }
+
+    /**
+     * 包一层 sessions.create：
+     * 正常路径零开销；只有抛 agent-busy 时才清缓存、把可复用的旧 sessionId 去掉重试一次。
+     * 返回还原函数，插件卸载时把 create 换回去（宿主热重载不残留）。
+     */
+    function guardSessionCreate(sessions) {
+      if (!sessions || typeof sessions.create !== 'function') return () => { }
+      const original = sessions.create
+      let installed = true
+      sessions.create = async function patchedCreate(opts) {
+        try {
+          return await original.call(this, opts)
+        } catch (error) {
+          const sessionId = busySessionId(error)
+          if (sessionId === '') throw error
+          try { console.warn('[dsh-config-sync] new session hit agent-busy:', sessionId, '→ 清投影缓存后重试') } catch { }
+          const reported = await reportAgentBusy(sessionId)
+          // 只有宿主确实动了缓存才重试，否则原错误照抛，免得反复撞同一堵墙。
+          if (!reported) throw error
+          const retry = { ...(opts || {}) }
+          delete retry.sessionId
+          return await original.call(this, retry)
+        }
+      }
+      return () => {
+        try {
+          if (installed) sessions.create = original
+        } catch { }
+        installed = false
+      }
+    }
+
     function apply(ctx) {
       // 侧栏行 + 配对面板：两个 slot 必须各自 inject（嵌套），再在作用域里成对 register。
       // 只 inject('main') 就向 sidebar.panellist 注册是无效的——区域还没被注入，注册落不下去。
@@ -3220,6 +3281,25 @@ window.__ModuleLoader__.load({
 
       // 界面还没完全起来时 fetch 可能扑空，所以稍等一会儿再查；只查一次，不轮询。
       try { setTimeout(announceLastResult, 1500) } catch { }
+
+      // 0.3.68：给客户端的 sessions 服务套上 agent-busy 自愈钩子。
+      // 拿不到 sessions（老版本宿主 / 服务还没起来）就静默跳过，面板功能不受影响。
+      try {
+        if (typeof ctx.get === 'function') {
+          const sessions = ctx.get('sessions')
+          if (sessions) {
+            const off = guardSessionCreate(sessions)
+            if (typeof ctx.effect === 'function') ctx.effect(() => () => { try { off() } catch { } })
+          }
+        } else if (typeof ctx.inject === 'function') {
+          ctx.inject(['sessions'], (scoped) => {
+            const off = guardSessionCreate(scoped.sessions || scoped.get('sessions'))
+            return () => { try { off() } catch { } }
+          })
+        }
+      } catch (error) {
+        try { console.warn('[dsh-config-sync] session cache guard install failed:', error) } catch { }
+      }
     }
 
     exports.name = name
