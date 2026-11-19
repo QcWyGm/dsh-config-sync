@@ -998,6 +998,13 @@ if (!existsSync(repoArg) || !existsSync(pluginRuntime) || !repoReady) {
   const toolSame = existsSync(mirrorTool) && existsSync(sourceTool) && readFileSync(mirrorTool).equals(readFileSync(sourceTool))
   check('执行体副本与插件 runtime 逐字节一致：tools/fix-session-cwd.mjs', toolSame,
     existsSync(mirrorTool) ? '内容已漂移，跑 tools/sync-plugin-mirror.ps1 重新同步' : '配置仓库没有 tools/fix-session-cwd.mjs')
+  for (const tname of ['session-log-guard.mjs', 'session-log-lib.mjs', 'bili-state.mjs']) {
+    const m = join(repoArg, 'tools', tname)
+    const s = join(pluginRuntime, 'tools', tname)
+    const ok = existsSync(m) && existsSync(s) && readFileSync(m).equals(readFileSync(s))
+    check(`执行体副本与插件 runtime 逐字节一致：tools/${tname}`, ok,
+      !existsSync(m) ? `配置仓库没有 tools/${tname}` : (existsSync(s) ? '内容已漂移，跑 tools/sync-plugin-mirror.ps1 重新同步' : `插件 runtime 没有 tools/${tname}`))
+  }
 }
 
 // 内置运行时链接修复（0.3.24）：客户端升级会清空 resources\runtime，
@@ -1524,4 +1531,64 @@ console.log('== 0.3.68：会话投影缓存守卫（agent-busy 自动清缓存�
 }
 
 console.log('')
+console.log('== billion-context 压缩状态跨机搬运 ==')
+{
+  // DSH 原生 compaction 被 bili 接管后，真正的压缩记录在 bili 自己的 SQLite 里；
+  // 只带会话日志会让另一台机器把未压缩的全量 surface 发出去并报 CONTEXT_WINDOW_EXCEEDED。
+  const toolPath = join(pluginRootSelf, 'tools', 'bili-state.mjs')
+  const toolRuntime = join(pluginRuntime, 'tools', 'bili-state.mjs')
+  check('提供 tools/bili-state.mjs', existsSync(toolPath), toolPath)
+  check('runtime/tools 下也有同一份（tgz 只打 runtime 时也在包里）',
+    existsSync(toolRuntime) && existsSync(toolPath) && readFileSync(toolRuntime).equals(readFileSync(toolPath)))
+  const biliSrc = existsSync(toolPath) ? readFileSync(toolPath, 'utf8') : ''
+  check('支持 export / import / sync / probe 四个子命令',
+    ["'export'", "'import'", "'sync'", "'probe'"].every((k) => biliSrc.includes(`cmd === ${k}`)))
+  check('导出默认不带 messages 正文（体积可控）',
+    biliSrc.includes("omitted: ['messages'") || biliSrc.includes('omitted: [\'messages\''), 'export 的 omitted 字段')
+  check('导出不写 metadata_json（2.4MB 级缓存，且 NOT NULL 会炸）',
+    biliSrc.includes('delete row.metadata_json'))
+  check('本机没有 bili 时静默跳过（noBili 而不是报错）',
+    biliSrc.includes('noBili'))
+  check('BILI_DATA_DIR 指到哪就用哪，不回头猜用户主目录',
+    biliSrc.includes('显式指定即视为权威') || biliSrc.includes('return null\r\n  }'))
+
+  const commonText2 = existsSync(join(pluginRuntime, 'dsh-sync-common.ps1')) ? readFileSync(join(pluginRuntime, 'dsh-sync-common.ps1'), 'utf8') : ''
+  const captureText2 = existsSync(join(pluginRuntime, 'capture.ps1')) ? readFileSync(join(pluginRuntime, 'capture.ps1'), 'utf8') : ''
+  const applyText2 = existsSync(join(pluginRuntime, 'apply.ps1')) ? readFileSync(join(pluginRuntime, 'apply.ps1'), 'utf8') : ''
+  check('common 提供 Invoke-BiliStateSync / Write-BiliStateSyncReport',
+    /function\s+Invoke-BiliStateSync\s*\{/.test(commonText2) && /function\s+Write-BiliStateSyncReport\s*\(/.test(commonText2))
+  check('capture 推送时导出压缩状态（否则 B 机拿不到）',
+    /Invoke-BiliStateSync\s+-Mode\s+'export'/.test(captureText2))
+  check('apply 拉取时导入压缩状态',
+    /Invoke-BiliStateSync\s+-Mode\s+'import'/.test(applyText2))
+  check('apply 只在仓库里有该目录时才导入（首次导出前为空属正常）',
+    /Test-Path\s+-LiteralPath\s+\$biliRepo/.test(applyText2))
+  check('压缩状态按会话导出，不是整库拷贝',
+    captureText2.includes('$touchedSids') && captureText2.includes(`'billion_context'`))
+}
+
+console.log('')
+console.log('== 同步清单的两类新提示 ==')
+{
+  const commonText3 = existsSync(join(pluginRuntime, 'dsh-sync-common.ps1')) ? readFileSync(join(pluginRuntime, 'dsh-sync-common.ps1'), 'utf8') : ''
+  const applyText3 = existsSync(join(pluginRuntime, 'apply.ps1')) ? readFileSync(join(pluginRuntime, 'apply.ps1'), 'utf8') : ''
+  const postText3 = existsSync(join(pluginRuntime, 'post-exit.ps1')) ? readFileSync(join(pluginRuntime, 'post-exit.ps1'), 'utf8') : ''
+  const indexText3 = existsSync(join(pluginRootSelf, 'index.js')) ? readFileSync(join(pluginRootSelf, 'index.js'), 'utf8') : ''
+  const clientText3 = existsSync(join(pluginRootSelf, 'client.js')) ? readFileSync(join(pluginRootSelf, 'client.js'), 'utf8') : ''
+  check('common 的 byKind 收 plugin-missing / context-state',
+    commonText3.includes("'plugin-missing'") && commonText3.includes("'context-state'"))
+  check('apply 记 plugin-missing（插件没装好要能看见）',
+    /Add-SyncNotice\s+-Kind\s+'plugin-missing'/.test(applyText3))
+  check('压缩状态缺失记 context-state（压缩状态没跟过来要能看见）',
+    /Add-SyncNotice\s+-Kind\s+'context-state'/.test(commonText3))
+  check('post-exit 汇总里带这两类标题',
+    postText3.includes('plugin-missing') && postText3.includes('context-state'))
+  check('index.js 白名单含这两类（否则会被降级成 skipped）',
+    indexText3.includes("'plugin-missing'") && indexText3.includes("'context-state'"))
+  check('client.js 给这两类中文文案',
+    clientText3.includes("'plugin-missing'") && clientText3.includes("'context-state'"))
+}
+
+console.log('')
 process.exit(failures === 0 ? 0 : 1)
+

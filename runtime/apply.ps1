@@ -672,6 +672,16 @@ function Sync-ConversationApply {
       Warn ('没找到可用于修正会话头部的执行器（Node / 客户端 Electron 都没找到，AppRoot={0}），本次未修正' -f $AppRoot)
     }
   }
+  # 5) billion-context 压缩状态：DSH 原生 compaction 被 bili 接管后，真正的压缩记录在 bili 自己的
+  #    SQLite（…\billion-context\sessions\index.db）里，不在 .dsh 下。不带这份状态，长会话在本机
+  #    继续时会以未压缩的全量 surface 发给 provider，报 CONTEXT_WINDOW_EXCEEDED。
+  $biliRepo = Join-Path $convDir 'billion_context'
+  if (Test-Path -LiteralPath $biliRepo) {
+    $bs = Invoke-BiliStateSync -Mode 'import' -RepoDir $biliRepo -AppRoot $AppRoot -ScriptRoot $PSScriptRoot -RepoRoot $RepoRoot
+    Write-BiliStateSyncReport $bs $DshHome
+  } else {
+    Say '  仓库里没有 billion-context 压缩状态（首次导出前为空，属正常）'
+  }
   Ok ('会话数据全量还原：{0} 个目录映射，写入/更新 {1} 个文件、备份 {2} 个（四块数据字节保真，会话只增不删）' -f $dirMap.Count, $nAdd, $nBk)
 }
 
@@ -888,9 +898,12 @@ if ($dropped.Count -gt 0) { Ok "已剔除 $($dropped.Count) 个实验性 bundle�
 $localPluginMap = [ordered]@{
   'dsh-our-free-model-2.8.0'      = 'dsh-our-free-model'
   'dsh-purge-1.4.0'               = 'dsh-purge'
+  'dsh-config-sync-plugin-0.3.69' = 'dsh-config-sync-plugin'
+  'dsh-config-sync-plugin-0.3.68' = 'dsh-config-sync-plugin'
   'dsh-config-sync-plugin-0.3.67' = 'dsh-config-sync-plugin'
-        'dsh-config-sync-plugin-0.3.65' = 'dsh-config-sync-plugin'
-        'dsh-config-sync-plugin-0.3.64' = 'dsh-config-sync-plugin'
+  'dsh-config-sync-plugin-0.3.66' = 'dsh-config-sync-plugin'
+  'dsh-config-sync-plugin-0.3.65' = 'dsh-config-sync-plugin'
+  'dsh-config-sync-plugin-0.3.64' = 'dsh-config-sync-plugin'
   'dsh-config-sync-plugin-0.3.63' = 'dsh-config-sync-plugin'
   'dsh-config-sync-plugin-0.3.62' = 'dsh-config-sync-plugin'
   'dsh-config-sync-plugin-0.3.61' = 'dsh-config-sync-plugin'
@@ -1332,6 +1345,7 @@ if ($needExtract.Count -gt 0) {
       Ok "已解压并部署：$final"
     } else {
       Warn "仓库里没有 $dirName 的归档，跳过（该插件会装不上）"
+      Add-SyncNotice -Kind 'plugin-missing' -Path $dirName -Reason ('仓库的 local-plugins\ 里没有这个源码插件包的归档（.tgz/.zip），本机装不上。在主力机跑 capture.ps1 -PackLocalPlugins 打包并推送，然后在本机重新拉取一次。')
     }
   }
   Remove-Item -LiteralPath $staging -Recurse -Force -ErrorAction SilentlyContinue
@@ -1479,8 +1493,21 @@ foreach ($name in $deps.PSObject.Properties.Name) {
   $probe = Join-Path $ProfileDir ("node_modules\" + ($name -replace '/', '\'))
   if (-not (Test-Path -LiteralPath $probe)) { $missing += $name }
 }
-if ($missing.Count -eq 0) { Ok "全部 $(@($deps.PSObject.Properties).Count) 个插件依赖已就位" }
-else { Warn ("缺少 $($missing.Count) 个插件：" + ($missing -join ', ')) }
+if ($missing.Count -eq 0) {
+  Ok "全部 $(@($deps.PSObject.Properties).Count) 个插件依赖已就位"
+} else {
+  Warn ("缺少 $($missing.Count) 个插件：" + ($missing -join ', '))
+  # 拉取只还原配置文件，不会替本机安装依赖：仓库里没有这些插件的实体（它们该由 pnpm install 从
+  # registry 装，或从 local-plugins 的归档解压）。把每一个都记进未同步清单，面板会常驻提示
+  # 「装好插件后再拉取一次」，否则用户只看到插件页少几项、不知道下一步做什么。
+  foreach ($nm in $missing) {
+    $why = '插件未安装到本机：拉取不会替你装依赖。'
+    if ($SkipInstall) { $why += '本次带了 -SkipInstall，pnpm install 被跳过；' }
+    $why += '在 profile 目录执行一次 pnpm install（或去掉 -SkipInstall 重跑本脚本），装好后重新拉取一次。'
+    Add-SyncNotice -Kind 'plugin-missing' -Path $nm -Reason $why
+  }
+  Warn '已把这些插件记进未同步清单（sync-notices.json），面板会一直提示到装好并重新拉取为止。'
+}
 
 # bundle 可解析性检查：清单里写了、本机却没有 → 启动期 entry loading 必挂（整个应用起不来，不是功能不可用）
 # 解析顺序与 DSH 一致：先 profile\node_modules（pnpm 装的），再 <AppRoot>\resources\app\dsh\node_modules（宿主自带）
@@ -1497,6 +1524,9 @@ if ($unresolved.Count -eq 0) {
 } else {
   Warn "以下 $($unresolved.Count) 个 bundle 在本机找不到，启动会在 entry loading 阶段失败："
   $unresolved | ForEach-Object { Warn "  - $_" }
+  foreach ($ub in $unresolved) {
+    Add-SyncNotice -Kind 'plugin-missing' -Path $ub -Reason ('bundle 在本机解析不到：插件没装好（pnpm install 没成功，或仓库里没有这个插件的归档）。装好后重新拉取一次；若它是宿主绑定的实验性 bundle，删掉本机 profile\package.json 里那一行。')
+  }
   if (-not $ForceBundles) {
     Die ("已停止，先别启动。处理：①若上面「缺少插件」不为空，说明 pnpm install 没成功；" +
          "②若是宿主绑定的实验性 bundle，直接删掉本机 profile\package.json 里那一行；" +

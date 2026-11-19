@@ -1926,6 +1926,8 @@ window.__ModuleLoader__.load({
     function noticesBlock(notices) {
       if (!notices || !notices.total) return null
       const kindLabel = (k) => ({
+        'plugin-missing': M('插件没装', 'Plugin missing'),
+        'context-state': M('缺压缩状态', 'No compaction state'),
         'too-large': M('超过单文件上限', 'Over size cap'),
         history: M('历史里的超限文件', 'Oversized in history'),
         failed: M('失败', 'Failed'),
@@ -1945,6 +1947,8 @@ window.__ModuleLoader__.load({
         if (notices.byKind.history) parts.push(M(`${notices.byKind.history} 个在历史提交里`, `${notices.byKind.history} already in history`))
         if (notices.byKind.failed) parts.push(M(`${notices.byKind.failed} 个失败`, `${notices.byKind.failed} failed`))
         if (notices.byKind.skipped) parts.push(M(`${notices.byKind.skipped} 个被跳过`, `${notices.byKind.skipped} skipped`))
+        if (notices.byKind['plugin-missing']) parts.push(M(`${notices.byKind['plugin-missing']} 个插件没装`, `${notices.byKind['plugin-missing']} plugin(s) missing`))
+        if (notices.byKind['context-state']) parts.push(M(`${notices.byKind['context-state']} 个会话缺压缩状态`, `${notices.byKind['context-state']} session(s) without compaction state`))
       }
       return h('div', {
         style: {
@@ -1953,11 +1957,34 @@ window.__ModuleLoader__.load({
           background: 'color-mix(in srgb, var(--dsw-alias-state-warn-primary) 8%, transparent)',
         },
       },
-      h('div', { style: { fontSize: '12px', fontWeight: 600, color: 'var(--dsw-alias-state-warn-primary)' } },
-        M(`上次同步有 ${notices.total} 个文件没同步${parts.length ? `（${parts.join('、')}）` : ''}`, `Last sync left ${notices.total} file(s) unsynced${parts.length ? ` (${parts.join(', ')})` : ''}`)),
+      // 标题按「实际是哪类问题」说人话：插件没装/缺压缩状态不是「文件没同步」，
+      // 混在一起会让人以为磁盘上少了东西。
+      (() => {
+        const fileish = (notices.byKind && (notices.byKind['too-large'] || notices.byKind.history || notices.byKind.failed || notices.byKind.skipped)) || 0
+        const pluginN = (notices.byKind && notices.byKind['plugin-missing']) || 0
+        const stateN = (notices.byKind && notices.byKind['context-state']) || 0
+        const headline = fileish
+          ? M(`上次同步有 ${notices.total} 项没处理完${parts.length ? `（${parts.join('、')}）` : ''}`,
+              `Last sync left ${notices.total} item(s) unresolved${parts.length ? ` (${parts.join(', ')})` : ''}`)
+          : (pluginN || stateN)
+            ? M(`上次同步后有 ${notices.total} 项需要处理${parts.length ? `（${parts.join('、')}）` : ''}`,
+                `After the last sync ${notices.total} item(s) need attention${parts.length ? ` (${parts.join(', ')})` : ''}`)
+            : M(`上次同步有 ${notices.total} 项没处理完`, `Last sync left ${notices.total} item(s) unresolved`)
+        return h('div', { style: { fontSize: '12px', fontWeight: 600, color: 'var(--dsw-alias-state-warn-primary)' } }, headline)
+      })(),
       h('div', { style: { ...S.footnote, marginTop: '3px' } },
-        M('这些文件仍在本机磁盘上，只是没进仓库；下次同步会自动复查。',
-          'They are still on this machine, just not in the repo; the next sync re-checks them.')),
+        M('文件类的仍在本机磁盘上，只是没进仓库；下次同步会自动复查。插件类要先在本机装好，再拉一次。',
+          'File items are still on this machine, just not in the repo; the next sync re-checks them. Plugin items need an install here first, then pull again.')),
+      (notices.byKind && notices.byKind['plugin-missing'])
+        ? h('div', { style: { ...S.footnote, marginTop: '3px', color: 'var(--dsw-alias-state-warn-primary)' } },
+          M('插件没装：拉取只还原配置，不替你装依赖。先在本机 profile 目录执行 pnpm install（或去掉 -SkipInstall 重跑 apply.ps1），装好后重新拉取一次。',
+            'Missing plugins: pulling only restores config, it does not install dependencies. Run pnpm install in the profile dir first (or re-run apply.ps1 without -SkipInstall), then pull again.'))
+        : null,
+      (notices.byKind && notices.byKind['context-state'])
+        ? h('div', { style: { ...S.footnote, marginTop: '3px', color: 'var(--dsw-alias-state-warn-primary)' } },
+          M('会话缺压缩状态：billion-context 的压缩记录没同步过来，这些会话在本机可能报上下文超长。在主力机重新推送一次（capture 会带上压缩状态），或在本机设置 BILLION_CONTEXT_PLUGIN=0 让 DSH 原生压缩兜底。',
+            'Missing compaction state: billion-context blocks were not synced, so those sessions may hit a context-overflow error here. Push again from the main machine, or set BILLION_CONTEXT_PLUGIN=0 here to fall back to DSH native compaction.'))
+        : null,
       h('div', { style: { marginTop: '4px' } }, rows),
       notices.truncated
         ? h('div', { style: { ...S.footnote, marginTop: '3px' } },
@@ -3185,7 +3212,7 @@ window.__ModuleLoader__.load({
       } catch { /* 插件路由还没起好就静默跳过，面板里仍会显示同一结果 */ }
     }
 
-    // ==================== 0.3.68：会话缓存守卫（客户端半身） ====================
+    // ==================== 0.3.69：会话缓存守卫（客户端半身） ====================
     // 宿主侧没法拦 agent-busy（它是 sessionController 内部抛的 RemoteError），
     // 所以在这里包一层 sessions.create：撞上就上报、清缓存、去掉旧 sessionId 重试一次。
     const BUSY_RE = /session\/agent-busy|is owned by subagent routing/i
@@ -3282,7 +3309,7 @@ window.__ModuleLoader__.load({
       // 界面还没完全起来时 fetch 可能扑空，所以稍等一会儿再查；只查一次，不轮询。
       try { setTimeout(announceLastResult, 1500) } catch { }
 
-      // 0.3.68：给客户端的 sessions 服务套上 agent-busy 自愈钩子。
+      // 0.3.69：给客户端的 sessions 服务套上 agent-busy 自愈钩子。
       // 拿不到 sessions（老版本宿主 / 服务还没起来）就静默跳过，面板功能不受影响。
       try {
         if (typeof ctx.get === 'function') {

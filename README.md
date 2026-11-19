@@ -15,7 +15,7 @@ DSH 插件：左侧栏多一行「配置同步」，点开是整页体检面板�
 
 | 方式 | 命令 / 入口 | 说明 |
 |---|---|---|
-| npm | `npm i dsh-config-sync-plugin` | 适合把它当依赖管理，或在 profile 的 `package.json` 里写 `"dsh-config-sync-plugin": "^0.3.68"` 后 `pnpm i`；包名与 `cordis.patch.yml` 里注册的名字、插件目录 `dsh-config-sync-plugin-<ver>` 一致 |
+| npm | `npm i dsh-config-sync-plugin` | 适合把它当依赖管理，或在 profile 的 `package.json` 里写 `"dsh-config-sync-plugin": "^0.3.69"` 后 `pnpm i`；包名与 `cordis.patch.yml` 里注册的名字、插件目录 `dsh-config-sync-plugin-<ver>` 一致 |
 | 插件市场 | 客户端「插件市场 → 发现」搜「配置同步」 | 走 `market-index.json` 登记的 git 提交，版本与 README 对齐 |
 | 离线 tgz | `releases\dsh-config-sync-plugin-<ver>.tgz` | GitHub Release 附件，适合内网机器；面板「更新」按钮下载的也是它 |
 
@@ -581,6 +581,44 @@ pwsh -File sync.ps1 push -ScanHistory
 **上下文超长闭环**：之前因 A 机 token 计量缓存超窗的 3 个会话，现在都正确归到对应工作区——`session-58db748a`（1,553,981 tokens）→ DSH破甲、`session-bbf3e5c9`（1,080,398）→ SquadLink、`session-a1061521`（1,001,058）→ dsh-config-sync。同时 B 机 projcache 为空，DSH 启动时会从会话日志按 B 机实际模型配置重建 token 计量并触发 compaction，不会再把 A 机超窗缓存直接怼给 provider。
 
 非故障警告（日志已确认无害）：`--D-DeepSeekHarness-comfyUI--` / `--dsh-im-forward-confirm--` 找不到对应工作区（特殊会话目录）；`-SkipInstall` 跳过 21 个 registry 插件（隔离环境离线，真机有网时不加即补齐）；`dsh-config-sync-0.1.0` / `extra/manifest.json` 无归档正常跳过；`dsh-config-sync` 槽位有本机多出的残留文件（加 `-PruneWorkspace` 才删）。
+
+### 2026-11-19：发版 0.3.69（跨机搬运 billion-context 压缩状态 + 同步清单两类新提示）
+
+**问题**：长会话在 A 机能接着聊，拉取到 B 机后一发消息就报上下文超长。
+
+原因是压缩分两层：A 机的 DSH 原生 compaction 已被 billion-context **禁用**（`billion-context/dist/agent/dsh-compaction-gate.js` 在 `__BILI_DSH_COMPACTION_VERDICT__ === "active"` 时把 `@deepseek-ai/dsh-compaction-basic`、`@deepseek-ai/dsh-command-compact` 全部改成 `disabled:true`），真正的压缩是 bili 在**出口侧**做的——它把 2.3 M 的 surface 压成 160 K 再发给 provider。而 bili 的压缩记录不在 `.dsh` 里，在独立的 SQLite：`%LOCALAPPDATA%\billion-context\sessions\index.db`（表 `sessions` / `blocks` / `content` / `refs` / `messages` / `checkpoints` …）。
+
+同步过去只有 `sessions` / `attachments` / `vision_router_session_policy` 三块，**bili 的 index.db 完全没跟着走**。于是 B 机：①没有 DSH 原生压缩（被 bili 禁了）②没有 bili 的压缩记录（bili 认为这是新会话，`max compressible` 不足，阈值不到不压）③把全量 surface 直接发给 provider → `CONTEXT_WINDOW_EXCEEDED`。
+
+**修复**：新增 `tools/bili-state.mjs`，按会话搬运压缩状态，四步都不碰别人的会话。
+
+| 子命令 | 作用 |
+|---|---|
+| `probe` | 列本机 bili 库概况（表、行数、`user_version`） |
+| `export <sessionId> <outFile>` | 导出单会话状态（`sessions` 行 + active `blocks` 行 + 这些 block 的 summary `content`） |
+| `import <inFile> [--dry-run]` | 回灌；按主键跳过已存在的行，可重复执行 |
+| `sync <specJson> <outJson>` | 批量，供 `capture.ps1` / `apply.ps1` 调用（结果写文件，不依赖 stdout） |
+
+体积控制是硬要求，默认导出**刻意不带**三样东西：
+
+- `sessions.metadata_json`（2.4 MB 级缓存；且该列 `NOT NULL`，导出要 `delete row.metadata_json` 让它落 DEFAULT，否则 `NOT NULL constraint failed`）
+- `checkpoints.state_hash` 指向的快照（单条可达 21.89 MB）
+- `messages` / `message_media` 正文（bili 会从 DSH 会话日志自己 ingest）
+
+结果：一条长会话约 **5 MB**（34~35 个 active block、约 7000 条 refs、34 条 summary），落在仓库 `conversations/billion_context/<sessionId>.json`。带 `--all-blocks` / `--full` 才导出全部 block 与 checkpoint 快照。
+
+接入点：`capture.ps1` 在会话块之后对本次变动的 sessionId 调 `-Mode 'export'`；`apply.ps1` 在会话还原之后对 `conversations/billion_context` 调 `-Mode 'import'`。**B 机没装 billion-context 时静默跳过**，打印「本机没有 billion-context，压缩状态跳过（DSH 自带压缩会接管）」，不做任何写入。
+
+**同步清单的两类新提示**（这一版同时解决「B 机没装插件没人告诉你」）：
+
+| kind | 什么时候出现 | 面板怎么说 |
+|---|---|---|
+| `plugin-missing` | `dependencies` 里的插件没装到本机、bundle 无法解析、仓库里没有该 link 插件的归档 | 「插件没装：拉取只还原配置，不替你装依赖。先在本机 profile 目录执行 pnpm install（或去掉 `-SkipInstall` 重跑 apply.ps1），装好后重新拉取一次。」 |
+| `context-state` | bili 压缩状态没同步过来 / 导入失败 / 本机没有 bili | 「会话缺压缩状态：这些会话在本机可能报上下文超长。在主力机重新推送一次，或在本机设 `BILLION_CONTEXT_PLUGIN=0` 让 DSH 原生压缩兜底。」 |
+
+清单落 `~/.dsh/sync-notices.json`，面板常驻显示直到下次同步清掉；`post-exit.ps1` 的结束摘要也按类分组打印。标题按实际类别说人话——纯文件类说「N 项没处理完」，插件/压缩状态类说「N 项需要处理」，不再把插件问题写成「文件没同步」。
+
+**手动兜底**：`node tools/bili-state.mjs probe` 看本机 bili 库；`node tools/bili-state.mjs export <sessionId> <out.json>` 单独导一条；`import --dry-run` 先看会写什么。
 
 ### 2026-11-19：发版 0.3.68（会话投影缓存守卫，治 agent-busy 建会话失败）
 

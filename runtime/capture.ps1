@@ -437,6 +437,8 @@ function Sync-ConversationCapture {
     @{ Src = (Join-Path $DshHome 'storages\vision_router_session_policy\policies');  Dst = 'vision_router_session_policy';                     Remap = $false }
   )
   $nAdd = 0; $nDel = 0
+  # 本次真正写入过的会话 id（用来只导出这些会话的 billion-context 压缩状态）
+  $touchedSids = [System.Collections.Generic.List[string]]::new()
   foreach ($b in $blocks) {
     $dstRoot = Join-Path $convDir $b.Dst
     if (-not (Test-Path -LiteralPath $b.Src)) { Warn ('本机没有会话数据块，跳过：{0}' -f $b.Src); continue }
@@ -471,6 +473,13 @@ function Sync-ConversationCapture {
       if (-not $madeDirs.ContainsKey($dd)) {
         if (-not (Test-Path -LiteralPath $dd)) { New-Item -ItemType Directory -Path $dd -Force | Out-Null }
         $madeDirs[$dd] = $true
+      }
+      if ($b.Dst -eq 'sessions') {
+        $rp = @($rel -split '\\')
+        if ($rp.Count -ge 2) {
+          $sid = [string]$rp[1]
+          if ($sid -and -not $touchedSids.Contains($sid)) { $touchedSids.Add($sid) | Out-Null }
+        }
       }
       if (Test-SessionLogFile $rel) {
         $guardJobs.Add([ordered]@{ Src = $si.FullName; Dst = $d; WriteTo = $d }) | Out-Null
@@ -511,6 +520,16 @@ function Sync-ConversationCapture {
         $nDel++
       }
     }
+  }
+  # 4) billion-context 压缩状态：DSH 原生 compaction 被 bili 接管后，真正的压缩记录在 bili 自己的
+  #    SQLite 里（不在 .dsh 下）。只带会话日志、不带这份状态，另一台机器会把未压缩的全量 surface
+  #    发给 provider 并报 CONTEXT_WINDOW_EXCEEDED。这里按会话导出 blocks/refs/summary。
+  if ($touchedSids.Count -gt 0) {
+    $biliRepo = Join-Path $convDir 'billion_context'
+    $bs = Invoke-BiliStateSync -Mode 'export' -RepoDir $biliRepo -Sessions $touchedSids.ToArray() -AppRoot $AppRoot -ScriptRoot $PSScriptRoot -RepoRoot $RepoRoot
+    Write-BiliStateSyncReport $bs $DshHome
+  } else {
+    Say '  本次没有会话变动，跳过 billion-context 压缩状态导出'
   }
   Ok ('会话数据全量同步：{0} 个目录映射，入库/更新 {1} 个文件、删除 {2} 个（四块数据全部字节保真）' -f $idxEntries.Count, $nAdd, $nDel)
   Say ('  ' + (Get-TreeCmpSummary))

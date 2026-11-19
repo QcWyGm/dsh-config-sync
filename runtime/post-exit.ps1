@@ -169,6 +169,8 @@ function Show-NoticesSummary {
   try { $n = Get-Content -LiteralPath $np -Raw -Encoding utf8 | ConvertFrom-Json } catch { return }
   if (-not $n -or [int]$n.total -le 0) { return }
   $groups = @(
+    @{ Kind = 'plugin-missing'; Title = '插件没装在本机（先装插件，再重新拉取一次）' }
+    @{ Kind = 'context-state';  Title = '会话缺 billion-context 压缩状态（可能报上下文超长）' }
     @{ Kind = 'history';   Title = '历史提交里的超限文件（远端会拒收，需换仓库或清史）' }
     @{ Kind = 'too-large'; Title = '超过单文件上限，未进仓库' }
     @{ Kind = 'failed';    Title = '写入/推送失败' }

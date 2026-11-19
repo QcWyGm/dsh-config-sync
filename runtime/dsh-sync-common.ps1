@@ -31,6 +31,8 @@ function Die($m)  { Write-Host "  [X]  $m"  -ForegroundColor Red; exit 1 }
 #   skipped    被规则或占用跳过（不是失败，但用户该知道）
 #   failed     写入失败、被远端拒绝等真失败
 #   history    历史提交里已存在的超限文件（远端必然拒收，必须改写历史或换仓库）
+#   plugin-missing  插件没装在本机（拉取只还原配置，不装依赖；装完要再拉一次）
+#   context-state   billion-context 的压缩状态没跟着过来（该会话可能报上下文超长）
 $script:SyncNoticeItems = New-Object 'System.Collections.ArrayList'
 $script:SyncNoticeHome = $null
 $script:SyncNoticeMode = ''
@@ -55,7 +57,7 @@ function Save-SyncNotices {
     $dir = Split-Path -Parent $p
     if ($dir -and -not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
     $byKind = [ordered]@{}
-    foreach ($k in @('too-large', 'history', 'skipped', 'failed')) {
+    foreach ($k in @('too-large', 'history', 'skipped', 'failed', 'plugin-missing', 'context-state')) {
       $byKind[$k] = @($script:SyncNoticeItems | Where-Object { $_.kind -eq $k }).Count
     }
     $obj = [ordered]@{
@@ -108,6 +110,8 @@ function Get-SyncNoticesSummary($notices) {
   if ($bk.history -gt 0) { $parts += ("{0} 个历史提交里的超限文件" -f $bk.history) }
   if ($bk.skipped -gt 0) { $parts += ("{0} 个被规则跳过" -f $bk.skipped) }
   if ($bk.failed -gt 0) { $parts += ("{0} 个写入/推送失败" -f $bk.failed) }
+  if ($bk.'plugin-missing' -gt 0) { $parts += ("{0} 个插件没装" -f $bk.'plugin-missing') }
+  if ($bk.'context-state' -gt 0) { $parts += ("{0} 个会话缺压缩状态" -f $bk.'context-state') }
   return ($parts -join '、')
 }
 
@@ -1141,3 +1145,137 @@ function Write-SessionLogGuardReport($Guard, [string]$DshHome, [string]$Verb) {
   }
 }
 
+
+# ── billion-context 压缩状态跨机搬运 ───────────────────────────────────────
+# 为什么需要：DSH 原生 compaction 被 billion-context 接管（compaction gate 把
+# dsh-compaction-basic / dsh-command-compact disabled 掉），真正的压缩记录存在
+# bili 自己的 SQLite（…\billion-context\sessions\index.db）里，不在 .dsh 下。
+# 只同步会话日志、不同步这份状态，另一台机器就会把未压缩的全量 surface 发给
+# provider，报 CONTEXT_WINDOW_EXCEEDED。这里按会话导出/导入 blocks+refs+content。
+
+function Get-BiliStateToolPath([string]$scriptRoot, [string]$repoRoot) {
+  $bases = @()
+  if ($scriptRoot) {
+    $bases += (Join-Path $scriptRoot 'tools')
+    if ((Split-Path -Leaf $scriptRoot) -ne 'runtime') { $bases += (Join-Path $scriptRoot 'runtime\tools') }
+  }
+  if ($repoRoot) {
+    $bases += (Join-Path $repoRoot 'tools')
+    $bases += (Join-Path $repoRoot 'runtime\tools')
+  }
+  if ($MyInvocation.MyCommand.Path) {
+    $here = Split-Path -Parent $MyInvocation.MyCommand.Path
+    $bases += (Join-Path $here 'tools')
+  }
+  foreach ($b in $bases) {
+    if (-not $b) { continue }
+    $p = Join-Path $b 'bili-state.mjs'
+    if (Test-Path -LiteralPath $p) { return $p }
+  }
+  return $null
+}
+
+# 形状仿 Invoke-SessionLogGuard：spec/结果都走临时文件，执行器可能是 Electron GUI 子系统。
+function Invoke-BiliStateSync {
+  param(
+    [ValidateSet('export', 'import')][string]$Mode,
+    [string]$RepoDir,
+    [object[]]$Sessions,
+    [string]$AppRoot,
+    [string]$ScriptRoot,
+    [string]$RepoRoot,
+    [string]$BiliDir
+  )
+  $res = [ordered]@{ Ok = $true; Mode = $Mode; Exported = @(); Imported = @(); Missing = @(); Failed = @(); Skipped = $true; Reason = ''; NoBili = $false; BiliDir = ''; Bytes = 0 }
+  if (-not $RepoDir) { $res.Reason = '没有指定压缩状态目录'; return $res }
+  $tool = Get-BiliStateToolPath $ScriptRoot $RepoRoot
+  if (-not $tool) { $res.Reason = '找不到 tools\bili-state.mjs'; return $res }
+  $runner = Get-HostNodeRunner $AppRoot
+  if (-not $runner) { $res.Reason = '这台机器既没有 Node 也找不到客户端本体'; return $res }
+
+  $stamp = Get-Date -Format 'yyyyMMddHHmmssfff'
+  $specPath = Join-Path ([IO.Path]::GetTempPath()) ('dsh-bilistate-spec-{0}-{1}.json' -f $stamp, $PID)
+  $outPath = Join-Path ([IO.Path]::GetTempPath()) ('dsh-bilistate-out-{0}-{1}.json' -f $stamp, $PID)
+  $spec = [ordered]@{
+    mode = $Mode
+    repoDir = [string]$RepoDir
+  }
+  if ($BiliDir) { $spec.biliDir = [string]$BiliDir }
+  if ($Sessions -and @($Sessions).Count -gt 0) { $spec.sessions = @($Sessions | ForEach-Object { [string]$_ }) }
+  [IO.File]::WriteAllText($specPath, ($spec | ConvertTo-Json -Depth 5 -Compress), (New-Object Text.UTF8Encoding($false)))
+
+  $oldRunAsNode = $env:ELECTRON_RUN_AS_NODE
+  try {
+    if ($runner.Electron) { $env:ELECTRON_RUN_AS_NODE = '1' }
+    else { Remove-Item Env:\ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue }
+    & $runner.Exe $tool 'sync' $specPath $outPath *> $null
+    $code = $LASTEXITCODE
+    if (-not (Test-Path -LiteralPath $outPath)) {
+      $res.Reason = ('压缩状态工具没有产出结果文件（执行器退出码 {0}）' -f $code)
+      return $res
+    }
+    $r = ([IO.File]::ReadAllText($outPath, [Text.Encoding]::UTF8)) | ConvertFrom-Json -ErrorAction Stop
+    $res.Ok = [bool]$r.ok
+    $res.NoBili = [bool]$r.noBili
+    if ($r.biliDir) { $res.BiliDir = [string]$r.biliDir }
+    $res.Exported = @($r.exported)
+    $res.Imported = @($r.imported)
+    $res.Missing = @($r.missing)
+    $res.Failed = @($r.failed)
+    foreach ($e in @($r.exported)) { if ($e -and $e.bytes) { $res.Bytes += [long]$e.bytes } }
+    $res.Skipped = $false
+    return $res
+  } catch {
+    $res.Reason = ('压缩状态工具执行出错：{0}' -f $_.Exception.Message)
+    return $res
+  } finally {
+    if ($null -eq $oldRunAsNode) { Remove-Item Env:\ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue }
+    else { $env:ELECTRON_RUN_AS_NODE = $oldRunAsNode }
+    Remove-Item -LiteralPath $specPath -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $outPath -Force -ErrorAction SilentlyContinue
+  }
+}
+
+# 把压缩状态搬运结果变成用户能看懂的提示；导入失败一律进 context-state 通知。
+function Write-BiliStateSyncReport($State, [string]$DshHome) {
+  if (-not $State) { return }
+  if ($State.Skipped) {
+    Warn ('billion-context 压缩状态本次未搬运（{0}）' -f $State.Reason)
+    return
+  }
+  if ($State.NoBili) {
+    if ($State.Mode -eq 'import') {
+      Ok ('本机没有 billion-context，跳过压缩状态导入（DSH 自带压缩会接管）')
+      if ($DshHome) {
+        Add-SyncNotice -Kind 'context-state' -Path 'billion-context' -Reason '本机没有 billion-context：会话压缩记录无处导入，DSH 自带压缩会接管；若长会话报上下文超长，在主力机重推一次或在配置里关掉 billion-context。'
+      }
+    } else {
+      Ok ('本机没有 billion-context，跳过压缩状态导出')
+    }
+    return
+  }
+  if ($State.Mode -eq 'export') {
+    $n = @($State.Exported).Count
+    Ok ('billion-context 压缩状态（抓取）：导出 {0} 个会话、{1:N1} MB' -f $n, ($State.Bytes / 1MB))
+    foreach ($e in @($State.Exported)) {
+      Ok ('  {0}：blocks {1}、refs {2}、summary {3}' -f [string]$e.sessionId, $e.blocks, $e.refs, $e.content)
+    }
+  } else {
+    $n = @($State.Imported).Count
+    Ok ('billion-context 压缩状态（还原）：导入 {0} 个会话' -f $n)
+    foreach ($e in @($State.Imported)) {
+      Ok ('  {0}：blocks +{1}、refs +{2}、summary +{3}' -f [string]$e.sessionId, $e.blocks, $e.refs, $e.content)
+    }
+  }
+  foreach ($m in @($State.Missing)) {
+    Warn ('  仓库里没有这个会话的压缩记录：{0}（B 机继续该会话可能报上下文超长）' -f [string]$m)
+    if ($DshHome -and $State.Mode -eq 'import') {
+      Add-SyncNotice -Kind 'context-state' -Path ([string]$m) -Reason '会话压缩状态没同步过来：本机继续该会话可能报上下文超长。在主力机重推一次（抓取会带上压缩状态），或在本机设置 BILLION_CONTEXT_PLUGIN=0 让 DSH 原生压缩兜底。'
+    }
+  }
+  foreach ($f in @($State.Failed)) {
+    $sid = if ($f.sessionId) { [string]$f.sessionId } elseif ($f.file) { [string]$f.file } else { '(未知)' }
+    Warn ('  压缩状态处理失败：{0}（{1}）' -f $sid, [string]$f.error)
+    if ($DshHome) { Add-SyncNotice -Kind 'context-state' -Path $sid -Reason ('billion-context 压缩状态搬运失败：' + [string]$f.error) }
+  }
+}

@@ -19,7 +19,7 @@ The package name is **`dsh-config-sync-plugin`** (the `dsh-config-sync` name on 
 
 | Way | Command / entry | Notes |
 |---|---|---|
-| npm | `npm i dsh-config-sync-plugin` | Use it as a dependency, or add `"dsh-config-sync-plugin": "^0.3.68"` to the profile's `package.json` and run `pnpm i`. The name matches the `cordis.patch.yml` insert name and the install folder `dsh-config-sync-plugin-<ver>` |
+| npm | `npm i dsh-config-sync-plugin` | Use it as a dependency, or add `"dsh-config-sync-plugin": "^0.3.69"` to the profile's `package.json` and run `pnpm i`. The name matches the `cordis.patch.yml` insert name and the install folder `dsh-config-sync-plugin-<ver>` |
 | Marketplace | client → Plugins → Discover → “Config Sync” | Installs from the git commit registered in `market-index.json` |
 | Offline tgz | `releases\dsh-config-sync-plugin-<ver>.tgz` | GitHub Release asset for air-gapped machines; the panel's Update button downloads the same file |
 
@@ -606,6 +606,44 @@ A clean isolated B machine (approot / dshome / wshome + bundled node runner) sim
 
 Benign warnings (confirmed in the log): `--D-DeepSeekHarness-comfyUI--` / `--dsh-im-forward-confirm--` map to no workspace (special session dirs); `-SkipInstall` skipped 21 registry plugins (isolated offline run — without the flag on a networked machine they install); `dsh-config-sync-0.1.0` / `extra/manifest.json` have no archive/definition and are skipped; the `dsh-config-sync` slot has extra local leftovers (removed only with `-PruneWorkspace`).
 
+### 2026-11-19: release 0.3.69 (carry billion-context compaction state across machines + two new notice kinds)
+
+**Problem**: a long session keeps working on machine A, but after pulling to machine B the very next message fails with a context-overflow error.
+
+Compaction happens on two layers. On A, DSH's own compaction is already **disabled** by billion-context (`billion-context/dist/agent/dsh-compaction-gate.js` flips `@deepseek-ai/dsh-compaction-basic` and `@deepseek-ai/dsh-command-compact` to `disabled:true` while `__BILI_DSH_COMPACTION_VERDICT__ === "active"`); the real compaction is done by bili **on the outgoing side** — it shrinks a 2.3 M surface down to ~160 K before the request reaches the provider. And bili's records do not live in `.dsh`: they are in a separate SQLite database, `%LOCALAPPDATA%\billion-context\sessions\index.db` (tables `sessions` / `blocks` / `content` / `refs` / `messages` / `checkpoints` …).
+
+A pull only restores `sessions` / `attachments` / `vision_router_session_policy`, so **bili's index.db never travels**. Machine B therefore has: (1) no DSH native compaction (bili disabled it), (2) no bili compaction records (bili treats the session as new — `max compressible` is below the threshold, so it does not compact), (3) the whole surface sent straight to the provider → `CONTEXT_WINDOW_EXCEEDED`.
+
+**Fix**: new `tools/bili-state.mjs` that moves compaction state per session.
+
+| Subcommand | What it does |
+|---|---|
+| `probe` | Print the local bili database overview (tables, row counts, `user_version`) |
+| `export <sessionId> <outFile>` | Dump one session's state (`sessions` row + active `blocks` rows + the summary `content` those blocks reference) |
+| `import <inFile> [--dry-run]` | Write it back; existing primary keys are skipped, so it is repeatable |
+| `sync <specJson> <outJson>` | Batch mode used by `capture.ps1` / `apply.ps1` (results go to a file, never stdout) |
+
+Size control is a hard requirement — the default export deliberately leaves out three things:
+
+- `sessions.metadata_json` (a 2.4 MB scale cache; the column is also `NOT NULL`, so export must `delete row.metadata_json` and let it fall back to DEFAULT, otherwise `NOT NULL constraint failed`)
+- the snapshot behind `checkpoints.state_hash` (a single row can reach 21.89 MB)
+- `messages` / `message_media` bodies (bili re-ingests them from the DSH session log)
+
+Net result: about **5 MB per long session** (34–35 active blocks, ~7000 refs, 34 summaries), stored at `conversations/billion_context/<sessionId>.json`. `--all-blocks` / `--full` are needed only for the full block set and checkpoint snapshots.
+
+Wiring: `capture.ps1` calls `-Mode 'export'` for the session ids it just touched; `apply.ps1` calls `-Mode 'import'` against `conversations/billion_context` after restoring sessions. When billion-context is **not installed** on the target machine the whole step is skipped silently and prints “本机没有 billion-context，压缩状态跳过（DSH 自带压缩会接管）” — nothing is written.
+
+**Two new notice kinds** (this release also answers “nobody told me a plugin is missing on B”):
+
+| kind | When it appears | What the panel says |
+|---|---|---|
+| `plugin-missing` | A `dependencies` plugin is not installed locally, a bundle cannot be resolved, or the repo has no archive for a link plugin | “Missing plugins: pulling only restores config, it does not install dependencies. Run pnpm install in the profile dir first (or re-run apply.ps1 without `-SkipInstall`), then pull again.” |
+| `context-state` | bili compaction state was not synced, import failed, or billion-context is absent | “Missing compaction state: those sessions may hit a context-overflow error here. Push again from the main machine, or set `BILLION_CONTEXT_PLUGIN=0` here to fall back to DSH native compaction.” |
+
+Notices land in `~/.dsh/sync-notices.json`, stay on the panel until the next sync clears them, and the exit summary in `post-exit.ps1` prints them grouped by kind. The headline now reflects the actual category — pure file items say “N item(s) unresolved”, plugin / compaction-state items say “N item(s) need attention”, so plugin problems are no longer described as “files not synced”.
+
+**Manual fallback**: `node tools/bili-state.mjs probe` to inspect the local database; `node tools/bili-state.mjs export <sessionId> <out.json>` to export one session; `import --dry-run` to preview a write.
+
 ### 2026-11-19: release 0.3.68 (session projection-cache guard, fixes agent-busy session creation)
 
 **Problem**: DSH's "new session" does not always create one. The client first looks for a **blank session** in the workspace to reuse (`client-ui-workspace/createInWorkspace()` → `sessions.ids.find(summary.blank && …)` → `createNamed({ sessionId: blank })`), and `summary.blank` comes from `record.rows.sessionListMetadata.val.blank` in the projection cache `session_projcache\sessions\<id>.json`.
@@ -628,7 +666,7 @@ Session creation fails outright and refreshing does not help (the same cache kee
 
 New route `/config-sync/cache-guard`: `GET` is a read-only scan; `POST` accepts `scan` / `sweep` / `clear` / `busy`. A `cacheGuard` switch was added to settings, **on by default**; when off, neither the timer nor the client `agent-busy` report does anything.
 
-Implementation: `runtime/tools/session-cache-guard.mjs` (`scanSessionCaches` / `clearSessionCaches` / `runGuard` / `indexSessionLogs`); the client half lives in the `0.3.68：会话缓存守卫` block of `client.js`.
+Implementation: `runtime/tools/session-cache-guard.mjs` (`scanSessionCaches` / `clearSessionCaches` / `runGuard` / `indexSessionLogs`); the client half lives in the `0.3.69：会话缓存守卫` block of `client.js`.
 
 **Manual fallback**: the "Session cache guard" card in the panel scans on demand, shows each candidate with its evidence, and lets you pick what to clear. Cache files are only ever backed up, never deleted — a wrong clear is reversible from `<DshHome>/logs/session-cache-guard-backup/`.
 
