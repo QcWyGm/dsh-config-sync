@@ -1,0 +1,24 @@
+# 配置同步仓库：行尾规范化
+# session_projcache 是 JSON 缓存，跨平台需保持 LF 一致，标记为二进制跳过 CRLF 转换
+conversations/session_projcache/*.json binary
+
+# 其余 JSON/JS/PS1/MD 统一 LF
+*.json text eol=lf
+*.js text eol=lf
+*.mjs text eol=lf
+*.ps1 text eol=lf
+*.md text eol=lf
+*.yml text eol=lf
+*.patch text eol=lf
+
+# 二进制资产不转换
+*.tgz binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.eot binary
