@@ -93,7 +93,7 @@ function Get-TreeCmpSummary {
   return ('文件比较（{0}）：比对 {1} 个，深哈希 {2} 个' -f $deep, $script:CmpFileCount, $script:CmpHashCount)
 }
 
-if (-not $NoResetNotices) { Reset-SyncNotices $DshHome 'capture' }
+if (-not $NoResetNotices) { Reset-SyncNotices $DshHome 'capture' } else { Set-SyncNoticeContext $DshHome 'capture' }
 
 # 客户端可能被卸载重装到别的盘：-AppRoot 先校验，对不上就自动定位（注册表 → 常见位置）。
 $resolvedRoot = Resolve-DshAppRoot $AppRoot

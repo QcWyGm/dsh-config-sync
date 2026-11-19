@@ -24,7 +24,7 @@ import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, r
 import { homedir, hostname, tmpdir } from 'node:os'
 import { basename, dirname, isAbsolute, join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
-// 0.3.69：会话投影缓存守卫（agent-busy 自动清缓存，让缓存按日志重建）
+// 0.3.70：会话投影缓存守卫（agent-busy 自动清缓存，让缓存按日志重建）
 import { runGuard, clearSessionCaches, appendGuardLog } from './runtime/tools/session-cache-guard.mjs'
 
 const pluginRequire = createRequire(import.meta.url)
@@ -39,7 +39,7 @@ const ROUTE_CONFLICT = '/config-sync/conflict'
 // 0.3.30：跨机路径确认（每台机器把自己的根目录报给插件一次）与问题反馈（落仓库 feedback\ 再推 GitHub）
 const ROUTE_ROOTS = '/config-sync/roots'
 const ROUTE_FEEDBACK = '/config-sync/feedback'
-// 0.3.69：会话投影缓存守卫（GET 只读扫描 / POST scan|sweep|clear|busy）
+// 0.3.70：会话投影缓存守卫（GET 只读扫描 / POST scan|sweep|clear|busy）
 const ROUTE_CACHE_GUARD = '/config-sync/cache-guard'
 const SETTINGS_NAME = 'dsh-config-sync.json'
 /** 本插件自己的安装目录（插件根，含 runtime\ 与 index.js）—— 插件备份还原时的目标。 */
@@ -237,7 +237,7 @@ function readSettings(dshHome) {
     // 同步完成重启前把 DSH 的「默认工作区」校正到谁：
     // 留空 = 自动找名字/路径是 default-workspace 的工作区；可填工作区路径或 ID；填 off 关闭。
     defaultWorkspace: typeof raw.defaultWorkspace === 'string' ? raw.defaultWorkspace : '',
-    // 0.3.69：会话投影缓存守卫，默认开。关掉后既不定时扫描，也不理会客户端的 agent-busy 上报。
+    // 0.3.70：会话投影缓存守卫，默认开。关掉后既不定时扫描，也不理会客户端的 agent-busy 上报。
     cacheGuard: raw.cacheGuard !== false,
   }
 }
@@ -1180,7 +1180,7 @@ async function inspect(config) {
       const pending = c.items.filter((it) => !it.choice).length
       return { exists: true, total: c.items.length, pending, at: c.at || '', backupDir: c.backupDir || '' }
     })(),
-    // 0.3.69：会话投影缓存守卫状态（面板「会话缓存守卫」卡用）
+    // 0.3.70：会话投影缓存守卫状态（面板「会话缓存守卫」卡用）
     cacheGuard: cacheGuardSnapshot(config),
   }
 }
@@ -1962,7 +1962,7 @@ async function handleSettings(req, res, config) {
     const autoPull = has('autoPull') ? body.autoPull === true : before.autoPull
     const autoPush = has('autoPush') ? body.autoPush === true : before.autoPush
     const autoRestart = has('autoRestart') ? body.autoRestart !== false : before.autoRestart
-    // 0.3.69：会话投影缓存守卫开关，字段没给就沿用原值
+    // 0.3.70：会话投影缓存守卫开关，字段没给就沿用原值
     const cacheGuard = has('cacheGuard') ? body.cacheGuard !== false : before.cacheGuard
 
     if (!has('repoPath') && !has('remoteUrl') && !has('sshKey') &&
@@ -4022,7 +4022,7 @@ function newIssueUrl(repo, title, text, config) {
   return `https://github.com/${repo}/issues/new?${q}`
 }
 
-// ============================ 0.3.69：会话投影缓存守卫 ============================
+// ============================ 0.3.70：会话投影缓存守卫 ============================
 // 背景：UI 点「新建会话」时会挑一条 summary.blank===true 的会话复用，挑中了 origin=subagent
 // 的子会话就会被宿主拒绝（session/agent-busy：is owned by subagent routing）。
 // 起因是投影缓存停在 session/created 那一刻（blank=true、seq=-1），而会话日志早就推进过，
@@ -4430,7 +4430,7 @@ export function apply(ctx, config) {
         path: ROUTE_FEEDBACK,
         handler: withLang(handleFeedback),
       }))
-      // 0.3.69：会话投影缓存守卫（GET 只读扫描 / POST scan|sweep|clear|busy）
+      // 0.3.70：会话投影缓存守卫（GET 只读扫描 / POST scan|sweep|clear|busy）
       scoped.effect(() => scoped.webServer.register({
         kind: 'exact',
         path: ROUTE_CACHE_GUARD,
@@ -4443,7 +4443,7 @@ export function apply(ctx, config) {
     // status 不用再为首屏那 2.5 秒的 ls-remote 埋单。
     typeof setTimeout === 'function' ? setTimeout(() => { try { warmRemoteProbe(config) } catch { } }, 300) : null
     installQuitWhenAllWindowsClosed(ctx)
-    // 0.3.69：会话投影缓存守卫的定时扫描（默认开，设置里可关）
+    // 0.3.70：会话投影缓存守卫的定时扫描（默认开，设置里可关）
     scheduleCacheGuard(config)
   } catch (error) {
     // 不抛：缺 webServer 的 profile 里这个插件静默不激活即可

@@ -1,5 +1,5 @@
 ﻿<#
-DSH 配置同步 —— 应用脚本（把本仓库的配置还原到当前电脑）
+ DSH 配置同步 —— 应用脚本（把本仓库的配置还原到当前电脑）
 
 用法
   pwsh -File apply.ps1                                  # 默认：铺配置 + 全量还原所有工作区
@@ -59,7 +59,7 @@ $ErrorActionPreference = 'Stop'
 if (-not $RepoRoot) { $RepoRoot = $PSScriptRoot }
 . (Join-Path $PSScriptRoot 'dsh-sync-common.ps1')
 
-if (-not $NoResetNotices) { Reset-SyncNotices $DshHome 'pull' }
+if (-not $NoResetNotices) { Reset-SyncNotices $DshHome 'pull' } else { Set-SyncNoticeContext $DshHome 'pull' }
 
 # 客户端可能被卸载重装到别的盘：传进来的 -AppRoot 先校验，对不上就自动定位（注册表 → 常见位置）。
 $resolvedRoot = Resolve-DshAppRoot $AppRoot
@@ -899,6 +899,7 @@ $localPluginMap = [ordered]@{
   'dsh-our-free-model-2.8.0'      = 'dsh-our-free-model'
   'dsh-purge-1.4.0'               = 'dsh-purge'
   'dsh-config-sync-plugin-0.3.69' = 'dsh-config-sync-plugin'
+    'dsh-config-sync-plugin-0.3.70' = 'dsh-config-sync-plugin'
   'dsh-config-sync-plugin-0.3.68' = 'dsh-config-sync-plugin'
   'dsh-config-sync-plugin-0.3.67' = 'dsh-config-sync-plugin'
   'dsh-config-sync-plugin-0.3.66' = 'dsh-config-sync-plugin'

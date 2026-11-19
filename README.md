@@ -15,7 +15,7 @@ DSH 插件：左侧栏多一行「配置同步」，点开是整页体检面板�
 
 | 方式 | 命令 / 入口 | 说明 |
 |---|---|---|
-| npm | `npm i dsh-config-sync-plugin` | 适合把它当依赖管理，或在 profile 的 `package.json` 里写 `"dsh-config-sync-plugin": "^0.3.69"` 后 `pnpm i`；包名与 `cordis.patch.yml` 里注册的名字、插件目录 `dsh-config-sync-plugin-<ver>` 一致 |
+| npm | `npm i dsh-config-sync-plugin` | 适合把它当依赖管理，或在 profile 的 `package.json` 里写 `"dsh-config-sync-plugin": "^0.3.70"` 后 `pnpm i`；包名与 `cordis.patch.yml` 里注册的名字、插件目录 `dsh-config-sync-plugin-<ver>` 一致 |
 | 插件市场 | 客户端「插件市场 → 发现」搜「配置同步」 | 走 `market-index.json` 登记的 git 提交，版本与 README 对齐 |
 | 离线 tgz | `releases\dsh-config-sync-plugin-<ver>.tgz` | GitHub Release 附件，适合内网机器；面板「更新」按钮下载的也是它 |
 
@@ -111,16 +111,7 @@ pwsh -File runtime\sync.ps1 pull `
 
 ---
 
-## 安装
 
-```sh
-# 版本号换成 Releases 页里最新的那个
-dsh plugin add https://raw.githubusercontent.com/QcWyGm/dsh-config-sync-plugin/main/releases/dsh-config-sync-plugin-<版本>.tgz
-```
-
-或在 DSH「插件 → 发现 → 索引源」里添加本仓库索引（见「作为插件市场的索引源」）。第三方市场 **dshmarket 不读这份索引**，原因见同一节。
-
-`apply.ps1` 落地时做三件事：`local-plugins\dsh-config-sync-plugin-<版本>.tgz` 解压到 `<AppRoot>\dsh-config-sync-plugin-0.1.0`；`package.json` 加一条 `link:` 依赖与一条 `dsh.profile.bundles`；`cordis.patch.yml` 加 `config-sync` 行。
 
 ## 包含什么
 
@@ -143,16 +134,16 @@ dsh plugin add https://raw.githubusercontent.com/QcWyGm/dsh-config-sync-plugin/m
 
 ## 面板显示什么
 
-布局是「一行状态 + 一行指标 + 分区卡片」，从上往下读：
+从上往下：
 
 - **标题行**：`配置同步　本机 [一致/待推送/待拉取/有问题]　云端 [一致/不一致/待拉取]`。本机徽标看配置齐不齐、依赖缺不缺、有无未提交/未推送；云端**全自动**（打开面板查一次、之后每 2 分钟复查），没有手动按钮。右上角「重新检测」与「本机路径」按钮。
 - **元信息行**：`app 版本 / Electron 版本 · 分支 @ 短 HEAD`。
 - **指标条**：`本机 / 契约`、`bundle`、`依赖`、`备份快照`、`上次同步`（后面 `(+N)` 表示之后又写入了几个文件）。有事才在下面出现「待办」。
 - **分区**：概览 → 本机路径（**默认整块不显示**，点标题行「本机路径」按钮展开，有待处理项时按钮变橙带数量）→ 同步冲突（真有冲突时才出现）→ 同步目标 → 自动化与插件更新 → 退出后执行 → 还原备份 → 同步内容 → 问题反馈。
 
-**统一交互**：「本机路径 / 本机仓库 / 云端仓库 / 自动同步 / 插件更新 / 同步内容」都是**先只读、点「修改」才解锁**，改完「保存」，「取消」丢弃本次改动。只有"没配过"的卡（没设仓库、没设远端）强制停在编辑态且不给「取消」。
+**统一交互**：所有卡片**先只读，点「修改」才解锁**，改完「保存」生效，「取消」丢弃。没配过的卡强制停在编辑态。
 
-**「待推送」不只看 git**：`git status` 干净时新会话/新资料可能还躺在 `~\.dsh` 里没 capture。`sync.ps1` push/pull 成功后会写 `~\.dsh\config-sync-state.json`（`lastSyncAt`/`mode`/`head`）；`status` 的 `local` 段 stat `sessions`、`skills`、`.agent-presets`、`mnemon`、profile 五文件、登记的工作区目录，mtime 晚于 `lastSyncAt` 的计入 `local.pending`，徽标转橙。只看 mtime、不读内容；上限 20000 文件 / 1.5 秒。
+**「待推送」不只看 git**：`git status` 干净时新会话/新资料可能还在 `~\.dsh` 里没 capture。`status` 按 mtime 比对 `sessions`、`skills`、`.agent-presets`、`mnemon`、profile 文件、工作区目录，晚于上次同步的计入待推送。只看 mtime，上限 20000 文件 / 1.5 秒。
 
 **「待拉取」= 本机仓库还是空目录**（不报异常，橙色徽标 + 「执行拉取会从云端拉到这里」）。
 
@@ -519,7 +510,7 @@ node ~\.dsh\.dsh-plugin-market\market-core.mjs catalog --profile desktop
 
 ## 生成器里已经堵掉的坑
 
-都是**在新机器上真跑一遍**才暴露的：
+新机器真跑一遍才暴露的坑：
 
 | 坑 | 处理 |
 |---|---|
@@ -565,199 +556,18 @@ pwsh -File sync.ps1 push -ScanHistory
 
 ## 实测记录
 
-### 2026-11-18：隔离环境 B 机全新拉取回归（工作区 / 会话归属 / 上下文超长）
-
-用干净的隔离 B 机（approot / dshome / wshome + 内置 node 执行器）模拟「全新机器首次拉取」：先清掉 `sessions`、`storages/workspace.json`、`session_projcache`，再用配置仓库最新 `apply.ps1` 跑完整还原。结果逐项核对通过：
-
-| 验证项 | 结果 |
-|---|---|
-| apply 执行 | `EXIT=0`，73 秒（拉取提速生效，之前 340s） |
-| 工作区挂载 | 5 个工作区全部还原，path 均指向本机 `_iso_b\approot\*`，登记表按 ID 合并 ✅ |
-| 会话归属 | 工作区登记表 sessionIds 共 71 个；sessions 目录反推 73 个，只差 2 个（幽灵工作区 + forward-confirm 特殊会话，正常例外）✅ |
-| projcache | B 机 **不存在**（FILES=0）——仓库里明明有超窗会话的 projcache，但未同步过来 ✅ |
-| 会话 cwd | 64 个会话，63 个首帧 cwd 正确；唯一 1 个是 forward-confirm passthrough（正常例外）✅ |
-| bundle | 24 项全部可解析；3 个 link 插件显示「本地插件已存在」，不再反复解压 ✅ |
-
-**上下文超长闭环**：之前因 A 机 token 计量缓存超窗的 3 个会话，现在都正确归到对应工作区——`session-58db748a`（1,553,981 tokens）→ DSH破甲、`session-bbf3e5c9`（1,080,398）→ SquadLink、`session-a1061521`（1,001,058）→ dsh-config-sync。同时 B 机 projcache 为空，DSH 启动时会从会话日志按 B 机实际模型配置重建 token 计量并触发 compaction，不会再把 A 机超窗缓存直接怼给 provider。
-
-非故障警告（日志已确认无害）：`--D-DeepSeekHarness-comfyUI--` / `--dsh-im-forward-confirm--` 找不到对应工作区（特殊会话目录）；`-SkipInstall` 跳过 21 个 registry 插件（隔离环境离线，真机有网时不加即补齐）；`dsh-config-sync-0.1.0` / `extra/manifest.json` 无归档正常跳过；`dsh-config-sync` 槽位有本机多出的残留文件（加 `-PruneWorkspace` 才删）。
-
-### 2026-11-19：发版 0.3.69（跨机搬运 billion-context 压缩状态 + 同步清单两类新提示）
-
-**问题**：长会话在 A 机能接着聊，拉取到 B 机后一发消息就报上下文超长。
-
-原因是压缩分两层：A 机的 DSH 原生 compaction 已被 billion-context **禁用**（`billion-context/dist/agent/dsh-compaction-gate.js` 在 `__BILI_DSH_COMPACTION_VERDICT__ === "active"` 时把 `@deepseek-ai/dsh-compaction-basic`、`@deepseek-ai/dsh-command-compact` 全部改成 `disabled:true`），真正的压缩是 bili 在**出口侧**做的——它把 2.3 M 的 surface 压成 160 K 再发给 provider。而 bili 的压缩记录不在 `.dsh` 里，在独立的 SQLite：`%LOCALAPPDATA%\billion-context\sessions\index.db`（表 `sessions` / `blocks` / `content` / `refs` / `messages` / `checkpoints` …）。
-
-同步过去只有 `sessions` / `attachments` / `vision_router_session_policy` 三块，**bili 的 index.db 完全没跟着走**。于是 B 机：①没有 DSH 原生压缩（被 bili 禁了）②没有 bili 的压缩记录（bili 认为这是新会话，`max compressible` 不足，阈值不到不压）③把全量 surface 直接发给 provider → `CONTEXT_WINDOW_EXCEEDED`。
-
-**修复**：新增 `tools/bili-state.mjs`，按会话搬运压缩状态，四步都不碰别人的会话。
-
-| 子命令 | 作用 |
-|---|---|
-| `probe` | 列本机 bili 库概况（表、行数、`user_version`） |
-| `export <sessionId> <outFile>` | 导出单会话状态（`sessions` 行 + active `blocks` 行 + 这些 block 的 summary `content`） |
-| `import <inFile> [--dry-run]` | 回灌；按主键跳过已存在的行，可重复执行 |
-| `sync <specJson> <outJson>` | 批量，供 `capture.ps1` / `apply.ps1` 调用（结果写文件，不依赖 stdout） |
-
-体积控制是硬要求，默认导出**刻意不带**三样东西：
-
-- `sessions.metadata_json`（2.4 MB 级缓存；且该列 `NOT NULL`，导出要 `delete row.metadata_json` 让它落 DEFAULT，否则 `NOT NULL constraint failed`）
-- `checkpoints.state_hash` 指向的快照（单条可达 21.89 MB）
-- `messages` / `message_media` 正文（bili 会从 DSH 会话日志自己 ingest）
-
-结果：一条长会话约 **5 MB**（34~35 个 active block、约 7000 条 refs、34 条 summary），落在仓库 `conversations/billion_context/<sessionId>.json`。带 `--all-blocks` / `--full` 才导出全部 block 与 checkpoint 快照。
-
-接入点：`capture.ps1` 在会话块之后对本次变动的 sessionId 调 `-Mode 'export'`；`apply.ps1` 在会话还原之后对 `conversations/billion_context` 调 `-Mode 'import'`。**B 机没装 billion-context 时静默跳过**，打印「本机没有 billion-context，压缩状态跳过（DSH 自带压缩会接管）」，不做任何写入。
-
-**同步清单的两类新提示**（这一版同时解决「B 机没装插件没人告诉你」）：
-
-| kind | 什么时候出现 | 面板怎么说 |
+| 日期 | 版本 | 要点 |
 |---|---|---|
-| `plugin-missing` | `dependencies` 里的插件没装到本机、bundle 无法解析、仓库里没有该 link 插件的归档 | 「插件没装：拉取只还原配置，不替你装依赖。先在本机 profile 目录执行 pnpm install（或去掉 `-SkipInstall` 重跑 apply.ps1），装好后重新拉取一次。」 |
-| `context-state` | bili 压缩状态没同步过来 / 导入失败 / 本机没有 bili | 「会话缺压缩状态：这些会话在本机可能报上下文超长。在主力机重新推送一次，或在本机设 `BILLION_CONTEXT_PLUGIN=0` 让 DSH 原生压缩兜底。」 |
+| 2026-11-19 | 0.3.69 | 跨机搬运 billion-context 压缩状态（bili-state.mjs）；同步清单新增 plugin-missing / context-state 两类提示 |
+| 2026-11-19 | 0.3.68 | 会话投影缓存守卫，治 agent-busy 建会话失败 |
+| 2026-11-19 | 0.3.67 | 会话日志 seq 对账护栏（跨机写同一会话按 seq 求并集，不再整文件覆盖）；.gitattributes 钉 binary；capture hoist |
+| 2026-11-19 | 0.3.66 | .gitattributes 消除 LF/CRLF 警告 |
+| 2026-11-18 | 0.3.65 | 刷新按钮反馈（文字变「刷新中…」） |
+| 2026-11-18 | 0.3.64 | 还原备份修复（写回原位）+ 失败原因集中展示 + 6 分钟自动关窗 |
+| 2026-11-18 | 0.3.63 | 推送提速：Get-RelPath 快 10 倍 |
+| 2026-11-18 | 0.3.62 | 拉取提速：341s → 109s（3.1×） |
+| 2026-11-15 | 0.3.54 | 三处提速（快筛/历史缓存/单次 fetch），行为不变 |
+| 2026-11-14 | — | 两台机器从零跑通（隔离环境）；会话日志首帧 4 字节残留修复 |
+| 2026-11-11 | — | 单机隔离环境全链路验证（装插件 → 拉取 → 推送 → 还原） |
 
-清单落 `~/.dsh/sync-notices.json`，面板常驻显示直到下次同步清掉；`post-exit.ps1` 的结束摘要也按类分组打印。标题按实际类别说人话——纯文件类说「N 项没处理完」，插件/压缩状态类说「N 项需要处理」，不再把插件问题写成「文件没同步」。
-
-**手动兜底**：`node tools/bili-state.mjs probe` 看本机 bili 库；`node tools/bili-state.mjs export <sessionId> <out.json>` 单独导一条；`import --dry-run` 先看会写什么。
-
-### 2026-11-19：发版 0.3.68（会话投影缓存守卫，治 agent-busy 建会话失败）
-
-**问题**：DSH 的「新建会话」并不每次都真建——客户端会先在工作区里找一条**空白会话**复用（`client-ui-workspace/createInWorkspace()` → `sessions.ids.find(summary.blank && …)` → `createNamed({ sessionId: blank })`）。而 `summary.blank` 来自投影缓存 `session_projcache\sessions\<id>.json` 里的 `record.rows.sessionListMetadata.val.blank`。
-
-缓存是「写一半就停」的产物：某次建会话时写出了 `blank:true / seq:-1`，之后日志继续追加（有了 `turn/start`、`user/message`），缓存却没跟着推进。于是列表仍把这条会话当空白，UI 挑它复用，宿主抛：
-
-```
-session/agent-busy: session "<id>" is owned by subagent routing
-```
-
-新建会话直接失败，且刷不回来（缓存一直被复用）。跨机同步会放大这个问题——A 机的陈旧缓存被 pull 到 B 机，B 机同样中招。
-
-**修复**：三层，都不碰日志、不碰工作区登记，只做缓存文件操作。
-
-| 层 | 触发 | 动作 |
-|---|---|---|
-| 客户端 | `sessions.create` 撞上 `agent-busy` | 包一层 `sessions.create`：捞出撞车的 `sessionId` 报给宿主，去掉旧 `sessionId` 后**重试一次**。正常路径零开销 |
-| 宿主 | 收到客户端上报 | 把 `<DshHome>/storages/session_projcache/sessions/<id>.json` **挪到** `<DshHome>/logs/session-cache-guard-backup/`（只挪不删），DSH 下次读列表时按完整日志重建缓存，`blank` 自然变 `false` |
-| 定时 | 每 3 分钟 | 主动扫同类陈旧缓存，条件四重全中才算（宁可漏判不可误删）：①缓存能解析且 `blank===true` ②能找到对应 `session.v*.jsonl.zstd` ③日志里确有 `turn/start` 或 `user/message` ④日志末事件 `seq` > 缓存记录的最大 `seq` |
-
-新增路由 `/config-sync/cache-guard`：`GET` 只读扫描；`POST` 支持 `scan` / `sweep` / `clear` / `busy`。设置里新增 `cacheGuard` 开关，**默认开**；关掉后既不定时扫描，也不理会客户端的 `agent-busy` 上报。
-
-实现：`runtime/tools/session-cache-guard.mjs`（`scanSessionCaches` / `clearSessionCaches` / `runGuard` / `indexSessionLogs`），客户端半身在 `client.js` 的 `0.3.68：会话缓存守卫` 段。
-
-**手动兜底**：面板「会话缓存守卫」卡可以直接扫一遍、看到候选与判定依据，再决定清哪几条；缓存永远只备份不删除，清错了从 `<DshHome>/logs/session-cache-guard-backup/` 拷回去就行。
-
-
-### 2026-11-19：发版 0.3.67（会话日志 seq 对账护栏）
-
-**问题**：两台机器各自往同一个会话写事件时，同步是「整文件覆盖」。谁后 push 谁的内容顶掉对方的后半段，事件流出现 `seq` 跳号，DSH 启动直接报 `stored session ... is corrupt: corrupt session log: invalid committed event at line N: released v2 row N has seq gap (expected X, got Y)`，该会话再也打不开。
-
-**修复**：`capture.ps1`（推送侧）与 `apply.ps1`（拉取侧）遇到 `session*.jsonl.zstd` 不再 `Copy-Item -Force`，改为交给新加的 seq 护栏：
-
-| 情形 | 处理 |
-|---|---|
-| 目标更全 / 完全相同 | 保留目标，什么都不写 |
-| 源是目标的严格超集 | 用源覆盖目标 |
-| 两边各有独占事件 | 按 `seq` 求并集写入，两边事件全保住 |
-| 目标自身断档、源能补齐 | 先补齐再写（`merge`，可救回已被覆盖坏的会话） |
-| 洞补不回来（事件确实丢了） | **保持原样不覆盖**，记 `sync-notices.json` 的 `failed` 并提示需人工处理 |
-
-护栏实现：`tools/session-log-lib.mjs`（多帧 zstd 逐帧解、字节前缀比较、按 seq 合并）+ `tools/session-log-guard.mjs`（`check` / `decide` / `merge` / `batch` CLI，批量模式给 ps1 调用，结果走临时 JSON 文件而不是 stdout——Electron 是 GUI 子系统）。11MB 会话全量解析 ~0.6s，可进同步热路径。
-
-**顺带两处**：
-- `.gitattributes` 补 `conversations/sessions/**/*.zstd binary` 与 `workspace/** -text`，避免 Windows `core.autocrlf` 或 git 的行尾归一再次写坏二进制日志；
-- `capture.ps1` 把「大目录文件比较」几个辅助函数上移到脚本前部——它们原先定义在调用点之后，`-WorkspaceOnly` 跑到会话镜像循环会报 `Test-TreeFileChanged is not recognized`。
-
-诊断工具：`node tools/check-session-log.mjs <日志>` 或 `<日志A> <日志B>`，输出自洽性（行数/seq 范围/gaps）与两份的关系（`identical` / `prefix` / `superset` / `fork`）。
-
-### 2026-11-19：发版 0.3.66（.gitattributes 消除 LF/CRLF 警告）
-- **跨平台行尾噪音**：Windows 上 `core.autocrlf=true` 会把仓库里 LF 写入的 `session_projcache/*.json` 自动转成 CRLF，推送时 Git 报 "LF will be replaced by CRLF" 警告。新增 `.gitattributes` 将该目录标记为二进制（`binary`），其余文本文件统一 `eol=lf`，彻底消除该类警告。
-- 纯配置项改动，不改变任何同步逻辑、行为与数据。
-### 2026-11-18：发版 0.3.65（刷新按钮反馈）
-- **顶部「重新检测」**：点击后无论数据是否变化都给明确 toast 反馈——成功显示「已重新检测，数据已是最新（时间）」，失败显示具体原因，复用 5 秒自动消失的提示条。此前状态本就是最新时页面看起来毫无变化，用户会以为没点上。
-- **卡片「刷新」按钮**：同步冲突、插件数据、同步内容、问题反馈、设置摘要行五处刷新按钮，点击后文字变「刷新中…」并禁用，结束恢复「刷新」。其中同步冲突 / 同步内容 / 问题反馈三处原来的 `load()` 根本没驱动 `busy`（按钮文字永远不变），本次补齐 `setBusy`；顶部与本机路径的「检测中…/读取中…」保持不变。
-- `node --check` 与客户端半身自检全过，纯前端交互修复，行为与数据不变。
-### 2026-11-18：发版 0.3.64（还原备份修复 + 失败原因集中展示 + 自动关窗）
-
-- **还原备份 bug 修复**：`apply.ps1` 备份插件设置时只留文件名（如 `workspace.json`），`restore.ps1` 还原时全堆到 `~\.dsh` 根目录，`storages\workspace.json`、`our-free-model\settings.json`、`redteam\preset-declare.json` 等回不到原位。现在备份时写一份 `__backup_manifest.json` 记录「备份文件名 → 相对 DshHome 的原路径」，还原按清单写回原位；无清单的老快照退化为写回根目录并明确告警。隔离回归：profile 5 文件 + settings 3 文件原位还原、根目录零残留、时点回退移走新增文件并写 rollback 清单，全部通过。
-- **失败原因集中展示**：推送/拉取失败时，`post-exit.ps1` 收尾新增 `Show-FailureSummary`，从执行日志抽取 `[X]` 错误行及后续详情、最近的 `[!]` 警告，红/黄集中打印在末尾，不用再翻日志找原因。
-- **自动关窗**：推送/拉取/更新/还原脚本结束后，展示结果 6 分钟后自动退出关窗，不再要求「按任意键」（远程桌面/无焦点时 `ReadKey` 会一直卡住）；也可直接点右上角 × 提前关闭。
-- **边界说明**：`apply` 拉取前备份的 workspace/conversations/skills/presets/plugin-data 属数据目录，不纳入「配置还原」回退范围（有各自的同步/会话路径，强塞会引入路径映射与大目录遍历开销）。
-
-### 2026-11-18：推送提速发版 0.3.63（Get-RelPath 快 10 倍）
-
-推送/拉取共用的 `Get-RelPath` 原来对每个文件做两次 `-split` + `Where-Object`；5 万文件工作区下，推送比对单独占 11.7s。改为 `StartsWith` + `Substring` 快路径，大小写或 8.3 短路径不一致时回退原段数比对逻辑。49138 文件全量比对与老版输出 0 差异，微基准 5.08s → 0.51s（约 9.9 倍）。三处 `dsh-sync-common.ps1`（源码 / 配置仓库 / 插件副本）同步。
-
-### 2026-11-18：拉取提速发版 0.3.62（341s → 109s，约 3.1×）
-
-一台机器上工作区有 49110 个文件、另一个工作区槽位堆积了 101097 个孤儿文件，点「拉取」时卡在「已还原工作区」好几分钟。逐段打点后定位到 4 个浪费点，全部在 `runtime\apply.ps1`，行为不变（落到仓库的文件、提交内容、配置结果逐字节一致），只改「怎么算」：
-
-| 环节 | 结果 |
-|---|---|
-| 端到端总耗时 | 340.9s → 108.5s（同环境同输入，约 3.1×）；功能断言全过：5 工作区还原、写入/更新 0、备份 0、会话 cwd 修正 56、bundle 24 项可解析、`EXIT=0` |
-| ① 无条件全量备份 | 原来每个工作区还原前把整个工作区备份一遍（49110 文件 × 1.99ms ≈ 98s），而二次拉取时源与目标内容全一致、实际需备份 0 个。改为「确认某个文件即将被覆盖时才备份这一个」→ 备份 49110 → 0 |
-| ② 哈希 API | `Get-FileHash` 实测 0.957ms/文件，.NET `SHA256.ComputeHash` 流式 0.16ms/文件（约 6×）；会话首帧与工作区比对的哈希统一换成流式 SHA256 |
-| ③ zip 版本正则 | 归档内 `package.json` 路径在 `Compress-Archive` 打出的 zip 里是反斜杠，而版本正则只认 `/` → 读不到归档版本、`git fetch` 刷新 mtime 后每轮误判「本地插件有新版本」，反复重解压 3 个 link 插件。改成 `[\\/]` 兼容两种分隔符后，三插件稳定显示「本地插件已存在」 |
-| ④ **真凶：O(n²) 数组追加** | extra 扫描里 `$extra = @()` + `$extra += $lf.FullName`，101097 个孤儿文件约 51 亿次数组拷贝，单独占 264s（dsh-config-sync 槽位仅 16 个同步文件却耗时 264s）。换成 `[System.Collections.Generic.List[string]]::new()` + `$extra.Add(...)` → O(n) |
-| 剩余 108s | DSH破甲 49110 文件的哈希 + 复制 71s 是实打实的磁盘 I/O；再压需要方案③「git HEAD 增量短路」，风险高、默认未做 |
-| 顺手修 | 历史遗留的 `market-index.json` 结构损坏（0.3.61 发版时把 `plugins` 数组写成了对象/数组混合）与该条目 commit 的 `TODO_COMMIT_0361` 占位符，本次一并修正；0.3.61 的「跳过 projcache 同步」（上下文超长修复）保持不变 |
-| 教训 | PowerShell 管道 `ForEach-Object` 打时间戳会被输出缓冲吞掉，实时打点要写 stderr（`[Console]::Error.WriteLine`）；带 BOM 的 UTF-8 脚本全程只能用 UTF8 读写，用 ISO-8859-1 读写会把中文 `.NET` 强制 UTF8 解码后再写回全变 `?` 并丢 BOM |
-
-### 2026-11-15：性能发版 0.3.54（三处提速，行为不变）
-
-| 环节 | 结果 |
-|---|---|
-| 规模基线 | 配置仓库 50817 文件 / 398.7MB（workspace 50377 / 358.4MB，`.git` 315 / 223.3MB，16 个提交）；`.dsh` 48168 文件；最大单文件 `workspace\SquadLink\reversing\scripts\pe-analyst\out\insns.tsv` 44.7MB |
-| 同规模假仓库 | 50889 文件 / 416.4MB（生成 136s）；`git add -A` 首跑 92.0s、空跑 0.30s；`status --porcelain` 0.31s、`ls-files --stage` 0.14–0.40s |
-| 推送侧最大浪费 | `git ls-tree -r -l HEAD` = 19.98 / 21.4 / 23.16s；替代测速：`rev-list --objects` 0.15s、`cat-file --batch-all-objects --batch-check` 0.21s、`diff-tree -r -l HEAD~1 HEAD` 0.12s（都不等价于「全量历史体积」判定，所以最终选缓存而非替换命令） |
-| 哈希成本 | `Get-FileHash` 单文件 1.20ms（600 文件 0.72s）；.NET 流式 SHA256 1.05ms，只快 1.1×——瓶颈是每文件 open/read 与随机小文件，换 API 没用 |
-| 快筛写法对比 | cmdlet 式（逐文件 `Test-Path` + `Get-Item`）**37.78s**；两次 `Get-ChildItem` + 内存字典 **3.91s**；后者只对 size/mtime 不一致者算哈希，实测 0 个需算（0.09s） |
-| 网络往返 | 真实 Gitee `git ls-remote --heads origin` 三次 0.90 / 0.97 / 0.96s → 拉取省掉一次 fetch 约省 1s |
-| 只读遍历 | `.dsh` 48168 文件枚举 6.85s；仓库 workspace 50377 文件枚举 2.17s；单文件 stat 0.73ms |
-| 隔离端到端 | 假 `.dsh` + 假客户端根 + 本地 bare 远端、300 文件工作区：push#1 退出 0（全量扫、`oversized: 0`）、push#2 **3.23s**（跳过扫描）、push#3 `-DeepVerify` 退出 0 且「深哈希 300」、pull 退出 0 且 `Fast-forward`、远端新增文件到位 |
-| 顺手修掉 | `Get-OversizedHistory` 空结果写成 `return ,$res`，调用方 `@()` 之后 Count 变 1 → 空仓库误报「历史里有 1 个超限文件（0.0 MB）」且路径为空。改成 `return $res`，复测缓存 `oversized: 0` |
-| 测试教训 | 端到端必须造假 AppRoot（`Resolve-DshAppRoot` 认 `resources\app\package.json` 或 `resources\app.asar`）；把真实 `D:\DeepSeekHarness` 传进去会被 `apply` 覆盖真实 mnemon，只能靠它的自动备份还原 |
-
-### 2026-11-14（二）：会话日志首帧 4 字节残留，新建会话 500
-
-同步过一次之后，客户端点「新会话」直接弹 `新建会话失败：gateway/internal: failed to create session: SessionQueryError: stored session "…" is corrupt … invalid frame magic at byte 186`——一个历史会话的日志坏了，整个会话库的校验跟着失败，所以连新会话都建不出来。
-
-| 环节 | 结果 |
-|---|---|
-| 现场 | `~\.dsh\sessions\--D-DeepSeekHarness-DSH~7834~7532--\session-58db748a…\session.v4.jsonl.zstd`，423 字节，mtime 是 11-13 那次同步，不是当天 |
-| 字节解剖 | zstd 帧头 `28 b5 2f fd` 出现在 0 / 190 / 343；DSH 认为首帧止于 **186**，186..189 是 4 字节垃圾，真正的第 2 帧起点在 190 |
-| 根因 | 首帧解压是 210 字节（header 行 + 结尾换行），二分得到的「最小可解前缀」= 186，而帧尾实际是 190：DSH 首帧带 4 字节 content checksum，解压器对缺这 4 字节的前缀同样返回成功。`rest = buf.subarray(186)` 于是把旧 checksum 当正文，写回后 186..189 永久残留 |
-| 影响面 | 扫 `~\.dsh\sessions` 下 17 个 `session.v4.jsonl.zstd`：真正的坏文件 1 个（带空洞）；另 1 个被判误报，复核是**带 checksum 的正常 5 帧文件**（帧头 0/197/380/479/559），已按备份原样还原 |
-| 数据修复 | 备份到 `~\.dsh\backups\session-corrupt-<stamp>` → 删掉 4 字节空洞（423 → 419）→ 复扫 bad=0；首帧 cwd 保留、第 2 帧（269 字节）可解 |
-| 代码修复 | `firstFrameEnd` 按 FHD bit2 补 4 字节并以「下一帧帧头」校正；首帧改为**整段解压文本替换 cwd 后重压**（原来只重压 header 一行，首帧有追加行会丢）；**先自检后落盘**；遇到历史残留尾巴自动丢掉 |
-| 隔离验证 | 用真实 checksum 多帧样本改 cwd：帧结构完整（0/169/352/451/531 全可解）；幂等复跑 `alreadyOk=1`；喂入带空洞的坏文件一次修好（402 字节，帧头 0/169/322） |
-| 结论 | 会话日志只会「缺内容」不会「内容错」，所以删空洞比重新压缩安全；helper 现在宁可跳过报错也不写坏后续帧 |
-
-### 2026-11-14：两台机器从零跑通（隔离环境）
-
-假云端裸仓库（`git init --bare -b main`）+ 两套假客户端根（`A\app`、`B\app`）+ 各自独立 `.dsh`。全程不碰主力机目录，可反复重跑。
-
-| 步骤 | 结果 |
-|---|---|
-| A 机首次推送 | 自动写 6 个执行体 + `tools\fix-session-cwd.mjs` + 版本契约；capture 抓到 8 处变更；提交 15 文件、推到 bare 的 `main`（`push_rc=0`） |
-| 仓库侧占位符化 | `workspace\workspace-registry.json` 的 path 写成 `{{APP_ROOT}}/workspace/SquadLink` |
-| B 机首次拉取（未装客户端） | `[X] 目标 profile 不存在` 退出（`pull_rc=1`）——**新机器必须先装并启动一次客户端** |
-| B 机补 profile 后拉取 | `pull_rc=0`：工作区还原到 `B\app\workspace\SquadLink`（字节保真）、登记表合并成 B 的 `storages\workspace.json`（path 是 B 路径）、bundle 1 项可解析 |
-| 无 Node 执行器时 | 日志 `本机没有可用的内置运行时`，会话 cwd 不改写（会话列表会是空的）；补一个可用 `node.exe` 后修复生效 |
-| settings 语义 | `~\.dsh\settings.json` 里的自定义键**不同步**（白名单制，只搬那 13 个文件） |
-| **顺手抓到两个 bug** | ①`fix-session-cwd.mjs` 用 `next.length === text.length` 判"内容没变"——两台机器路径等长时（`D:\...` ↔ `E:\...`）必然误判，表里返回 `projAlreadyOk=1` 而文件里 cwd 仍指源机；改成 `next === text`。②`apply.ps1` 第 4 步只按 `$cwdMap` 判断，仓库里只有 projcache、没有 sessions 时整段跳过，projcache 修复永远不执行；改成 `$cwdMap.Count -gt 0 -or $projMap.Count -gt 0`。两处修完：`projFixed=1`、拉取后 cwd 正确指向本机 |
-
-### 2026-11-11：单机隔离环境（装插件 → 拉取 → 推送 → 还原）
-
-| 步骤 | 结果 |
-|---|---|
-| 装插件、开面板 | 三道路由都注册；未配置时 `repo.path` 为空不静默回退，推送被 400 拦 |
-| 配仓库 / 云端 | 200，路径落进本机 `.dsh\dsh-config-sync.json`；无 origin → `git remote add` |
-| 生成三份脚本 | 落在仓库根，`-AppRoot` 指向该机客户端根，带 `--yes` 与 `y/N` 守卫 |
-| 首次拉取 | 首次补 upstream → `Already up to date` → 备份 11 文件、铺 436 个 → `pnpm install` 21 个插件 → 25 个 bundle 全部可解析 |
-| 工作区 / 会话 | 资料落在假客户端根；登记表路径展开成本机路径；空工作区补建成空目录；会话目录名按本机路径重算的编码逐字一致 |
-| 推送 / 还原 | 推到假云端；还原先 `-DryRun` 出计划，`--yes` 后自保 `manual-<时间戳>` 再写回 |
-| 退出后同步 | `post-exit.ps1` 五个退出码（0/2/3/4/5）全部复现 |
-| 空目录语义 | `repoPhase` 八种形态判定全对（含 8.3 短名路径）；空目录跑 `push` 被拦（退出码 1、未生成 `.git`），跑 `pull` 自动 `init → fetch → checkout main` |
-
-真机部分另记两条：`{"action":"pull-now"}` 时 `DSH 7→0` 用 5 秒、+10 秒出现可见窗口、拉完自动 `0→4→7`；开 `autoPush` 后点关闭，7 个进程 `hwnd=0` 不退，16 秒后强制收尾并推送成功。
-
+详细测试数据见对应版本的 Release Notes。

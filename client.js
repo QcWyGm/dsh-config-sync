@@ -929,7 +929,7 @@ window.__ModuleLoader__.load({
       }
       // 「手动还原」指引里的目标位置：认不出类型时按内容猜不到，索性把三类常见落点都摆出来
       const manualTargets = () => [
-        M('插件本体 → 插件安装目录（如 D:\\DeepSeekHarness\\dsh-config-sync-plugin-0.3.67）', 'Plugin files → the plugin install folder (e.g. D:\\DeepSeekHarness\\dsh-config-sync-plugin-0.3.67)'),
+        M('插件本体 → 插件安装目录（如 D:\\DeepSeekHarness\\dsh-config-sync-plugin-<ver>）', 'Plugin files → the plugin install folder (e.g. D:\\DeepSeekHarness\\dsh-config-sync-plugin-<ver>)'),
         M('会话目录（--xxx--）→ ~\\.dsh\\sessions', 'Session folders (--xxx--) → ~\\.dsh\\sessions'),
         M('配置五件套（package.json / pnpm-lock.yaml / cordis.yml…）→ ~\\.dsh\\profiles\\desktop', 'Config files (package.json / pnpm-lock.yaml / cordis.yml…) → ~\\.dsh\\profiles\\desktop'),
       ]
@@ -966,7 +966,7 @@ window.__ModuleLoader__.load({
               )),
           )))
         : h('div', { style: S.hint }, backup.exists
-          ? M('这个备份目录下还没有快照（apply.ps1 每次拉取/落地之前都会打一份）', 'No snapshots in this backup folder yet (apply.ps1 makes one before every pull/apply)')
+          ? M('这个目录下还没有快照（每次拉取/落地前会自动打一份）', 'No snapshots in this backup folder yet (apply.ps1 makes one before every pull/apply)')
           : M(`备份目录不存在：${backup.root || defaultRoot}`, `Backup folder does not exist: ${backup.root || defaultRoot}`))
 
       /**
@@ -1460,7 +1460,7 @@ window.__ModuleLoader__.load({
         const p = newPath.trim()
         if (!p || !draft || !editing) return
         if (!/^([A-Za-z]:[\\/]|\\\\)/.test(p)) {
-          setErr(M('要填绝对路径，比如 C:\\Users\\你\\某个目录（相对路径换台机器对不上）', 'Use an absolute path such as C:\\Users\\you\\some-folder'))
+          setErr(M('要填绝对路径，如 C:\\Users\\你\\某个目录（相对路径换机后对不上）', 'Use an absolute path such as C:\\Users\\you\\some-folder'))
           return
         }
         const label = newLabel.trim() || p.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || 'extra'
@@ -1499,7 +1499,7 @@ window.__ModuleLoader__.load({
         ),
         h('div', { style: S.footnote },
           editing
-            ? M('改完点「保存」写进 config-sync-extra.json；点「取消」丢弃改动', 'Click Save to write config-sync-extra.json; Cancel drops the change')
+            ? M('点「保存」写进 config-sync-extra.json，「取消」丢弃改动', 'Click Save to write config-sync-extra.json; Cancel drops the change')
             : M('只读：点右上「修改」才能改规则、加路径', 'Read-only: click Edit to change rules or add paths')),
         msg ? h('div', { style: { ...S.hint, color: 'var(--dsw-alias-state-success-primary, #1a7f37)' } }, msg) : null,
         err ? h('div', { style: { ...S.hint, color: 'var(--dsw-alias-state-error-primary)' } }, err) : null,
@@ -1851,7 +1851,7 @@ window.__ModuleLoader__.load({
           h('div', { style: { ...S.footnote, flex: 1 } }, M('默认关闭；不开就是纯手动', 'Off by default — leaving them off keeps it manual')),
         ),
         sw('autoPull', 'pull', M('启动时自动拉取', 'Pull on startup'),
-          M('云端有新提交 → 弹确认 → 退出后拉取，失败自动还原上次配置',
+          M('云端有新提交 → 弹确认 → 退出后拉取，失败自动还原',
             'New commits upstream → confirm → pull after exit; failures roll back to the previous config')),
         sw('autoPush', 'push', M('退出时自动推送', 'Push on exit'),
           M('有改动 / 新资料 / 未推送提交 → 每 2 分钟复查，退出后推送',
@@ -1869,7 +1869,7 @@ window.__ModuleLoader__.load({
           : null,
         !auto.script
           ? h('div', { style: { ...S.hint, color: 'var(--dsw-alias-state-warn-primary)' } },
-            M('插件与仓库里都找不到 post-exit.ps1：自动同步排不了队，重装一次插件即可（新包自带 runtime）',
+            M('找不到 post-exit.ps1：自动同步排不了队，重装插件即可',
               'post-exit.ps1 is missing from both the plugin and the repo, so auto sync cannot queue — reinstall the plugin (the current package ships runtime/)'))
           : null,
         h('div', { style: S.actions },
@@ -1973,16 +1973,16 @@ window.__ModuleLoader__.load({
         return h('div', { style: { fontSize: '12px', fontWeight: 600, color: 'var(--dsw-alias-state-warn-primary)' } }, headline)
       })(),
       h('div', { style: { ...S.footnote, marginTop: '3px' } },
-        M('文件类的仍在本机磁盘上，只是没进仓库；下次同步会自动复查。插件类要先在本机装好，再拉一次。',
+        M('文件类的仍在本机磁盘上，只是没进仓库；插件类要先装好再拉一次。',
           'File items are still on this machine, just not in the repo; the next sync re-checks them. Plugin items need an install here first, then pull again.')),
       (notices.byKind && notices.byKind['plugin-missing'])
         ? h('div', { style: { ...S.footnote, marginTop: '3px', color: 'var(--dsw-alias-state-warn-primary)' } },
-          M('插件没装：拉取只还原配置，不替你装依赖。先在本机 profile 目录执行 pnpm install（或去掉 -SkipInstall 重跑 apply.ps1），装好后重新拉取一次。',
+          M('插件没装：拉取不装依赖。先在 profile 目录执行 pnpm install（或去掉 -SkipInstall 重跑 apply.ps1），装好后再拉一次。',
             'Missing plugins: pulling only restores config, it does not install dependencies. Run pnpm install in the profile dir first (or re-run apply.ps1 without -SkipInstall), then pull again.'))
         : null,
       (notices.byKind && notices.byKind['context-state'])
         ? h('div', { style: { ...S.footnote, marginTop: '3px', color: 'var(--dsw-alias-state-warn-primary)' } },
-          M('会话缺压缩状态：billion-context 的压缩记录没同步过来，这些会话在本机可能报上下文超长。在主力机重新推送一次（capture 会带上压缩状态），或在本机设置 BILLION_CONTEXT_PLUGIN=0 让 DSH 原生压缩兜底。',
+          M('会话缺压缩状态：这些会话在本机可能报上下文超长。在主力机重新推送一次（会带上压缩状态），或设 BILLION_CONTEXT_PLUGIN=0 让原生压缩兜底。',
             'Missing compaction state: billion-context blocks were not synced, so those sessions may hit a context-overflow error here. Push again from the main machine, or set BILLION_CONTEXT_PLUGIN=0 here to fall back to DSH native compaction.'))
         : null,
       h('div', { style: { marginTop: '4px' } }, rows),
@@ -1993,7 +1993,7 @@ window.__ModuleLoader__.load({
         : null,
       notices.byKind && notices.byKind.history
         ? h('div', { style: { ...S.footnote, marginTop: '4px', color: 'var(--dsw-alias-state-warn-primary)' } },
-          M('历史提交里的超限文件会让整次推送被远端拒收：换一份新的空仓库（本卡「初始化推送」），或用 git filter-repo 清史。',
+          M('历史里的超限文件会让整次推送被拒收：换一份新仓库（本卡「初始化推送」），或用 git filter-repo 清史。',
             'Oversized files already in history make the whole push get rejected: point at a fresh empty repo (Initialize push here), or rewrite history with git filter-repo.'))
         : null,
       )
@@ -2419,7 +2419,7 @@ window.__ModuleLoader__.load({
             type: 'text',
             style: S.input,
             value: note,
-            placeholder: M('可选：这次改了什么（生成推送脚本时写进提交信息，时间会自动附上）', 'Optional: what changed (written into the push commit message; the timestamp is added automatically)'),
+            placeholder: M('可选：这次改了什么（写进提交信息，时间自动附上）', 'Optional: what changed (written into the push commit message; the timestamp is added automatically)'),
             spellCheck: false,
             onChange: (e) => setNote(e.target.value),
           }),
@@ -2430,23 +2430,23 @@ window.__ModuleLoader__.load({
               `还原快照：${data.backup.latest}（${data.backup.count} 份中的最新）`,
               `Restore snapshot: ${data.backup.latest} (newest of ${data.backup.count})`,
             )
-            : M('还原快照：还没有任何备份快照（还原将无从下手，需拉取或指定 -FromCommit）', 'Restore snapshot: no backups yet (restore has nothing to fall back to — pull first, or pass -FromCommit)')),
+            : M('还原快照：还没有备份快照（需先拉取，或指定 -FromCommit）', 'Restore snapshot: no backups yet (restore has nothing to fall back to — pull first, or pass -FromCommit)')),
         data && data.repo && !data.repo.exists && !data.repo.empty
           ? h('div', { style: { ...S.footnote, color: 'var(--dsw-alias-state-error-primary)' } },
-            M('仓库路径还没配置：先在「本机仓库」卡里设好，否则脚本生成不出来。',
+            M('仓库路径未配置：先在本机仓库卡里设好',
               'Repo path is not set: configure it in the Local repo card, otherwise scripts cannot be generated.'))
           : null,
         data && data.repo && (data.repo.phase === 'empty' || data.repo.phase === 'missing')
           ? h('div', { style: { ...S.footnote, color: 'var(--dsw-alias-state-warn-primary)' } },
             data.repo.mode === 'await-init'
-              ? M('本机与云端都还没有内容：现在只生成「推送」（推送时自动初始化仓库并写骨架），拉取没有东西可拉。',
+              ? M('本机与云端都空：只生成「推送」（会初始化仓库），没有东西可拉',
                 'Both the local repo and the cloud are empty: only Push can be generated (push initializes the repo and writes the skeleton); there is nothing to pull.')
-              : M('本机仓库还没有内容：现在只生成「拉取」（顺带可生成还原）。拉取会把云端仓库整个拉到这个路径，之后推送按钮才会放开。',
+              : M('本机仓库是空的：只生成「拉取」，拉完才能推送',
                 'The local repo has no content yet: only Pull (plus Restore) can be generated now. Pull brings the whole cloud repo into this path; push unlocks after that.'))
           : null,
         data && data.remote && !data.remote.configured
           ? h('div', { style: { ...S.footnote, color: 'var(--dsw-alias-state-error-primary)' } },
-            M('云端仓库地址未配置：推送 / 拉取不可用（还原照常可生成）。',
+            M('远端地址未配置：只能生成还原',
               'Cloud remote not set: push/pull unavailable (restore still works).'))
           : null,
         data && data.repo && data.repo.ahead > 0
@@ -2515,8 +2515,8 @@ window.__ModuleLoader__.load({
                 ] : h('span', null, summary.text),
               ),
               h('div', { style: S.pageLead },
-                M('配置在本机、仓库、云端三处流转：改完立即生效；写入与还原的脚本统一在退出客户端后执行。',
-                  'Configs flow between this machine, the repo and the cloud. Changes take effect at once; write and restore scripts run after the client quits.')),
+                M('配置在本机、仓库、云端之间流转。改完立即生效；写回与还原在退出客户端后执行。',
+                  'Configs flow between this machine, the repo and the cloud. Edits apply at once; write-back and restore run after the client quits.')),
             ),
             h('div', { style: S.headerActions },
               // 「本机路径」区唯一的入口：平时普通按钮，只有根外路径/被覆盖这两类告警才变橙并带数字
@@ -2526,7 +2526,7 @@ window.__ModuleLoader__.load({
                   ? { ...S.btn, color: 'var(--dsw-alias-state-warn-primary)', borderColor: 'var(--dsw-alias-state-warn-primary)' }
                   : S.btn,
                 title: (!showRoots && lpAlert > 0)
-                  ? M('本机路径有需要处理的告警（根外路径 / 被覆盖的配置），点开查看', 'Local paths need attention (outside-root paths / overwritten configs) - click to open')
+                  ? M('本机路径有告警（根外路径 / 被覆盖的配置）', 'Local paths need attention (outside-root paths / overwritten configs)')
                   : M('查看本机路径与占位符的对照', 'Show local paths and their placeholders'),
                 onClick: () => setShowRoots((v) => !v),
               },
@@ -2558,17 +2558,17 @@ window.__ModuleLoader__.load({
           conflictCard
             ? Section(M('同步冲突', 'Sync conflicts'), M('这些文件挡住了拉取：逐项选完保存，再点「立即拉取」', 'These files block the pull: pick per file, save, then pull'), [conflictCard])
             : null,
-          Section(M('本机路径', 'Local paths'), M('每台机器只确认一次：仓库里的配置用占位符，落地时按这里的路径展开', 'Confirm once per machine: repo configs use placeholders, expanded with these paths'), [rootsCard]),
-          Section(M('同步目标', 'Sync targets'), M('仓库与远端都是本机配置，改完立即生效', 'Repo and remote are local settings, applied at once'), [repoCard, remoteCard].filter(Boolean)),
+          Section(M('本机路径', 'Local paths'), M('每台机器确认一次即可：仓库里用占位符，落地时按这里展开', 'Confirm once per machine: the repo stores placeholders, expanded with these paths'), [rootsCard]),
+          Section(M('同步目标', 'Sync targets'), M('仓库与远端都是本机设置，改完即生效', 'Repo and remote are local settings, applied at once'), [repoCard, remoteCard].filter(Boolean)),
           Section(M('自动化与插件更新', 'Automation & plugin update'), M('退出后自动做什么、插件自己怎么升级', 'What runs automatically after exit, and how the plugin upgrades'), [autoCard, updCard].filter(Boolean)),
-          Section(M('退出后执行', 'After exit'), M('生成脚本 → 退出客户端后跑一遍；写回、推送、重开窗口都在这一步', 'Generate the script → it runs once the client quits; writing back, pushing and reopening live here'), [actionCard]),
+          Section(M('退出后执行', 'After exit'), M('生成脚本 → 退出客户端后跑一遍', 'Generate the script → it runs after the client quits'), [actionCard]),
           // 「还原备份」跟在动作卡之后：先看怎么生成脚本，再挑具体退回到哪份快照
           Section(M('还原备份', 'Restore backup'), M('点快照 → 确认差异 → 排队还原（退出客户端后执行）', 'Pick a snapshot → confirm the diff → queued restore (runs after the client quits)'), [restoreCard].filter(Boolean)),
           // 「同步内容」放在整页最下面：它是"细项配置"，看清前面的状态与动作后才会来调整
           Section(M('同步内容', 'Sync content'), M('十二组内容，默认全勾；必需组锁定', 'Twelve groups, all checked; required groups are locked'), [scopeCard]),
-          Section(M('插件数据与额外路径', 'Plugin data & extra paths'), M('新插件自己的配置与数据怎么跟着走：默认自动收，排除名单与单文件上限可改', 'How new plugins\' own config and data travel: collected automatically, with editable exclusions and a size cap'), [extraCard]),
+          Section(M('插件数据与额外路径', 'Plugin data & extra paths'), M('插件自己的配置与数据：默认自动收，可改排除名单与体积上限', 'A plugin\'s own config and data: collected automatically, with editable exclusions and a size cap'), [extraCard]),
           // 反馈放在最后一区：查完状态、调完配置，才轮到「有问题要报」
-          Section(M('问题反馈', 'Feedback'), M('提交即建 GitHub Issue（label feedback），跨机器共用同一份；离线先进本机队列', 'Each report becomes a GitHub Issue (label feedback), shared across machines; offline ones queue locally first'), [feedbackCard]),
+          Section(M('问题反馈', 'Feedback'), M('提交即建 GitHub Issue，跨机器共用；离线先排队', 'Each report becomes a GitHub Issue, shared across machines; offline reports queue locally'), [feedbackCard]),
         ),
       )
     }
@@ -2803,7 +2803,7 @@ window.__ModuleLoader__.load({
                   it.adopted
                     ? h('span', { style: { ...S.chip, color: 'var(--dsw-alias-state-success-primary, #2e7d32)' } }, M('已采纳', 'Accepted'))
                     : h('button', { type: 'button', style: S.btn, disabled: busy, onClick: () => adoptAbsolute(it) }, M('采纳', 'Accept')))
-                : h('div', { style: S.hint }, M('本机没有等价目录：这条可以不管，或者自己改掉文件里的路径', 'No equivalent folder on this machine: skip it, or edit that path by hand')))
+                : h('div', { style: S.hint }, M('本机没有等价目录：可忽略，或自己改文件里的路径', 'No equivalent folder on this machine: skip it, or edit that path by hand')))
             return h('div', { style: { ...S.panel, gap: '6px' } },
               h('div', { style: { ...S.hint, color: 'var(--dsw-alias-state-warn-primary)' } },
                 M(`这份配置是 ${data.absolutePaths.machine || '另一台机器'} 推送的：其中有 ${data.absolutePaths.total} 处绝对路径不属于本机任何已确认根。箭头右边是按本机情况推出来的目录，点「采纳」就记进本机自选目录——下次推送起它们变成占位符，哪台机器拉取都换回自己的路径。`,
@@ -2817,7 +2817,7 @@ window.__ModuleLoader__.load({
                 : null,
               dataItems.length
                 ? h('div', { style: S.footnote },
-                  M('这些决定工作区开在哪个目录、历史会话回到哪个目录。拉取时已经按工作区在本机的落点自动对齐；下面列的是仓库里还指着对方机器的那几条，要一起补成自选目录就点「采纳」。',
+                  M('决定工作区与历史会话落在哪个目录。已是本机路径的会自动对齐；下面这些还指着对方机器，点「采纳」补成自选目录。',
                     'These decide which folder a workspace opens in and which folder a session returns to. The pull already aligns them with this machine\'s workspace locations; listed below are the records still pointing at the other machine - Accept adds them as custom roots too.'))
                 : null,
               dataItems.map(rowOf),
@@ -2994,7 +2994,7 @@ window.__ModuleLoader__.load({
             h('div', { style: { ...S.kvVal, display: 'flex', gap: '8px' } },
               h('input', {
                 type: 'password', style: S.input, value: token, spellCheck: false, autoComplete: 'off',
-                placeholder: M('粘贴 GitHub 令牌（只需一次；留空则自动读本机 git 凭据）', 'Paste a GitHub token (once); leave empty to reuse the local git credential'),
+                placeholder: M('粘贴 GitHub 令牌（一次即可；留空则读本机 git 凭据）', 'Paste a GitHub token (once); leave empty to reuse the local git credential'),
                 onChange: (e) => setToken(e.target.value),
               }),
               h('button', { type: 'button', style: S.btnPrimary, disabled: busy || !token.trim(), onClick: saveToken }, M('保存', 'Save')),
@@ -3072,7 +3072,7 @@ window.__ModuleLoader__.load({
           )
           : h('div', { style: S.footnote }, M('还没有反馈记录。', 'No feedback yet.')),
         h('div', { style: S.footnote },
-          M('读列表不需要令牌（公开仓库，匿名 60 次/小时）；提交和关单要令牌，且只有仓库所有者能关单。没有令牌时提交会打开浏览器里预填好的新建 issue 页面。',
+          M('读列表不用令牌；提交和关单要令牌，且只有仓库所有者能关单。没令牌时提交会打开浏览器里预填好的页面。',
             'Reading needs no token (public repo, 60 anonymous requests/hour); submitting and closing do, and only the repo owner can close. Without a token, submitting opens a prefilled new-issue page in the browser.')),
       )
     }
@@ -3212,7 +3212,7 @@ window.__ModuleLoader__.load({
       } catch { /* 插件路由还没起好就静默跳过，面板里仍会显示同一结果 */ }
     }
 
-    // ==================== 0.3.69：会话缓存守卫（客户端半身） ====================
+    // ==================== 0.3.70：会话缓存守卫（客户端半身） ====================
     // 宿主侧没法拦 agent-busy（它是 sessionController 内部抛的 RemoteError），
     // 所以在这里包一层 sessions.create：撞上就上报、清缓存、去掉旧 sessionId 重试一次。
     const BUSY_RE = /session\/agent-busy|is owned by subagent routing/i
@@ -3309,7 +3309,7 @@ window.__ModuleLoader__.load({
       // 界面还没完全起来时 fetch 可能扑空，所以稍等一会儿再查；只查一次，不轮询。
       try { setTimeout(announceLastResult, 1500) } catch { }
 
-      // 0.3.69：给客户端的 sessions 服务套上 agent-busy 自愈钩子。
+      // 0.3.70：给客户端的 sessions 服务套上 agent-busy 自愈钩子。
       // 拿不到 sessions（老版本宿主 / 服务还没起来）就静默跳过，面板功能不受影响。
       try {
         if (typeof ctx.get === 'function') {

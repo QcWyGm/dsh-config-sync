@@ -1,4 +1,4 @@
-﻿# dsh-config-sync-plugin
+# dsh-config-sync-plugin
 [中文](README.md) | English
 
 A DSH plugin: it adds a **"Config Sync"** row to the sidebar (opening a full-page health-check panel), plus a summary row under **Settings → General**. It only **inspects and prepares commands** — the sync actions never run inside the app (except the automatic sync that relaunches the client).
@@ -19,7 +19,7 @@ The package name is **`dsh-config-sync-plugin`** (the `dsh-config-sync` name on 
 
 | Way | Command / entry | Notes |
 |---|---|---|
-| npm | `npm i dsh-config-sync-plugin` | Use it as a dependency, or add `"dsh-config-sync-plugin": "^0.3.69"` to the profile's `package.json` and run `pnpm i`. The name matches the `cordis.patch.yml` insert name and the install folder `dsh-config-sync-plugin-<ver>` |
+| npm | `npm i dsh-config-sync-plugin` | Use it as a dependency, or add `"dsh-config-sync-plugin": "^0.3.70"` to the profile's `package.json` and run `pnpm i`. The name matches the `cordis.patch.yml` insert name and the install folder `dsh-config-sync-plugin-<ver>` |
 | Marketplace | client → Plugins → Discover → “Config Sync” | Installs from the git commit registered in `market-index.json` |
 | Offline tgz | `releases\dsh-config-sync-plugin-<ver>.tgz` | GitHub Release asset for air-gapped machines; the panel's Update button downloads the same file |
 
@@ -99,21 +99,6 @@ Real output of the isolated pull (`pull_rc=0`):
 | `no usable built-in runtime` | no `node.exe` / client binary under `<AppRoot>` | install the full client, otherwise session cwd is not rewritten and the session list is empty |
 | workspace files arrived but custom keys in `~\.dsh\settings.json` did not | plugin configs are a **whitelist** (13 files), `settings.json` is never copied whole | check whether the config belongs to that whitelist |
 
-
-## Install
-
-The plugin is a standard DSH bundle; install it into the current profile:
-
-```sh
-# Install from this repo's release package (no build needed: host, client and runtime scripts are already inside)
-dsh plugin add https://raw.githubusercontent.com/QcWyGm/dsh-config-sync-plugin/main/releases/dsh-config-sync-plugin-<version>.tgz   # latest on the Releases page
-```
-
-Or add this repo's index under the official **Plugins → Discover → Index sources** (see "Using this repo as a market index source" below). **The third-party market plugin dshmarket does not read that index** — see that section for why.
-
-After installing, point it at your own config repo (common paths are auto-detected by default). The **Plugin update** card asks for a manifest URL and token only when needed — **this repo is public, so updates work without a token**.
-
-`apply.ps1` does three things on install: it unpacks `local-plugins\dsh-config-sync-plugin-<version>.tgz` into `<AppRoot>\dsh-config-sync-plugin-0.1.0`, adds a `link:` dependency and a `dsh.profile.bundles` entry to `package.json`, and a `config-sync` line to `cordis.patch.yml`.
 
 ## Contents
 
@@ -587,206 +572,20 @@ The log shows which path ran: `文件比较（快筛）：比对 N 个，深哈�
 - `node tools\clientcheck.mjs`: runs the client half with a fake `__ModuleLoader__` and a react stand-in, asserting the module loads, all three `apply()` registrations succeed (sidebar row and main with matching id/key), `inject` returns a disposer, and the component renders without throwing when data is empty. It validates the contract and structure; the UI still needs a restart and a look.
 - `pwsh -File tools\pack-plugin.ps1`: packs the tgz and writes the sha256 back into `version.json`. **PowerShell 7 is required** (the script is UTF-8 without a BOM, and 5.1 reads the Chinese text as GBK and fails).
 
-## Test log (2026-11-11, isolated environment)
+## Test log
 
-### 2026-11-18: isolated B-machine fresh-pull regression (workspaces / session membership / context overflow)
-
-A clean isolated B machine (approot / dshome / wshome + bundled node runner) simulated a "fresh machine first pull": `sessions`, `storages/workspace.json` and `session_projcache` were wiped first, then the config repo's latest `apply.ps1` ran a full restore. Every check passed:
-
-| Check | Result |
-|---|---|
-| apply run | `EXIT=0`, 73 s (pull speedup active; was 340 s) |
-| Workspace mount | all 5 workspaces restored, paths all point at this machine's `_iso_b\approot\*`, registry merged by ID ✅ |
-| Session membership | workspace registry holds 71 sessionIds; sessions directories yield 73 — only 2 missing (ghost workspace + forward-confirm special session, expected exceptions) ✅ |
-| projcache | absent on B (**FILES=0**) — the repo does carry the over-window sessions' projcache, but it is not synced ✅ |
-| Session cwd | 64 sessions, 63 first-frame cwd correct; the single exception is the forward-confirm passthrough session ✅ |
-| bundle | all 24 entries resolve; the 3 link plugins report "already present locally" and are not re-extracted ✅ |
-
-**Context-overflow loop closed**: the three sessions that used to blow the window with A-machine token metering are now correctly filed — `session-58db748a` (1,553,981 tokens) -> DSH破甲, `session-bbf3e5c9` (1,080,398) -> SquadLink, `session-a1061521` (1,001,058) -> dsh-config-sync. With no projcache on B, DSH rebuilds token metering from the session logs using B's actual model config on startup and triggers compaction, instead of pushing A's stale over-window cache straight to the provider.
-
-Benign warnings (confirmed in the log): `--D-DeepSeekHarness-comfyUI--` / `--dsh-im-forward-confirm--` map to no workspace (special session dirs); `-SkipInstall` skipped 21 registry plugins (isolated offline run — without the flag on a networked machine they install); `dsh-config-sync-0.1.0` / `extra/manifest.json` have no archive/definition and are skipped; the `dsh-config-sync` slot has extra local leftovers (removed only with `-PruneWorkspace`).
-
-### 2026-11-19: release 0.3.69 (carry billion-context compaction state across machines + two new notice kinds)
-
-**Problem**: a long session keeps working on machine A, but after pulling to machine B the very next message fails with a context-overflow error.
-
-Compaction happens on two layers. On A, DSH's own compaction is already **disabled** by billion-context (`billion-context/dist/agent/dsh-compaction-gate.js` flips `@deepseek-ai/dsh-compaction-basic` and `@deepseek-ai/dsh-command-compact` to `disabled:true` while `__BILI_DSH_COMPACTION_VERDICT__ === "active"`); the real compaction is done by bili **on the outgoing side** — it shrinks a 2.3 M surface down to ~160 K before the request reaches the provider. And bili's records do not live in `.dsh`: they are in a separate SQLite database, `%LOCALAPPDATA%\billion-context\sessions\index.db` (tables `sessions` / `blocks` / `content` / `refs` / `messages` / `checkpoints` …).
-
-A pull only restores `sessions` / `attachments` / `vision_router_session_policy`, so **bili's index.db never travels**. Machine B therefore has: (1) no DSH native compaction (bili disabled it), (2) no bili compaction records (bili treats the session as new — `max compressible` is below the threshold, so it does not compact), (3) the whole surface sent straight to the provider → `CONTEXT_WINDOW_EXCEEDED`.
-
-**Fix**: new `tools/bili-state.mjs` that moves compaction state per session.
-
-| Subcommand | What it does |
-|---|---|
-| `probe` | Print the local bili database overview (tables, row counts, `user_version`) |
-| `export <sessionId> <outFile>` | Dump one session's state (`sessions` row + active `blocks` rows + the summary `content` those blocks reference) |
-| `import <inFile> [--dry-run]` | Write it back; existing primary keys are skipped, so it is repeatable |
-| `sync <specJson> <outJson>` | Batch mode used by `capture.ps1` / `apply.ps1` (results go to a file, never stdout) |
-
-Size control is a hard requirement — the default export deliberately leaves out three things:
-
-- `sessions.metadata_json` (a 2.4 MB scale cache; the column is also `NOT NULL`, so export must `delete row.metadata_json` and let it fall back to DEFAULT, otherwise `NOT NULL constraint failed`)
-- the snapshot behind `checkpoints.state_hash` (a single row can reach 21.89 MB)
-- `messages` / `message_media` bodies (bili re-ingests them from the DSH session log)
-
-Net result: about **5 MB per long session** (34–35 active blocks, ~7000 refs, 34 summaries), stored at `conversations/billion_context/<sessionId>.json`. `--all-blocks` / `--full` are needed only for the full block set and checkpoint snapshots.
-
-Wiring: `capture.ps1` calls `-Mode 'export'` for the session ids it just touched; `apply.ps1` calls `-Mode 'import'` against `conversations/billion_context` after restoring sessions. When billion-context is **not installed** on the target machine the whole step is skipped silently and prints “本机没有 billion-context，压缩状态跳过（DSH 自带压缩会接管）” — nothing is written.
-
-**Two new notice kinds** (this release also answers “nobody told me a plugin is missing on B”):
-
-| kind | When it appears | What the panel says |
+| Date | Version | Summary |
 |---|---|---|
-| `plugin-missing` | A `dependencies` plugin is not installed locally, a bundle cannot be resolved, or the repo has no archive for a link plugin | “Missing plugins: pulling only restores config, it does not install dependencies. Run pnpm install in the profile dir first (or re-run apply.ps1 without `-SkipInstall`), then pull again.” |
-| `context-state` | bili compaction state was not synced, import failed, or billion-context is absent | “Missing compaction state: those sessions may hit a context-overflow error here. Push again from the main machine, or set `BILLION_CONTEXT_PLUGIN=0` here to fall back to DSH native compaction.” |
+| 2026-11-19 | 0.3.69 | Carry billion-context compaction state across machines (bili-state.mjs); two new notice kinds (plugin-missing / context-state) |
+| 2026-11-19 | 0.3.68 | Session projection-cache guard (fixes agent-busy session creation) |
+| 2026-11-19 | 0.3.67 | Session log seq reconciliation guard (merge by seq, no more whole-file overwrite) |
+| 2026-11-19 | 0.3.66 | .gitattributes silences LF/CRLF warnings |
+| 2026-11-18 | 0.3.65 | Refresh button feedback (text changes to "Refreshing…") |
+| 2026-11-18 | 0.3.64 | Backup restore fix (write back to original location) + failure summary + auto-close |
+| 2026-11-18 | 0.3.63 | Push speed: Get-RelPath ~10x faster |
+| 2026-11-18 | 0.3.62 | Pull speed: 341s → 109s (3.1×) |
+| 2026-11-15 | 0.3.54 | Three speedups (fast-screen / history cache / single fetch), zero behaviour change |
+| 2026-11-14 | — | Two machines from scratch (isolated); session log first-frame 4-byte leftover fix |
+| 2026-11-11 | — | Single-machine isolated end-to-end (install → pull → push → restore) |
 
-Notices land in `~/.dsh/sync-notices.json`, stay on the panel until the next sync clears them, and the exit summary in `post-exit.ps1` prints them grouped by kind. The headline now reflects the actual category — pure file items say “N item(s) unresolved”, plugin / compaction-state items say “N item(s) need attention”, so plugin problems are no longer described as “files not synced”.
-
-**Manual fallback**: `node tools/bili-state.mjs probe` to inspect the local database; `node tools/bili-state.mjs export <sessionId> <out.json>` to export one session; `import --dry-run` to preview a write.
-
-### 2026-11-19: release 0.3.68 (session projection-cache guard, fixes agent-busy session creation)
-
-**Problem**: DSH's "new session" does not always create one. The client first looks for a **blank session** in the workspace to reuse (`client-ui-workspace/createInWorkspace()` → `sessions.ids.find(summary.blank && …)` → `createNamed({ sessionId: blank })`), and `summary.blank` comes from `record.rows.sessionListMetadata.val.blank` in the projection cache `session_projcache\sessions\<id>.json`.
-
-That cache can be a half-written artifact: a session creation once wrote `blank:true / seq:-1`, the log afterwards kept appending (`turn/start`, `user/message`), but the cache never advanced. The list therefore still treats the session as blank, the UI picks it for reuse, and the host throws:
-
-```
-session/agent-busy: session "<id>" is owned by subagent routing
-```
-
-Session creation fails outright and refreshing does not help (the same cache keeps being reused). Cross-machine sync amplifies it: machine A's stale cache is pulled into machine B, which then hits the same wall.
-
-**Fix**: three layers, none of which touch the log or the workspace registry — pure cache-file operations.
-
-| Layer | Trigger | Action |
-|---|---|---|
-| Client | `sessions.create` hits `agent-busy` | Wraps `sessions.create`: extracts the colliding `sessionId`, reports it to the host, drops the stale `sessionId` and **retries once**. Zero overhead on the normal path |
-| Host | Receives the client report | **Moves** `<DshHome>/storages/session_projcache/sessions/<id>.json` to `<DshHome>/logs/session-cache-guard-backup/` (move only, never delete) so DSH rebuilds the cache from the full log and `blank` becomes `false` |
-| Timer | Every 3 minutes | Proactively sweeps the same class of stale cache. All four conditions must hold (miss rather than mis-delete): (1) cache parses and `blank===true`; (2) a matching `session.v*.jsonl.zstd` exists; (3) the log really has `turn/start` or `user/message`; (4) the log's last event `seq` > the cache's max recorded `seq` |
-
-New route `/config-sync/cache-guard`: `GET` is a read-only scan; `POST` accepts `scan` / `sweep` / `clear` / `busy`. A `cacheGuard` switch was added to settings, **on by default**; when off, neither the timer nor the client `agent-busy` report does anything.
-
-Implementation: `runtime/tools/session-cache-guard.mjs` (`scanSessionCaches` / `clearSessionCaches` / `runGuard` / `indexSessionLogs`); the client half lives in the `0.3.69：会话缓存守卫` block of `client.js`.
-
-**Manual fallback**: the "Session cache guard" card in the panel scans on demand, shows each candidate with its evidence, and lets you pick what to clear. Cache files are only ever backed up, never deleted — a wrong clear is reversible from `<DshHome>/logs/session-cache-guard-backup/`.
-
-
-### 2026-11-19: release 0.3.67 (seq reconciliation guard for session logs)
-
-**Problem**: when two machines each append to the same session, sync used a whole-file copy. Whichever side pushed last overwrote the other side's tail, the event stream developed a `seq` jump, and DSH refused to open the session: `stored session ... is corrupt: corrupt session log: invalid committed event at line N: released v2 row N has seq gap (expected X, got Y)`.
-
-**Fix**: `capture.ps1` (push side) and `apply.ps1` (pull side) no longer `Copy-Item -Force` a `session*.jsonl.zstd`; they hand it to the new seq guard:
-
-| Case | Action |
-|---|---|
-| Target is newer or identical | keep target, write nothing |
-| Source is a strict superset | copy source over target |
-| Each side has exclusive events | merge by `seq`; both sides' events survive |
-| Target itself has a hole the source can fill | repair then write (`merge` — rescues an already-damaged session) |
-| Hole cannot be filled (events really lost) | **leave the file untouched**, record `failed` in `sync-notices.json`, flag for manual handling |
-
-Implementation: `tools/session-log-lib.mjs` (multi-frame zstd decoding, byte-prefix compare, seq merge) + `tools/session-log-guard.mjs` (`check` / `decide` / `merge` / `batch`; batch mode is what the ps1 scripts call, and results go through a temp JSON file rather than stdout because Electron is a GUI subsystem). A full 11MB session parses in ~0.6s, fast enough for the sync hot path.
-
-**Two extras**:
-- `.gitattributes` now marks `conversations/sessions/**/*.zstd binary` and `workspace/** -text`, so Windows `core.autocrlf` or git line-ending normalisation cannot corrupt the binary logs again;
-- `capture.ps1` hoists the tree-compare helpers above their first use: they were defined after the call site, so `-WorkspaceOnly` hit `Test-TreeFileChanged is not recognized` in the session mirror loop.
-
-Diagnostic: `node tools/check-session-log.mjs <log>` or `<logA> <logB>` prints self-consistency (rows / seq range / gaps) and the relation between two files (`identical` / `prefix` / `superset` / `fork`).
-
-### 2026-11-19: release 0.3.66 (.gitattributes silences LF/CRLF warnings)
-- **Cross-platform line ending noise**: on Windows `core.autocrlf=true` converts LF in `session_projcache/*.json` to CRLF, causing Git to warn "LF will be replaced by CRLF" on push. Added `.gitattributes` marking that directory as binary (`binary`) and all other text files as `eol=lf`, eliminating the warning class entirely.
-- Pure config change; no sync logic, behavior, or data changes.
-### 2026-11-18: release 0.3.65 (refresh button feedback)
-- **Top "Re-check"**: now always shows a clear toast after a click, whether or not data changed - success shows "Re-checked, data is up to date (time)", failure shows the reason, reusing the 5-second auto-dismiss notice. Previously, when the state was already current the page looked unchanged and users thought the click did nothing.
-- **Card "Refresh" buttons**: the five refresh buttons (sync conflicts, plugin data, sync content, feedback, settings summary row) now switch their label to "Refreshing..." and disable while running, then return to "Refresh". Three of them (sync conflicts / sync content / feedback) had `load()` functions that never drove `busy` (label never changed) - fixed by adding `setBusy`; the top bar's "Checking..." and the local-path "Reading..." stay as they were.
-- `node --check` and the client self-check all pass; front-end interaction only, no behaviour or data changes.
-### 2026-11-18: release 0.3.64 (backup restore fix + failure summary + auto-close)
-
-- **Backup restore bug fixed**: `apply.ps1` backed up plugin settings by filename only (e.g. `workspace.json`), and `restore.ps1` dumped them all into `~\.dsh` root, so `storages\workspace.json`, `our-free-model\settings.json`, `redteam\preset-declare.json` never returned to their original directories. Backup now writes `__backup_manifest.json` mapping backup filename -> original path relative to DshHome, and restore writes each file back in place; old snapshots without the manifest fall back to root with a clear warning. Isolated regression: 5 profile files + 3 settings restored in place, zero stray root files, point-in-time rollback moved new files and wrote its manifest — all pass.
-- **Failure summary**: on push/pull failure, `post-exit.ps1` now adds `Show-FailureSummary`, extracting `[X]` error lines with detail and recent `[!]` warnings from the run log and printing them together at the end — no more digging through logs.
-- **Auto-close**: after push/pull/update/restore, the window closes automatically 6 minutes after showing results; no more "press any key" (which hangs under remote desktop / unfocused windows). You can also click the × button to close early.
-- **Boundary**: workspace/conversations/skills/presets/plugin-data backed up before apply are data directories, not part of "config restore" rollback (they have their own sync/session paths; folding them in would add path mapping and heavy directory walking).
-
-### 2026-11-18: push speed release 0.3.63 (Get-RelPath ~10x faster)
-
-The shared `Get-RelPath` used by push and pull ran two `-split` + `Where-Object` per file; on a 49k-file workspace push comparison alone cost 11.7s. Now a `StartsWith` + `Substring` fast path, falling back to the original segment-count logic when case or 8.3 short paths disagree. 49,138 files compared with 0 output differences; microbench 5.08s -> 0.51s (~9.9x). All three `dsh-sync-common.ps1` copies (source / config repo / plugin runtime) updated.
-
-### 2026-11-18: pull speed release 0.3.62 (341s → 109s, ~3.1×)
-
-One machine had 49,110 files in a workspace and 101,097 orphan files piled up in another workspace slot; "pull" stalled at "workspace restored" for minutes. Segment tracing found four avoidable costs, all in `runtime\apply.ps1`. Behaviour is unchanged (files committed to the repo, config results and decisions are byte-identical); only "how it computes" changed:
-
-| Step | Result |
-|---|---|
-| End-to-end | 340.9s → 108.5s (same environment and input, ~3.1×); all functional assertions pass: 5 workspaces restored, 0 writes/updates, 0 backups, 56 session cwd fixes, 24 bundles resolvable, `EXIT=0` |
-| ① Unconditional full backup | It used to back up the whole workspace before restoring each one (49,110 files × 1.99ms ≈ 98s), yet a second pull finds source and target byte-identical and needs 0 backups. Now a single file is backed up only when it is actually about to be overwritten → backups 49,110 → 0 |
-| ② Hash API | `Get-FileHash` measured 0.957ms/file vs streaming .NET `SHA256.ComputeHash` 0.16ms/file (~6×); workspace/session header comparisons switched to streaming SHA256 |
-| ③ zip version regex | The `package.json` path inside a `Compress-Archive` zip uses backslashes, but the version regex only accepted `/`, so the archive version was unreadable and a `git fetch` mtime refresh made every pull think "local plugin has a new version" and re-extract 3 link plugins. Changed to `[\\/]`; now all three consistently report "plugin already present" |
-| ④ **Root cause: O(n²) array append** | The extra-path scan did `$extra = @()` + `$extra += $lf.FullName`; 101,097 orphan files ≈ 5.1 billion array copies, alone costing 264s (the dsh-config-sync slot has only 16 synced files yet took 264s). Replaced with `[System.Collections.Generic.List[string]]::new()` + `$extra.Add(...)` → O(n) |
-| Remaining 108s | Hashing + copying 49,110 files in DSH破甲 takes 71s of real disk I/O; cutting further needs option ③ "git HEAD short-circuit" (high risk, not implemented) |
-| Also fixed | A historical `market-index.json` structure bug (0.3.61 release wrote `plugins` as a mixed object/array) and that entry's `TODO_COMMIT_0361` placeholder commit; 0.3.61's "skip projcache sync" (context-overflow fix) is preserved |
-| Lessons | Timestamp tracing through a PowerShell `ForEach-Object` pipeline gets swallowed by output buffering — write to stderr (`[Console]::Error.WriteLine`) for live traces; a BOM'd UTF-8 script must be read/written only as UTF8 — ISO-8859-1 round-trips force .NET to UTF8-decode then re-encode, turning all Chinese into `?` and dropping the BOM |
-
-### 2026-11-15: performance release 0.3.54 (three speedups, behaviour unchanged)
-
-| Step | Result |
-|---|---|
-| Size baseline | config repo 50,817 files / 398.7 MB (workspace 50,377 / 358.4 MB, `.git` 315 / 223.3 MB, 16 commits); `.dsh` 48,168 files; largest file `workspace\SquadLink\reversing\scripts\pe-analyst\out\insns.tsv` at 44.7 MB |
-| Synthetic same-size repo | 50,889 files / 416.4 MB (built in 136 s); first `git add -A` 92.0 s, empty re-run 0.30 s; `status --porcelain` 0.31 s, `ls-files --stage` 0.14–0.40 s |
-| Biggest push-side waste | `git ls-tree -r -l HEAD` = 19.98 / 21.4 / 23.16 s; alternatives measured: `rev-list --objects` 0.15 s, `cat-file --batch-all-objects --batch-check` 0.21 s, `diff-tree -r -l HEAD~1 HEAD` 0.12 s (none equals "total history size", so caching won over swapping the command) |
-| Hash cost | `Get-FileHash` 1.20 ms per file (600 files 0.72 s); .NET streaming SHA256 1.05 ms — only 1.1× faster, the bottleneck is per-file open/read of small random files |
-| Fast-path write-off | cmdlet style (per-file `Test-Path` + `Get-Item`) **37.78 s**; two `Get-ChildItem` passes + in-memory dictionary **3.91 s**; hashing only the few mismatches took 0.09 s and matched 0 files |
-| Network round trip | real Gitee `git ls-remote --heads origin` 0.90 / 0.97 / 0.96 s → dropping one fetch in a pull saves about 1 s |
-| Read-only walks | 48,168 files in `.dsh` enumerated in 6.85 s; 50,377 in the repo workspace in 2.17 s; single-file stat 0.73 ms |
-| Isolated end-to-end | fake `.dsh` + fake client root + local bare remote, 300-file workspace: push#1 exit 0 (full scan, `oversized: 0`), push#2 **3.23 s** (scan skipped), push#3 `-DeepVerify` exit 0 with "深哈希 300", pull exit 0 with `Fast-forward` and the remote's new file present |
-| Fixed along the way | `Get-OversizedHistory` returned `,$res` for an empty result, so the caller's `@()` saw Count 1 and an empty repo reported "1 oversized file in history (0.0 MB)" with a blank path. Changed to `return $res`; the cache now records `oversized: 0` |
-| Test lesson | an end-to-end run must fake the AppRoot (`Resolve-DshAppRoot` accepts `resources\app\package.json` or `resources\app.asar`); pointing it at the real `D:\DeepSeekHarness` lets `apply` overwrite the real mnemon, recoverable only from its automatic backup |
-
-
-A fake cloud bare repo + fake client root + a standalone `.dsh` holding only `profiles\desktop`; the plugin was installed from tgz and the main machine's directories were never touched.
-
-| Step | Result |
-|---|---|
-| Install the plugin, open the panel | all three routes registered; with nothing configured `repo.path` is empty rather than silently falling back, and push is blocked with 400 |
-| Configure repo / cloud | 200, the path lands in the local `.dsh\dsh-config-sync.json`; no origin → `git remote add` |
-| Generate all three scripts | written into the new machine's repo root, `-AppRoot` pointing at that machine's client root, with `--yes` and `y/N` guards |
-| First pull | upstream added first → `Already up to date` → backed up 11 files, laid down 436 → `pnpm install` 21 plugins → all 25 bundles resolvable |
-| Workspace / sessions | materials land in the fake client root; registry paths expand to machine paths; an empty workspace is created as an empty directory; session directory names match the machine recomputation character for character, and header `cwd` is rewritten by `fix-session-cwd.mjs` |
-| Push / restore | pushed to the fake cloud; restore prints a `-DryRun` plan, `--yes` takes a `manual-<timestamp>` safety copy then writes back, and the test marker really disappears |
-| Post-exit sync | all five `post-exit.ps1` exit codes (0/2/3/4/5) reproduced |
-| Local to-push | real machine: `git status` clean, two sessions in `~\.dsh\sessions` newer than the last sync, badge turns orange "To push", `local.pending = 15` (including the five profile files apply had just rewritten) |
-| Confirm → exit + visible window + relaunch | real machine `{"action":"pull-now"}`: `DSH 7→0` in 5 s; +10 s a PowerShell window titled "拉取" appears (no window while queued); after the pull it relaunches `0→4→7` |
-| Close → push + visible window + relaunch | real machine with `autoPush` on: queued as a hidden process → after closing, 7 processes with `hwnd=0` would not exit → forced cleanup after 16 s → window "推送" → push succeeds → automatic relaunch |
-| Mutual exclusion | the startup push and a manual pull hit together: the latter ended the former's not-yet-started waiting process and re-queued; no parallel run |
-| Empty-folder semantics (0.3.26) | isolated run: all eight `repoPhase` shapes classified correctly (including an 8.3 short-name path); `sync.ps1 push` on an empty folder is refused (exit 1, no `.git` created); `pull` in the same folder runs `init → fetch → checkout main` by itself, with `apply.ps1` in place from the bundled runtime |
-
-**Sync boundary**: workspace materials and sessions travel along, but the **default workspace (`default-workspace`) is not synced** (its directory name is encoded from each machine's `WorkspaceHome`, so the target cannot recognise it and just leaves an empty workspace with "empty history"); `models/`, `*.whl`, `*.safetensors` and any file over 100 MB stay out of the repo either. See sections 4 and 5 of the config repo's root `README.md`.
-
-The six issues found in the previous review round (git identity, cross-machine session directories overwriting each other, hard-coded `origin/main`, the finishing message, duplicated logic, dead code) are **all fixed and verified**; the mapping table is in section 12 of the config repo's root `README.md`.
-### 2026-11-14: two machines, from scratch (isolated)
-
-A bare remote (`git init --bare -b main`), two fake client roots (`A\app`, `B\app`) and their own `.dsh` folders. Nothing on the main machine was touched; the run can be repeated.
-
-| Step | Result |
-|---|---|
-| A: first push | skeleton written (6 runtime scripts + `tools\fix-session-cwd.mjs` + version contract); capture produced 8 changes; 15 files committed and pushed to the bare `main` (`push_rc=0`) |
-| Placeholders on the repo side | `workspace\workspace-registry.json` stores `{{APP_ROOT}}/workspace/SquadLink` |
-| B: first pull, client never launched | `[X] target profile does not exist` (`pull_rc=1`) — **install the client and launch it once first** |
-| B: pull after creating the profile | `pull_rc=0`: workspace restored to `B\app\workspace\SquadLink` (byte-exact), registry merged into B's `storages\workspace.json` (path is the B path), 1 bundle resolvable |
-| No Node runner | log says `no usable built-in runtime`; session cwd stays untouched (session list would be empty); adding a usable `node.exe` made the fix take effect |
-| `settings.json` semantics | custom keys in `~\.dsh\settings.json` are **not** synced (whitelist of 13 files only) |
-| **Two bugs found by this run** | ① `fix-session-cwd.mjs` compared `next.length === text.length` to mean "nothing changed" — with equal-length paths on two machines (`D:\...` vs `E:\...`) it always misjudged, reporting `projAlreadyOk=1` while the file still pointed at the source machine; changed to `next === text`. ② step 4 of `apply.ps1` only checked `$cwdMap`, so when the repo had projcache but no sessions the whole block (including the projcache fix) was skipped; changed to `$cwdMap.Count -gt 0 -or $projMap.Count -gt 0`. After both fixes: `projFixed=1` and the cwd points at the local machine |
-
-### 2026-11-14 (b): a 4-byte leftover in the session log, session creation returns 500
-
-After one sync, "new session" popped `新建会话失败：gateway/internal: failed to create session: SessionQueryError: stored session "…" is corrupt … invalid frame magic at byte 186`: one historical session log was corrupt, which made the whole session store fail validation — so even a brand-new session could not be created.
-
-| Step | Result |
-|---|---|
-| The file | `~\.dsh\sessions\--D-DeepSeekHarness-DSH~7834~7532--\session-58db748a…\session.v4.jsonl.zstd`, 423 bytes, mtime from the 11-13 sync, not from that day |
-| Byte layout | the zstd magic `28 b5 2f fd` sits at 0 / 190 / 343; DSH thinks the first frame ends at **186**, bytes 186..189 are garbage, and the real second frame starts at 190 |
-| Root cause | the first frame decompresses to 210 bytes (header line + trailing newline); the binary search returns 186 while the real frame end is 190 because the first frame carries a 4-byte content checksum and the decoder succeeds on the truncated prefix. `rest = buf.subarray(186)` therefore treated the old checksum as body text, leaving 186..189 permanently in the file |
-| Blast radius | 17 `session.v4.jsonl.zstd` under `~\.dsh\sessions` scanned: one genuinely broken; one false positive that turned out to be a **healthy 5-frame file with checksums** (magic at 0/197/380/479/559) and was restored byte-exact from backup |
-| Data repair | backup to `~\.dsh\backups\session-corrupt-<stamp>` → drop the 4-byte hole (423 → 419) → rescan bad=0; header cwd kept, second frame (269 bytes) decodes |
-| Code repair | `firstFrameEnd` adds 4 bytes per FHD bit2 and then corrects against the next frame magic; the first frame is rebuilt from the **whole decompressed text** with only the cwd value replaced (it used to recompress just the header line, dropping any trailing lines); **self-check before writing**; leftover tails in old broken files are dropped |
-| Isolated check | real checksum multi-frame sample: structure intact after the cwd rewrite (magic 0/169/352/451/531 all decode); idempotent rerun `alreadyOk=1`; a file with the hole repaired in one pass (402 bytes, magic 0/169/322) |
-| Takeaway | session logs can only "lose content", never "hold wrong content", so deleting the hole is safer than recompressing; the helper now prefers to skip and report rather than write a broken next frame |
+Detailed test data is in each version's Release Notes.

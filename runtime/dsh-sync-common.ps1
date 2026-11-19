@@ -52,6 +52,9 @@ function Read-SyncNotices([string]$dshHome) {
 }
 
 function Save-SyncNotices {
+  # 没有明确的 home 就不写：Get-SyncNoticesPath 会回落到 %USERPROFILE%\.dsh，
+  # 于是一次「没有上下文」的调用就会把本机真实清单改掉（隔离测试/被 sync 调起的子进程都踩过）。
+  if (-not $script:SyncNoticeHome) { return }
   try {
     $p = Get-SyncNoticesPath $script:SyncNoticeHome
     $dir = Split-Path -Parent $p
@@ -71,6 +74,16 @@ function Save-SyncNotices {
   } catch { }
 }
 
+# 被 sync 调起的子进程（capture / apply）带 -NoResetNotices：它们不能清空清单，
+# 但**必须**建立 home/mode 上下文 —— 否则 Add-SyncNotice 会回落到 %USERPROFILE%\.dsh，
+# 把本该写到 -DshHome 的条目写进别人家的清单里。
+function Set-SyncNoticeContext([string]$dshHome, [string]$mode) {
+  if (-not $dshHome) { return }
+  $script:SyncNoticeHome = $dshHome
+  if ($mode) { $script:SyncNoticeMode = $mode }
+  $script:SyncNoticeLoaded = $true
+}
+
 # 每个动作开始时清空。被 sync 调起的子脚本（capture）要传 -NoResetNotices，
 # 否则它一 Reset 就把父进程已经攒下的条目抹掉。
 function Reset-SyncNotices([string]$dshHome, [string]$mode) {
@@ -84,6 +97,7 @@ function Reset-SyncNotices([string]$dshHome, [string]$mode) {
 function Add-SyncNotice {
   param([string]$Kind = 'skipped', [string]$Path = '', [string]$Reason = '', [long]$Bytes = 0)
   if (-not $Path) { return }
+  if (-not $script:SyncNoticeHome) { return }
   # 先吃进磁盘上别的进程已经写好的条目（capture 与 sync 是两个进程）
   if (-not $script:SyncNoticeLoaded) {
     $existing = Read-SyncNotices $script:SyncNoticeHome
