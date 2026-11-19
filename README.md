@@ -15,7 +15,7 @@ DSH 插件：左侧栏多一行「配置同步」，点开是整页体检面板�
 
 | 方式 | 命令 / 入口 | 说明 |
 |---|---|---|
-| npm | `npm i dsh-config-sync-plugin` | 适合把它当依赖管理，或在 profile 的 `package.json` 里写 `"dsh-config-sync-plugin": "^0.3.65"` 后 `pnpm i`；包名与 `cordis.patch.yml` 里注册的名字、插件目录 `dsh-config-sync-plugin-<ver>` 一致 |
+| npm | `npm i dsh-config-sync-plugin` | 适合把它当依赖管理，或在 profile 的 `package.json` 里写 `"dsh-config-sync-plugin": "^0.3.66"` 后 `pnpm i`；包名与 `cordis.patch.yml` 里注册的名字、插件目录 `dsh-config-sync-plugin-<ver>` 一致 |
 | 插件市场 | 客户端「插件市场 → 发现」搜「配置同步」 | 走 `market-index.json` 登记的 git 提交，版本与 README 对齐 |
 | 离线 tgz | `releases\dsh-config-sync-plugin-<ver>.tgz` | GitHub Release 附件，适合内网机器；面板「更新」按钮下载的也是它 |
 
@@ -582,6 +582,9 @@ pwsh -File sync.ps1 push -ScanHistory
 
 非故障警告（日志已确认无害）：`--D-DeepSeekHarness-comfyUI--` / `--dsh-im-forward-confirm--` 找不到对应工作区（特殊会话目录）；`-SkipInstall` 跳过 21 个 registry 插件（隔离环境离线，真机有网时不加即补齐）；`dsh-config-sync-0.1.0` / `extra/manifest.json` 无归档正常跳过；`dsh-config-sync` 槽位有本机多出的残留文件（加 `-PruneWorkspace` 才删）。
 
+### 2026-11-19：发版 0.3.66（.gitattributes 消除 LF/CRLF 警告）
+- **跨平台行尾噪音**：Windows 上 `core.autocrlf=true` 会把仓库里 LF 写入的 `session_projcache/*.json` 自动转成 CRLF，推送时 Git 报 "LF will be replaced by CRLF" 警告。新增 `.gitattributes` 将该目录标记为二进制（`binary`），其余文本文件统一 `eol=lf`，彻底消除该类警告。
+- 纯配置项改动，不改变任何同步逻辑、行为与数据。
 ### 2026-11-18：发版 0.3.65（刷新按钮反馈）
 - **顶部「重新检测」**：点击后无论数据是否变化都给明确 toast 反馈——成功显示「已重新检测，数据已是最新（时间）」，失败显示具体原因，复用 5 秒自动消失的提示条。此前状态本就是最新时页面看起来毫无变化，用户会以为没点上。
 - **卡片「刷新」按钮**：同步冲突、插件数据、同步内容、问题反馈、设置摘要行五处刷新按钮，点击后文字变「刷新中…」并禁用，结束恢复「刷新」。其中同步冲突 / 同步内容 / 问题反馈三处原来的 `load()` 根本没驱动 `busy`（按钮文字永远不变），本次补齐 `setBusy`；顶部与本机路径的「检测中…/读取中…」保持不变。

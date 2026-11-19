@@ -1,9 +1,9 @@
 {
-    "sha256": "252d8fdcf167bc1125156ce6a4749d5e3d1f2933cec0a9af284e5100be63fed3",
-    "version": "0.3.65",
-    "releasedAt": "2026-11-18",
-    "notesEn": "0.3.65: Refresh feedback - the top \"Re-check\" now shows a success/failure toast; the five card \"Refresh\" buttons switch to \"Refreshing...\" while running and restore afterwards, with setBusy added to the three load() functions that never drove busy. Front-end interaction only; no behaviour or data changes.",
-    "tgz": "releases/dsh-config-sync-plugin-0.3.65.tgz",
+    "sha256": "b585f9a48951d274b232ae0c61bcb425fb9b08379a30119ecd54d709227941d0",
+    "version": "0.3.66",
+    "releasedAt": "2026-11-19",
+    "notesEn": "0.3.66: .gitattributes silences LF/CRLF warnings — Windows core.autocrlf converts session_projcache JSON to CRLF causing push warnings; marked binary + eol=lf for others. Pure config change, no logic changes.",
+    "tgz": "releases/dsh-config-sync-plugin-0.3.66.tgz",
     "minClient": "0.2.2-rc.2",
-    "notes": "0.3.65: 刷新按钮反馈——顶部「重新检测」成功/失败都弹 toast；五个卡片「刷新」按钮点击变「刷新中…」并禁用、结束恢复，其中同步冲突/同步内容/问题反馈三处 load 原本没驱动 busy，已补齐 setBusy。纯前端交互修复，行为与数据不变。"
+    "notes": "0.3.66: .gitattributes 消除 LF/CRLF 警告——Windows core.autocrlf 会把 session_projcache JSON 转 CRLF 导致推送警告，标记为 binary + 其余 eol=lf 彻底消除。纯配置改动，逻辑不变。"
 }
