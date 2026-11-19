@@ -1,41 +1,29 @@
-# 配置同步仓库：行尾规范化
+# 源码仓库：所有文件一律按原始字节存取，禁止任何行尾规范化
 #
-# 会话日志（session.v4.jsonl.zstd 等）是 append-only 的多帧 zstd 二进制流。
-# 一旦被 git 按文本处理做 CRLF 转换，字节就被改写 → 帧边界错位 → DSH 读时直接判 corrupt。
-# 所以整条会话/附件路径必须钉成二进制，不受 core.autocrlf 影响。
+# 为什么用 * -text 而不是 *.js text eol=lf：
+# 本仓库历史里存的是 CRLF（Windows 主线开发），一旦声明 eol=lf，git 会在每次
+# add/checkout 时改写行尾 → 全仓库出现上万行伪 diff，而真正的内容改动被淹没。
+# 声明 -text 后 git 完全不再碰行尾，写入什么就存什么、检出什么就还原什么，
+# 从此不会再出现 "LF will be replaced by CRLF" 警告，也不会因为 autocrlf 设置
+# 不同而在两台机器之间来回改写。
+* -text
+
+# 会话日志 / 附件 / 工作区资料必须字节保真（多帧 zstd，被改写一个字节就 corrupt）
 conversations/sessions/**/*.zstd binary
-conversations/sessions/**/*.zstd -text
 conversations/attachments/** binary
-conversations/attachments/** -text
-
-# session_projcache 是 JSON 缓存，跨平台需保持 LF 一致，标记为二进制跳过 CRLF 转换
 conversations/session_projcache/*.json binary
-
-# 工作区资料必须字节保真：模型/图片/压缩包等一律不转换、不做行尾规范化
-workspace/** -text
 workspace/** binary
 
-# 其余 JSON/JS/PS1/MD 统一 LF
-*.json text eol=lf
-*.js text eol=lf
-*.mjs text eol=lf
-*.ps1 text eol=lf
-*.md text eol=lf
-*.yml text eol=lf
-*.patch text eol=lf
-
-# 二进制资产不转换
-*.tgz binary
+# 二进制资产
 *.zstd binary
 *.zip binary
 *.7z binary
+*.tgz binary
 *.png binary
 *.jpg binary
 *.jpeg binary
 *.gif binary
-*.ico binary
 *.webp binary
+*.ico binary
 *.woff binary
 *.woff2 binary
-*.ttf binary
-*.eot binary
