@@ -19,7 +19,7 @@ The package name is **`dsh-config-sync-plugin`** (the `dsh-config-sync` name on 
 
 | Way | Command / entry | Notes |
 |---|---|---|
-| npm | `npm i dsh-config-sync-plugin` | Use it as a dependency, or add `"dsh-config-sync-plugin": "^0.3.66"` to the profile's `package.json` and run `pnpm i`. The name matches the `cordis.patch.yml` insert name and the install folder `dsh-config-sync-plugin-<ver>` |
+| npm | `npm i dsh-config-sync-plugin` | Use it as a dependency, or add `"dsh-config-sync-plugin": "^0.3.67"` to the profile's `package.json` and run `pnpm i`. The name matches the `cordis.patch.yml` insert name and the install folder `dsh-config-sync-plugin-<ver>` |
 | Marketplace | client → Plugins → Discover → “Config Sync” | Installs from the git commit registered in `market-index.json` |
 | Offline tgz | `releases\dsh-config-sync-plugin-<ver>.tgz` | GitHub Release asset for air-gapped machines; the panel's Update button downloads the same file |
 
@@ -605,6 +605,28 @@ A clean isolated B machine (approot / dshome / wshome + bundled node runner) sim
 **Context-overflow loop closed**: the three sessions that used to blow the window with A-machine token metering are now correctly filed — `session-58db748a` (1,553,981 tokens) -> DSH破甲, `session-bbf3e5c9` (1,080,398) -> SquadLink, `session-a1061521` (1,001,058) -> dsh-config-sync. With no projcache on B, DSH rebuilds token metering from the session logs using B's actual model config on startup and triggers compaction, instead of pushing A's stale over-window cache straight to the provider.
 
 Benign warnings (confirmed in the log): `--D-DeepSeekHarness-comfyUI--` / `--dsh-im-forward-confirm--` map to no workspace (special session dirs); `-SkipInstall` skipped 21 registry plugins (isolated offline run — without the flag on a networked machine they install); `dsh-config-sync-0.1.0` / `extra/manifest.json` have no archive/definition and are skipped; the `dsh-config-sync` slot has extra local leftovers (removed only with `-PruneWorkspace`).
+
+### 2026-11-19: release 0.3.67 (seq reconciliation guard for session logs)
+
+**Problem**: when two machines each append to the same session, sync used a whole-file copy. Whichever side pushed last overwrote the other side's tail, the event stream developed a `seq` jump, and DSH refused to open the session: `stored session ... is corrupt: corrupt session log: invalid committed event at line N: released v2 row N has seq gap (expected X, got Y)`.
+
+**Fix**: `capture.ps1` (push side) and `apply.ps1` (pull side) no longer `Copy-Item -Force` a `session*.jsonl.zstd`; they hand it to the new seq guard:
+
+| Case | Action |
+|---|---|
+| Target is newer or identical | keep target, write nothing |
+| Source is a strict superset | copy source over target |
+| Each side has exclusive events | merge by `seq`; both sides' events survive |
+| Target itself has a hole the source can fill | repair then write (`merge` — rescues an already-damaged session) |
+| Hole cannot be filled (events really lost) | **leave the file untouched**, record `failed` in `sync-notices.json`, flag for manual handling |
+
+Implementation: `tools/session-log-lib.mjs` (multi-frame zstd decoding, byte-prefix compare, seq merge) + `tools/session-log-guard.mjs` (`check` / `decide` / `merge` / `batch`; batch mode is what the ps1 scripts call, and results go through a temp JSON file rather than stdout because Electron is a GUI subsystem). A full 11MB session parses in ~0.6s, fast enough for the sync hot path.
+
+**Two extras**:
+- `.gitattributes` now marks `conversations/sessions/**/*.zstd binary` and `workspace/** -text`, so Windows `core.autocrlf` or git line-ending normalisation cannot corrupt the binary logs again;
+- `capture.ps1` hoists the tree-compare helpers above their first use: they were defined after the call site, so `-WorkspaceOnly` hit `Test-TreeFileChanged is not recognized` in the session mirror loop.
+
+Diagnostic: `node tools/check-session-log.mjs <log>` or `<logA> <logB>` prints self-consistency (rows / seq range / gaps) and the relation between two files (`identical` / `prefix` / `superset` / `fork`).
 
 ### 2026-11-19: release 0.3.66 (.gitattributes silences LF/CRLF warnings)
 - **Cross-platform line ending noise**: on Windows `core.autocrlf=true` converts LF in `session_projcache/*.json` to CRLF, causing Git to warn "LF will be replaced by CRLF" on push. Added `.gitattributes` marking that directory as binary (`binary`) and all other text files as `eol=lf`, eliminating the warning class entirely.

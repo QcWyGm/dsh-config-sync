@@ -553,6 +553,11 @@ function Sync-ConversationApply {
     @{ Repo = 'vision_router_session_policy'; Dst = (Join-Path $DshHome 'storages\vision_router_session_policy\policies');  Remap = $false }
   )
   $nAdd = 0; $nBk = 0
+  # 会话日志不能整文件覆盖：本机可能比仓库更新（本机后面又追加了事件），仓库也可能带着
+  # 另一条 lineage。直接覆盖会让一方的事件整段消失或首尾拼接，DSH 启动时报 "seq gap"。
+  # 这里先攒成批量任务，交给 seq 护栏对账后再写。
+  $guardJobs = [System.Collections.Generic.List[object]]::new()
+  $guardBackupDir = Join-Path $BackupDir 'session-log-guard'
   foreach ($b in $blocks) {
     $srcRoot = Join-Path $convDir $b.Repo
     if (-not (Test-Path -LiteralPath $srcRoot)) { continue }
@@ -579,6 +584,10 @@ function Sync-ConversationApply {
       if (-not (Test-Path -LiteralPath $d)) { $need = $true }
       elseif ((Get-FileHashFast $f.FullName) -ne (Get-FileHashFast $d)) { $need = $true }
       if ($need) {
+        if (Test-SessionLogFile $dstRel) {
+          $guardJobs.Add([ordered]@{ Src = $f.FullName; Dst = $d; WriteTo = $d }) | Out-Null
+          continue
+        }
         # 覆盖前备份本机已有文件
         if (Test-Path -LiteralPath $d) {
           $bd = Join-Path $BackupDir ("conversations\" + $b.Repo + "\" + $dstRel)
@@ -589,6 +598,29 @@ function Sync-ConversationApply {
         }
         Copy-Item -LiteralPath $f.FullName -Destination $d -Force
         $nAdd++
+      }
+    }
+  }
+  if ($guardJobs.Count -gt 0) {
+    $g = Invoke-SessionLogGuard -Jobs $guardJobs.ToArray() -AppRoot $AppRoot -ScriptRoot $PSScriptRoot -RepoRoot $RepoRoot -BackupDir $guardBackupDir
+    Write-SessionLogGuardReport $g $DshHome '还原'
+    if ($g.Skipped) {
+      # 护栏用不了（没 Node/脚本缺失）：退回整文件覆盖，至少保持原来的行为，但要先备份
+      foreach ($j in $guardJobs) {
+        if (Test-Path -LiteralPath $j.WriteTo) {
+          $bd = Join-Path $guardBackupDir ([IO.Path]::GetFileName($j.WriteTo))
+          $bdd = Split-Path -Parent $bd
+          if (-not (Test-Path -LiteralPath $bdd)) { New-Item -ItemType Directory -Path $bdd -Force | Out-Null }
+          Copy-Item -LiteralPath $j.WriteTo -Destination $bd -Force
+          $nBk++
+        }
+        Copy-Item -LiteralPath $j.Src -Destination $j.WriteTo -Force
+        $nAdd++
+      }
+    } else {
+      foreach ($r in @($g.Results)) {
+        if ($r -and $r.wrote) { $nAdd++ }
+        if ($r -and $r.backup) { $nBk++ }
       }
     }
   }
@@ -856,7 +888,7 @@ if ($dropped.Count -gt 0) { Ok "已剔除 $($dropped.Count) 个实验性 bundle�
 $localPluginMap = [ordered]@{
   'dsh-our-free-model-2.8.0'      = 'dsh-our-free-model'
   'dsh-purge-1.4.0'               = 'dsh-purge'
-  'dsh-config-sync-plugin-0.3.66' = 'dsh-config-sync-plugin'
+  'dsh-config-sync-plugin-0.3.67' = 'dsh-config-sync-plugin'
         'dsh-config-sync-plugin-0.3.65' = 'dsh-config-sync-plugin'
         'dsh-config-sync-plugin-0.3.64' = 'dsh-config-sync-plugin'
   'dsh-config-sync-plugin-0.3.63' = 'dsh-config-sync-plugin'

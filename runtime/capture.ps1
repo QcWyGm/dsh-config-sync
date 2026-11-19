@@ -54,6 +54,45 @@ $ErrorActionPreference = 'Stop'
 if (-not $RepoRoot) { $RepoRoot = $PSScriptRoot }
 . (Join-Path $PSScriptRoot 'dsh-sync-common.ps1')
 
+function Get-NormalizedHash($path) {
+  # 文本文件按"去掉 CRLF/LF 差异后的内容"比较，避免换行转换制造假变更；归档文件按原始字节比较
+  $ext = [IO.Path]::GetExtension($path).ToLower()
+  if ($ext -in @('.tgz', '.zip')) {
+    return (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash
+  }
+  $bytes = [IO.File]::ReadAllBytes($path)
+  $text = [Text.Encoding]::UTF8.GetString($bytes)
+  $norm = $text -replace "`r`n", "`n"
+  $sha = [Security.Cryptography.SHA256]::Create()
+  return [BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($norm)))
+}
+
+# ---------- 大目录文件比较（性能关键路径） ----------
+# 旧写法对每个文件算两次 Get-FileHash（源 + 仓库），5 万个文件实测约 120s。
+# 现在：两个 tree 各枚举一次拿 FileInfo（Length/LastWriteTimeUtc 已在枚举时读好，不再 stat），
+# 内存里比对；只有「大小不同」或「源比仓库新」才对该文件算哈希确认内容。
+# 这与 git 自己的判定策略一致（size+mtime 变了才重算 blob）。
+$script:CmpDeep = [bool]$DeepVerify
+$script:CmpFileCount = 0
+$script:CmpHashCount = 0
+
+function Test-TreeFileChanged($srcInfo, $dstInfo) {
+  # $srcInfo / $dstInfo 都是 FileInfo（$dstInfo 为 $null 表示仓库里没有这个文件）
+  $script:CmpFileCount++
+  if ($null -eq $dstInfo) { return $true }
+  if ($srcInfo.Length -ne $dstInfo.Length) { return $true }
+  if ($script:CmpDeep -or ($srcInfo.LastWriteTimeUtc -gt $dstInfo.LastWriteTimeUtc)) {
+    $script:CmpHashCount++
+    return ((Get-NormalizedHash $srcInfo.FullName) -ne (Get-NormalizedHash $dstInfo.FullName))
+  }
+  return $false
+}
+
+function Get-TreeCmpSummary {
+  $deep = if ($script:CmpDeep) { '深校验开' } else { '快筛' }
+  return ('文件比较（{0}）：比对 {1} 个，深哈希 {2} 个' -f $deep, $script:CmpFileCount, $script:CmpHashCount)
+}
+
 if (-not $NoResetNotices) { Reset-SyncNotices $DshHome 'capture' }
 
 # 客户端可能被卸载重装到别的盘：-AppRoot 先校验，对不上就自动定位（注册表 → 常见位置）。
@@ -421,6 +460,9 @@ function Sync-ConversationCapture {
       if ($rel) { $dstRels[$rel] = $rf }
     }
     $madeDirs = @{}
+    # 会话日志不能整文件覆盖：两台机器可能各自 append 出不同 lineage，直接覆盖会让一方的事件
+    # 整段消失，DSH 启动时报 "seq gap"。这里先攒成批量任务，交给 seq 护栏对账后再写。
+    $guardJobs = [System.Collections.Generic.List[object]]::new()
     foreach ($rel in @($srcRels.Keys)) {
       $si = $srcRels[$rel]
       if (-not (Test-TreeFileChanged $si $dstRels[$rel])) { continue }
@@ -430,10 +472,36 @@ function Sync-ConversationCapture {
         if (-not (Test-Path -LiteralPath $dd)) { New-Item -ItemType Directory -Path $dd -Force | Out-Null }
         $madeDirs[$dd] = $true
       }
+      if (Test-SessionLogFile $rel) {
+        $guardJobs.Add([ordered]@{ Src = $si.FullName; Dst = $d; WriteTo = $d }) | Out-Null
+        $dstRels[$rel] = [IO.FileInfo]::new($d)
+        continue
+      }
       Copy-Item -LiteralPath $si.FullName -Destination $d -Force
       $changed.Add(('conversations/{0}/{1}' -f $b.Dst, $rel.Replace($BS,'/'))) | Out-Null
       $nAdd++
       $dstRels[$rel] = [IO.FileInfo]::new($d)
+    }
+    if ($guardJobs.Count -gt 0) {
+      $g = Invoke-SessionLogGuard -Jobs $guardJobs.ToArray() -AppRoot $AppRoot -ScriptRoot $PSScriptRoot -RepoRoot $RepoRoot -BackupDir (Join-Path $convDir '_session-log-guard-backup')
+      Write-SessionLogGuardReport $g $DshHome '抓取'
+      if ($g.Skipped) {
+        # 护栏用不了（没 Node/脚本缺失）：退回整文件覆盖，至少保持原来的行为
+        foreach ($j in $guardJobs) {
+          Copy-Item -LiteralPath $j.Src -Destination $j.WriteTo -Force
+          $rr = Get-RelPath $dstRoot ([string]$j.WriteTo)
+          if ($rr) { $changed.Add(('conversations/{0}/{1}' -f $b.Dst, $rr.Replace($BS,'/'))) | Out-Null }
+          $nAdd++
+        }
+      } else {
+        foreach ($r in @($g.Results)) {
+          if ($r -and $r.wrote) {
+            $rr = Get-RelPath $dstRoot ([string]$r.wrote)
+            if ($rr) { $changed.Add(('conversations/{0}/{1}' -f $b.Dst, $rr.Replace($BS,'/'))) | Out-Null }
+            $nAdd++
+          }
+        }
+      }
     }
     # 镜像删除：本机已删的会话文件，仓库里也删
     foreach ($rel in @($dstRels.Keys)) {
@@ -514,44 +582,6 @@ if ($WorkspaceOnly) {
     Say "另一台机器：git pull ; powershell -ExecutionPolicy Bypass -File .\apply.ps1 -WorkspaceOnly"
   }
   return
-}
-function Get-NormalizedHash($path) {
-  # 文本文件按"去掉 CRLF/LF 差异后的内容"比较，避免换行转换制造假变更；归档文件按原始字节比较
-  $ext = [IO.Path]::GetExtension($path).ToLower()
-  if ($ext -in @('.tgz', '.zip')) {
-    return (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash
-  }
-  $bytes = [IO.File]::ReadAllBytes($path)
-  $text = [Text.Encoding]::UTF8.GetString($bytes)
-  $norm = $text -replace "`r`n", "`n"
-  $sha = [Security.Cryptography.SHA256]::Create()
-  return [BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($norm)))
-}
-
-# ---------- 大目录文件比较（性能关键路径） ----------
-# 旧写法对每个文件算两次 Get-FileHash（源 + 仓库），5 万个文件实测约 120s。
-# 现在：两个 tree 各枚举一次拿 FileInfo（Length/LastWriteTimeUtc 已在枚举时读好，不再 stat），
-# 内存里比对；只有「大小不同」或「源比仓库新」才对该文件算哈希确认内容。
-# 这与 git 自己的判定策略一致（size+mtime 变了才重算 blob）。
-$script:CmpDeep = [bool]$DeepVerify
-$script:CmpFileCount = 0
-$script:CmpHashCount = 0
-
-function Test-TreeFileChanged($srcInfo, $dstInfo) {
-  # $srcInfo / $dstInfo 都是 FileInfo（$dstInfo 为 $null 表示仓库里没有这个文件）
-  $script:CmpFileCount++
-  if ($null -eq $dstInfo) { return $true }
-  if ($srcInfo.Length -ne $dstInfo.Length) { return $true }
-  if ($script:CmpDeep -or ($srcInfo.LastWriteTimeUtc -gt $dstInfo.LastWriteTimeUtc)) {
-    $script:CmpHashCount++
-    return ((Get-NormalizedHash $srcInfo.FullName) -ne (Get-NormalizedHash $dstInfo.FullName))
-  }
-  return $false
-}
-
-function Get-TreeCmpSummary {
-  $deep = if ($script:CmpDeep) { '深校验开' } else { '快筛' }
-  return ('文件比较（{0}）：比对 {1} 个，深哈希 {2} 个' -f $deep, $script:CmpFileCount, $script:CmpHashCount)
 }
 function CopyNormalized($src, $dst) {
   # 二进制原样拷贝；文本统一写成 LF（与 .gitattributes 的 eol=lf 对齐），并保留原文件的 UTF-8 BOM

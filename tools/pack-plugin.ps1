@@ -1,4 +1,4 @@
-<#
+﻿<#
 打包 dsh-config-sync-plugin 插件 tgz（发布用，自包含：只读本仓库）
 
 用法

@@ -1,9 +1,9 @@
 {
-    "sha256": "b585f9a48951d274b232ae0c61bcb425fb9b08379a30119ecd54d709227941d0",
-    "version": "0.3.66",
-    "releasedAt": "2026-11-19",
-    "notesEn": "0.3.66: .gitattributes silences LF/CRLF warnings — Windows core.autocrlf converts session_projcache JSON to CRLF causing push warnings; marked binary + eol=lf for others. Pure config change, no logic changes.",
-    "tgz": "releases/dsh-config-sync-plugin-0.3.66.tgz",
-    "minClient": "0.2.2-rc.2",
-    "notes": "0.3.66: .gitattributes 消除 LF/CRLF 警告——Windows core.autocrlf 会把 session_projcache JSON 转 CRLF 导致推送警告，标记为 binary + 其余 eol=lf 彻底消除。纯配置改动，逻辑不变。"
+  "sha256":"3b53a686597c76e80a34867e1f13038e14fd865c05806c44b3c6196117614da6",
+  "version": "0.3.67",
+  "releasedAt": "2026-11-19",
+  "notesEn": "0.3.67: seq reconciliation guard for session logs — cross-machine writes to the same session are merged by seq instead of whole-file overwrite, eliminating DSH 'seq gap / session log corrupt' on startup; .gitattributes now marks conversations/sessions/**/*.zstd as binary and workspace/** as -text; capture.ps1 hoists the tree-compare helpers above their first use (they were defined after the call site, so -WorkspaceOnly failed with Test-TreeFileChanged not recognized).",
+  "tgz": "releases/dsh-config-sync-plugin-0.3.67.tgz",
+  "minClient": "0.2.2-rc.2",
+  "notes": "0.3.67: 会话日志 seq 对账护栏——跨机各写同一会话时不再整文件覆盖，改为按 seq 求并集，彻底消除 DSH 启动报 'seq gap / session log corrupt'；.gitattributes 补 conversations/sessions/**/*.zstd binary 与 workspace/** -text；capture.ps1 把大目录比较函数上移到脚本前部（原先定义晚于调用，-WorkspaceOnly 直接报 Test-TreeFileChanged 未定义）。"
 }

@@ -1011,3 +1011,133 @@ function Get-TokenHint([string]$token) {
     }
   }
 }
+
+# ---------- 会话日志跨机护栏（按 seq 对账，防 corrupt / seq gap）----------
+# 为什么需要它：
+#   会话日志（session.v4.jsonl.zstd）是 append-only 的多帧 zstd，每个事件一行、带连续 seq。
+#   同步是「整文件覆盖」：capture 把本机整份拷进仓库，apply 把仓库整份铺回本机。
+#   两台机器同时在同一个会话里跑，各自 append 出不同 lineage；整文件覆盖必然让其中一方的
+#   事件整段消失。更糟的是「拼接」——本机文件被换成较短版本后 DSH 仍按自己的计数继续
+#   append，于是「A 的前 N 条 + B 从 M 起」首尾相接，启动时报
+#     corrupt session log: released v2 row N has seq gap (expected N, got M)
+#   写到这一步事件已经丢了，只能人工处理。所以写入之前先做一次 seq 对账。
+#
+# 判据（append-only 的硬性质）：同源两份日志去掉首帧后，短的那份必然是长的那份的字节前缀。
+#   take_src  源是目标的严格超集 → 覆盖（正常路径，零额外风险）
+#   keep_dst  目标更全或两边相同 → 不写，绝不回退（保护「本机更新」的那一侧）
+#   merge     两边各有对方没有的事件（真分叉），或目标自身已断档但能被源补齐
+#             → 按 seq 求并集后写入，一个事件都不丢
+#   失败      并集仍有空洞（事件真的丢了）→ 拒绝写，Warn + 记 notices，等人工介入
+#
+# 退路：找不到 Node/Electron 执行器、或护栏自身报错时退回原来的整文件覆盖（并 Warn）。
+# 护栏是多加的一层保护，不能让没装 Node 的机器彻底同步不了。
+
+# 会话日志文件名判定（与 DSH 的 ARTIFACT_NAMES 对齐：session.v4.jsonl.zstd / session.jsonl.zstd / session.jsonl ...）
+function Test-SessionLogFile([string]$relOrName) {
+  if (-not $relOrName) { return $false }
+  $leaf = @(($relOrName -replace '/', '\') -split '\\')[-1]
+  return ($leaf -match '^session(\.[A-Za-z0-9]+)*\.jsonl(\.zstd)?$')
+}
+
+function Get-SessionLogGuardPath([string]$scriptRoot, [string]$repoRoot) {
+  foreach ($base in @($scriptRoot, $repoRoot)) {
+    if (-not $base) { continue }
+    foreach ($rel in @('tools\session-log-guard.mjs', 'runtime\tools\session-log-guard.mjs')) {
+      $p = Join-Path $base $rel
+      if (Test-Path -LiteralPath $p) { return $p }
+    }
+  }
+  return $null
+}
+
+# $Jobs: @( @{ Src = '<要采用的候选>'; Dst = '<当前生效的那份>'; WriteTo = '<把赢家写到哪里>' }, ... )
+# 返回 [ordered]@{ Ok; Total; Take; Merge; Keep; Failed; Results; Skipped; Reason }
+# 一次调用把整批会话日志跑完：一台机器几十个会话，逐个起 node 光进程启动就要好几秒。
+function Invoke-SessionLogGuard {
+  param(
+    [object[]]$Jobs,
+    [string]$AppRoot,
+    [string]$ScriptRoot,
+    [string]$RepoRoot,
+    [string]$BackupDir
+  )
+  $res = [ordered]@{ Ok = $true; Total = 0; Take = 0; Merge = 0; Keep = 0; Failed = 0; Results = @(); Skipped = $true; Reason = '' }
+  if (-not $Jobs -or @($Jobs).Count -eq 0) { $res.Reason = '没有需要带护栏写入的会话日志'; return $res }
+  $jobs = @($Jobs)
+
+  $helper = Get-SessionLogGuardPath $ScriptRoot $RepoRoot
+  if (-not $helper) {
+    $res.Reason = '找不到 tools\session-log-guard.mjs'
+    return $res
+  }
+  $runner = Get-HostNodeRunner $AppRoot
+  if (-not $runner) {
+    $res.Reason = '这台机器既没有 Node 也找不到客户端本体'
+    return $res
+  }
+
+  $stamp = Get-Date -Format 'yyyyMMddHHmmssfff'
+  $jobPath = Join-Path ([IO.Path]::GetTempPath()) ('dsh-sessionlog-job-{0}-{1}.json' -f $stamp, $PID)
+  $outPath = Join-Path ([IO.Path]::GetTempPath()) ('dsh-sessionlog-out-{0}-{1}.json' -f $stamp, $PID)
+  $spec = [ordered]@{
+    backupDir = [string]$BackupDir
+    jobs = @($jobs | ForEach-Object {
+      [ordered]@{ src = [string]$_.Src; dst = [string]$_.Dst; writeTo = [string]$_.WriteTo }
+    })
+  }
+  [IO.File]::WriteAllText($jobPath, ($spec | ConvertTo-Json -Depth 5 -Compress), (New-Object Text.UTF8Encoding($false)))
+
+  $oldRunAsNode = $env:ELECTRON_RUN_AS_NODE
+  try {
+    if ($runner.Electron) { $env:ELECTRON_RUN_AS_NODE = '1' }
+    else { Remove-Item Env:\ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue }
+    # 结果落文件而不是抓 stdout：执行器可能是客户端自带的 Electron（GUI 子系统，stdout 抓不到）
+    & $runner.Exe $helper 'batch' $jobPath $outPath *> $null
+    $code = $LASTEXITCODE
+    if (-not (Test-Path -LiteralPath $outPath)) {
+      $res.Reason = ('护栏没有产出结果文件（执行器退出码 {0}）' -f $code)
+      return $res
+    }
+    $r = ([IO.File]::ReadAllText($outPath)) | ConvertFrom-Json -ErrorAction Stop
+    $res.Total = [int]$r.total
+    $res.Take = [int]$r.take
+    $res.Merge = [int]$r.merge
+    $res.Keep = [int]$r.keep
+    $res.Failed = [int]$r.failed
+    $res.Ok = [bool]$r.ok
+    $res.Results = @($r.results)
+    $res.Skipped = $false
+    return $res
+  } catch {
+    $res.Reason = ('护栏执行出错：{0}' -f $_.Exception.Message)
+    return $res
+  } finally {
+    if ($null -eq $oldRunAsNode) { Remove-Item Env:\ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue }
+    else { $env:ELECTRON_RUN_AS_NODE = $oldRunAsNode }
+    Remove-Item -LiteralPath $jobPath -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $outPath -Force -ErrorAction SilentlyContinue
+  }
+}
+
+# 把护栏结果变成给用户看的提示。失败项一律记进 notices —— 面板/收尾汇总才看得到。
+function Write-SessionLogGuardReport($Guard, [string]$DshHome, [string]$Verb) {
+  if (-not $Guard) { return }
+  if ($Guard.Skipped) {
+    Warn ('会话日志 seq 护栏本次未启用（{0}）：退回整文件覆盖' -f $Guard.Reason)
+    return
+  }
+  Ok ('会话日志 seq 对账（{0}）：核对 {1} 个、覆盖 {2} 个、求并集 {3} 个、保留本机 {4} 个' -f $Verb, $Guard.Total, $Guard.Take, $Guard.Merge, $Guard.Keep)
+  if ([int]$Guard.Merge -gt 0) {
+    Ok ('  其中 {0} 个会话两边各有独占事件，已按 seq 求并集写入（两边的事件都保住了）' -f $Guard.Merge)
+  }
+  if ([int]$Guard.Failed -gt 0) {
+    foreach ($item in @($Guard.Results)) {
+      if ($item -and (-not $item.ok)) {
+        Warn ('  会话日志无法自动修复：{0}（{1}）' -f [string]$item.dst, [string]$item.detail)
+        if ($DshHome) { Add-SyncNotice -Kind 'failed' -Path ([string]$item.dst) -Reason ('会话日志 seq 断档：' + [string]$item.detail) }
+      }
+    }
+    Warn ('  有 {0} 个会话日志的断档补不回来（事件已丢），已保持原样不覆盖；DSH 里这些会话可能报 corrupt' -f $Guard.Failed)
+  }
+}
+

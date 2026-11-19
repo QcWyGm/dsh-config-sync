@@ -613,8 +613,10 @@ if (prevScope === null) { try { unlinkSync(scopeFile) } catch { } } else writeFi
 
   // 进度窗口的收尾：推送/拉取完成后窗口留着等用户自己关（不自动消失），
   // 且客户端是在这之前由 explorer 拉起来的 —— 所以点 × 关掉窗口不会把客户端带走。
-  check('推送/拉取完成后进度窗口不自动关闭（等按键或点 ×）',
-    postExitSrc.includes("if ($Mode -eq 'pull' -or $Mode -eq 'push'") && postExitSrc.includes('RawUI.ReadKey'),
+  // 0.3.64 起改成「展示 6 分钟后自动关窗」：远程桌面/无焦点时 ReadKey 会一直卡住，
+  // 用户要的是别让窗口永远挡在前面。所以断言改成盯 Start-Sleep 而不是 ReadKey。
+  check('推送/拉取完成后进度窗口保留一段时间再自动关闭（不再卡在 ReadKey）',
+    postExitSrc.includes("if ($Mode -eq 'pull' -or $Mode -eq 'push'") && /Start-Sleep -Seconds 360/.test(postExitSrc) && !postExitSrc.includes('RawUI.ReadKey'),
     postExit || 'post-exit.ps1')
   check('插件更新完成后窗口同样留着（不与同步窗口两套行为）',
     /-eq 'pull'.*?-eq 'push'.*?-eq 'update'/.test(postExitSrc) && postExitSrc.includes('插件更新已完成'),

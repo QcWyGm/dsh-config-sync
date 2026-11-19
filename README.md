@@ -15,7 +15,7 @@ DSH 插件：左侧栏多一行「配置同步」，点开是整页体检面板�
 
 | 方式 | 命令 / 入口 | 说明 |
 |---|---|---|
-| npm | `npm i dsh-config-sync-plugin` | 适合把它当依赖管理，或在 profile 的 `package.json` 里写 `"dsh-config-sync-plugin": "^0.3.66"` 后 `pnpm i`；包名与 `cordis.patch.yml` 里注册的名字、插件目录 `dsh-config-sync-plugin-<ver>` 一致 |
+| npm | `npm i dsh-config-sync-plugin` | 适合把它当依赖管理，或在 profile 的 `package.json` 里写 `"dsh-config-sync-plugin": "^0.3.67"` 后 `pnpm i`；包名与 `cordis.patch.yml` 里注册的名字、插件目录 `dsh-config-sync-plugin-<ver>` 一致 |
 | 插件市场 | 客户端「插件市场 → 发现」搜「配置同步」 | 走 `market-index.json` 登记的 git 提交，版本与 README 对齐 |
 | 离线 tgz | `releases\dsh-config-sync-plugin-<ver>.tgz` | GitHub Release 附件，适合内网机器；面板「更新」按钮下载的也是它 |
 
@@ -581,6 +581,28 @@ pwsh -File sync.ps1 push -ScanHistory
 **上下文超长闭环**：之前因 A 机 token 计量缓存超窗的 3 个会话，现在都正确归到对应工作区——`session-58db748a`（1,553,981 tokens）→ DSH破甲、`session-bbf3e5c9`（1,080,398）→ SquadLink、`session-a1061521`（1,001,058）→ dsh-config-sync。同时 B 机 projcache 为空，DSH 启动时会从会话日志按 B 机实际模型配置重建 token 计量并触发 compaction，不会再把 A 机超窗缓存直接怼给 provider。
 
 非故障警告（日志已确认无害）：`--D-DeepSeekHarness-comfyUI--` / `--dsh-im-forward-confirm--` 找不到对应工作区（特殊会话目录）；`-SkipInstall` 跳过 21 个 registry 插件（隔离环境离线，真机有网时不加即补齐）；`dsh-config-sync-0.1.0` / `extra/manifest.json` 无归档正常跳过；`dsh-config-sync` 槽位有本机多出的残留文件（加 `-PruneWorkspace` 才删）。
+
+### 2026-11-19：发版 0.3.67（会话日志 seq 对账护栏）
+
+**问题**：两台机器各自往同一个会话写事件时，同步是「整文件覆盖」。谁后 push 谁的内容顶掉对方的后半段，事件流出现 `seq` 跳号，DSH 启动直接报 `stored session ... is corrupt: corrupt session log: invalid committed event at line N: released v2 row N has seq gap (expected X, got Y)`，该会话再也打不开。
+
+**修复**：`capture.ps1`（推送侧）与 `apply.ps1`（拉取侧）遇到 `session*.jsonl.zstd` 不再 `Copy-Item -Force`，改为交给新加的 seq 护栏：
+
+| 情形 | 处理 |
+|---|---|
+| 目标更全 / 完全相同 | 保留目标，什么都不写 |
+| 源是目标的严格超集 | 用源覆盖目标 |
+| 两边各有独占事件 | 按 `seq` 求并集写入，两边事件全保住 |
+| 目标自身断档、源能补齐 | 先补齐再写（`merge`，可救回已被覆盖坏的会话） |
+| 洞补不回来（事件确实丢了） | **保持原样不覆盖**，记 `sync-notices.json` 的 `failed` 并提示需人工处理 |
+
+护栏实现：`tools/session-log-lib.mjs`（多帧 zstd 逐帧解、字节前缀比较、按 seq 合并）+ `tools/session-log-guard.mjs`（`check` / `decide` / `merge` / `batch` CLI，批量模式给 ps1 调用，结果走临时 JSON 文件而不是 stdout——Electron 是 GUI 子系统）。11MB 会话全量解析 ~0.6s，可进同步热路径。
+
+**顺带两处**：
+- `.gitattributes` 补 `conversations/sessions/**/*.zstd binary` 与 `workspace/** -text`，避免 Windows `core.autocrlf` 或 git 的行尾归一再次写坏二进制日志；
+- `capture.ps1` 把「大目录文件比较」几个辅助函数上移到脚本前部——它们原先定义在调用点之后，`-WorkspaceOnly` 跑到会话镜像循环会报 `Test-TreeFileChanged is not recognized`。
+
+诊断工具：`node tools/check-session-log.mjs <日志>` 或 `<日志A> <日志B>`，输出自洽性（行数/seq 范围/gaps）与两份的关系（`identical` / `prefix` / `superset` / `fork`）。
 
 ### 2026-11-19：发版 0.3.66（.gitattributes 消除 LF/CRLF 警告）
 - **跨平台行尾噪音**：Windows 上 `core.autocrlf=true` 会把仓库里 LF 写入的 `session_projcache/*.json` 自动转成 CRLF，推送时 Git 报 "LF will be replaced by CRLF" 警告。新增 `.gitattributes` 将该目录标记为二进制（`binary`），其余文本文件统一 `eol=lf`，彻底消除该类警告。
