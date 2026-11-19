@@ -1,572 +1,626 @@
 {
-    "format":  1,
-    "title":  {
-                  "en":  "QcWyGm plugins",
-                  "zh":  "QcWyGm 插件"
-              },
-    "description":  {
-                        "en":  "DSH plugins by QcWyGm.",
-                        "zh":  "QcWyGm 的 DSH 插件。"
-                    },
-    "plugins":  [
-                    {
-                        "name":  "dsh-config-sync-plugin",
-                        "title":  {
-                                      "en":  "Config Sync",
-                                      "zh":  "配置同步"
-                                  },
-                        "description":  {
-                                            "zh":  "多机 DSH 配置同步：本机与云端仓库的差异一目了然——改了哪些文件、提交领先还是落后、哪些会话和技能还没同步，一键生成退出后执行的推送、拉取、还原脚本。拉取被本地改动挡住时两侧都留底、逐项选保留哪边；每次应用前自动备份，配置快照、插件备份、会话备份都能一键还原，装坏的插件也能整份回滚。仅限 Windows（脚本为 PowerShell）。",
-                                            "en":  "Multi-machine DSH config sync: see exactly how this machine differs from the cloud config repo — changed files, commits ahead or behind, sessions and skills not synced yet — then generate the push, pull and restore scripts that run after the client exits. A blocked pull keeps both sides and lets you pick file by file; every apply snapshots the profile first, and config snapshots, plugin backups and session backups all restore in one click, including rolling back a broken plugin install. Windows only (the scripts are PowerShell)."
-                                        },
-                        "icon":  "https://raw.githubusercontent.com/QcWyGm/dsh-config-sync-plugin/main/docs/panel.png",
-                        "author":  "QcWyGm",
-                        "homepage":  "https://github.com/QcWyGm/dsh-config-sync-plugin#readme",
-                        "repository":  {
-                                           "url":  "https://github.com/QcWyGm/dsh-config-sync-plugin"
-                                       },
-                        "versions":  [
-                                                                                  {"version":"0.3.68","publishTimestamp":1795096505,"source":{"type":"git","url":"https://github.com/QcWyGm/dsh-config-sync-plugin","commit":"dfdf1560ef92c1e9d25576f0237ebd4e463b64db"}},{"version":"0.3.67","publishTimestamp":1795094973,"source":{"type":"git","url":"https://github.com/QcWyGm/dsh-config-sync-plugin","commit":"1af15249ad78b2186fa91c155c068d167c36d41f"}},{"version":"0.3.66","publishTimestamp":1795091254,"source":{"type":"git","url":"https://github.com/QcWyGm/dsh-config-sync-plugin","commit":"b13f2f7b44dafac48845d36863f5bc234ed0e730"}},{"version":"0.3.65","publishTimestamp":1795017142,"source":{"type":"git","url":"https://github.com/QcWyGm/dsh-config-sync-plugin","commit":"e19317c69f097f250fba228ea00289abaad75d32"}},{"version":"0.3.64","publishTimestamp":1795012301,"source":{"type":"git","url":"https://github.com/QcWyGm/dsh-config-sync-plugin","commit":"aa3d3872bf75e96f9379a69d905ab0c4d2fe0556"}},{
-                                              "version":  "0.3.63",
-                                              "publishTimestamp":  1795009233,
-                                              "source":  {
-                                                  "type":  "git",
-                                                  "url":  "https://github.com/QcWyGm/dsh-config-sync-plugin",
-                                                  "commit":  "6d4976cf387a50dede0f2868db3cef6f28c0bace"
-                                              }
-                                          },
-                                          {
-                                             "version":  "0.3.62",
-                                             "publishTimestamp":  1795006149,
-                                             "source":  {
-                                                 "type":  "git",
-                                                 "url":  "https://github.com/QcWyGm/dsh-config-sync-plugin",
-                                                 "commit":  "d3f1e1894c020a7303ea74efe4d060f31ab25c6a"
-                                             }
-                                         },
-                                         {
-                                             "version":  "0.3.61",
-                                             "publishTimestamp":  1794918180,
-                                             "source":  {
-                                                 "type":  "git",
-                                                 "url":  "https://github.com/QcWyGm/dsh-config-sync-plugin",
-                                                 "commit":  "8f078742fe79659b2e838ee0f7a79af33d8bebcd"
-                                             }
-                                         },
-{
-                                             "version":  "0.3.60",
-                                             "publishTimestamp":  1794852193,
-                                             "source":  {
-                                                 "type":  "git",
-                                                 "url":  "https://github.com/QcWyGm/dsh-config-sync-plugin",
-                                                 "commit":  "28fc40dc2b5b422ac6217e65ce683e0408478858"
-                                             }
-                                         },
-                                         {
-                                             "version":  "0.3.59",
-                                             "publishTimestamp":  1794842058,
-                                             "source":  {
-                                                            "type":  "git",
-                                                            "url":  "https://github.com/QcWyGm/dsh-config-sync-plugin",
-                                                            "commit":  "6858d897ed51ed546749dc9fe4bb443506daceea"
-                                             }
-                                         },
-                                         {
-                                             "version":  "0.3.58",
-                                             "publishTimestamp":  1794836713,
-                                             "source":  {
-                                                            "type":  "git",
-                                                            "url":  "https://github.com/QcWyGm/dsh-config-sync-plugin",
-                                                            "commit":  "a112dfe03329f74a244de609ccd257eb846638e3"
-                                                        }
-                                         },
-                                         {
-                                             "version":  "0.3.56",
-                                             "publishTimestamp":  1794828380,
-                                             "source":  {
-                                                            "type":  "git",
-                                                            "url":  "https://github.com/QcWyGm/dsh-config-sync-plugin",
-                                                            "commit":  "cfa11600948a2d4670ccef355483a0c484824339"
-                                                        }
-                                         },
-                                         {
-                                             "version":  "0.3.55",
-                                             "publishTimestamp":  1794745575,
-                                             "source":  {
-                                                            "type":  "git",
-                                                            "url":  "https://github.com/QcWyGm/dsh-config-sync-plugin",
-                                                            "commit":  "dcb5de6621e70d59a3b586167b25822f0f4c2125"
-                                                        }
-                                         },
-                                         {
-                                             "version":  "0.3.54",
-                                             "publishTimestamp":  1794686763,
-                                             "source":  {
-                                                            "type":  "git",
-                                                            "url":  "https://github.com/QcWyGm/dsh-config-sync-plugin",
-                                                            "commit":  "dfe759cf16ac98a3b6d7a087e4281a88aafc9e37"
-                                                        }
-                                         },
-                                         {
-                                             "version":  "0.3.53",
-                                             "publishTimestamp":  1794681534,
-                                             "source":  {
-                                                            "type":  "git",
-                                                            "url":  "https://github.com/QcWyGm/dsh-config-sync-plugin",
-                                                            "commit":  "232667ddc35661d860cf16f5be0e8584506f4d22"
-                                                        }
-                                         },
-                                         {
-                                             "version":  "0.3.52",
-                                             "publishTimestamp":  1794681043,
-                                             "source":  {
-                                                            "type":  "git",
-                                                            "url":  "https://github.com/QcWyGm/dsh-config-sync-plugin",
-                                                            "commit":  "a54021c2e2327a8d83ab705bb8be202e03367cb3"
-                                                        }
-                                         },
-                                         {
-                                             "version":  "0.3.51",
-                                             "publishTimestamp":  1794680106,
-                                             "source":  {
-                                                            "type":  "git",
-                                                            "url":  "https://github.com/QcWyGm/dsh-config-sync-plugin",
-                                                            "commit":  "daf750fc63781ec7152be8de2d22516e498bced2"
-                                                        }
-                                         },
-                                         {
-                                             "version":  "0.3.50",
-                                             "publishTimestamp":  1794677365,
-                                             "source":  {
-                                                            "type":  "git",
-                                                            "url":  "https://github.com/QcWyGm/dsh-config-sync-plugin",
-                                                            "commit":  "b656ece983c16912353f28c00ec32186450a0423"
-                                                        }
-                                         },
-                                         {
-                                             "version":  "0.3.49",
-                                             "publishTimestamp":  1794671288,
-                                             "source":  {
-                                                            "type":  "git",
-                                                            "url":  "https://github.com/QcWyGm/dsh-config-sync-plugin",
-                                                            "commit":  "1abf25209013e845ce83d6951863a48b7a0afc22"
-                                                        }
-                                         },
-                                         {
-                                             "version":  "0.3.48",
-                                             "publishTimestamp":  1794668425,
-                                             "source":  {
-                                                            "type":  "git",
-                                                            "url":  "https://github.com/QcWyGm/dsh-config-sync-plugin",
-                                                            "commit":  "d629133d4810868e7bae4fe6d476a990a7d0b6b5"
-                                                        }
-                                         },
-                                         {
-                                             "version":  "0.3.47",
-                                             "publishTimestamp":  1794655851,
-                                             "source":  {
-                                                            "type":  "git",
-                                                            "url":  "https://github.com/QcWyGm/dsh-config-sync-plugin",
-                                                            "commit":  "32bf65c858bb9feeb2eb874247f7998c0dcd6b97"
-                                                        }
-                                         },
-                                         {
-                                             "version":  "0.3.46",
-                                             "publishTimestamp":  1794631761,
-                                             "source":  {
-                                                            "type":  "git",
-                                                            "url":  "https://github.com/QcWyGm/dsh-config-sync-plugin",
-                                                            "commit":  "23a2a180433707f6046ebfe0e833a250e540df0b"
-                                                        }
-                                         },
-                                         {
-                                             "version":  "0.3.45",
-                                             "publishTimestamp":  1794628521,
-                                             "source":  {
-                                                            "type":  "git",
-                                                            "url":  "https://github.com/QcWyGm/dsh-config-sync-plugin",
-                                                            "commit":  "2fd0a33e182d63cf339d88e28fcc1a9389273bc2"
-                                                        }
-                                         },
-                                         {
-                                             "version":  "0.3.44",
-                                             "publishTimestamp":  1794600924,
-                                             "source":  {
-                                                            "type":  "git",
-                                                            "url":  "https://github.com/QcWyGm/dsh-config-sync-plugin",
-                                                            "commit":  "6bf956caf4c98a620bcccdb4cdadbc298e6404aa"
-                                                        }
-                                         },
-                                         {
-                                             "version":  "0.3.43",
-                                             "publishTimestamp":  1794595889,
-                                             "source":  {
-                                                            "type":  "git",
-                                                            "url":  "https://github.com/QcWyGm/dsh-config-sync-plugin",
-                                                            "commit":  "0d1e0a8c6990fc0f191a3fa9865c88f9f6d095e2"
-                                                        }
-                                         },
-                                         {
-                                             "version":  "0.3.42",
-                                             "publishTimestamp":  1794594457,
-                                             "source":  {
-                                                            "type":  "git",
-                                                            "url":  "https://github.com/QcWyGm/dsh-config-sync-plugin",
-                                                            "commit":  "a6559224608ff3d7a0022e59bf14491231558be1"
-                                                        }
-                                         },
-                                         {
-                                             "version":  "0.3.41",
-                                             "publishTimestamp":  1794592993,
-                                             "source":  {
-                                                            "type":  "git",
-                                                            "url":  "https://github.com/QcWyGm/dsh-config-sync-plugin",
-                                                            "commit":  "d6fa57520ef1b369fac3d1e57a57fd3e3ff166b7"
-                                                        }
-                                         },
-                                         {
-                                             "version":  "0.3.38",
-                                             "publishTimestamp":  1794591044,
-                                             "source":  {
-                                                            "type":  "git",
-                                                            "url":  "https://github.com/QcWyGm/dsh-config-sync-plugin",
-                                                            "commit":  "ea0806b5005c3367445d1a4a37249aa66d1afa88"
-                                                        }
-                                         },
-                                         {
-                                             "version":  "0.3.37",
-                                             "publishTimestamp":  1794590469,
-                                             "source":  {
-                                                            "type":  "git",
-                                                            "url":  "https://github.com/QcWyGm/dsh-config-sync-plugin",
-                                                            "commit":  "a6d002b1cb425caa786612cd65268de0ba5e6cb2"
-                                                        }
-                                         },
-                                         {
-                                             "version":  "0.3.36",
-                                             "publishTimestamp":  1794589205,
-                                             "source":  {
-                                                            "type":  "git",
-                                                            "url":  "https://github.com/QcWyGm/dsh-config-sync-plugin",
-                                                            "commit":  "3792c23ab657c36248842b507867aafe209bbb8a"
-                                                        }
-                                         },
-                                         {
-                                             "version":  "0.3.35",
-                                             "publishTimestamp":  1794675000,
-                                             "source":  {
-                                                            "type":  "git",
-                                                            "url":  "https://github.com/QcWyGm/dsh-config-sync-plugin",
-                                                            "commit":  "8ac85b52c48a9960ec266a36346c15bde233fa80"
-                                                        }
-                                         },
-                                         {
-                                             "version":  "0.3.34",
-                                             "publishTimestamp":  1794584100,
-                                             "source":  {
-                                                            "type":  "git",
-                                                            "url":  "https://github.com/QcWyGm/dsh-config-sync-plugin",
-                                                            "commit":  "2959b0a40fd0a1d9dc09f931d094cd8a554b5712"
-                                                        }
-                                         },
-                                         {
-                                             "version":  "0.3.33",
-                                             "publishTimestamp":  1794584100,
-                                             "source":  {
-                                                            "type":  "git",
-                                                            "url":  "https://github.com/QcWyGm/dsh-config-sync-plugin",
-                                                            "commit":  "fdccb4758483a9c1c2783e008a29cd0a7defd817"
-                                                        }
-                                         },
-                                         {
-                                             "version":  "0.3.32",
-                                             "publishTimestamp":  1794583500,
-                                             "source":  {
-                                                            "type":  "git",
-                                                            "url":  "https://github.com/QcWyGm/dsh-config-sync-plugin",
-                                                            "commit":  "f3634549523af3e170d625bf007b91c1a3d9a326"
-                                                        }
-                                         },
-                                         {
-                                             "version":  "0.3.31",
-                                             "publishTimestamp":  1794582600,
-                                             "source":  {
-                                                            "type":  "git",
-                                                            "url":  "https://github.com/QcWyGm/dsh-config-sync-plugin",
-                                                            "commit":  "eb05c3c77a24876a79069105b95d60e443ab9d98"
-                                                        }
-                                         },
-                                         {
-                                             "version":  "0.3.30",
-                                             "publishTimestamp":  1794581520,
-                                             "source":  {
-                                                            "type":  "git",
-                                                            "url":  "https://github.com/QcWyGm/dsh-config-sync-plugin",
-                                                            "commit":  "f6f56683bc2c092aca9d69bdd5560dc3ad8e5d2a"
-                                                        }
-                                         },
-                                         {
-                                             "version":  "0.3.29",
-                                             "publishTimestamp":  1794579922,
-                                             "source":  {
-                                                            "type":  "git",
-                                                            "url":  "https://github.com/QcWyGm/dsh-config-sync-plugin",
-                                                            "commit":  "047df6218b1b4e23cd465bf92322d2a86a83f9f9"
-                                                        }
-                                         },
-                                         {
-                                             "version":  "0.3.28",
-                                             "publishTimestamp":  1794540554,
-                                             "source":  {
-                                                            "type":  "git",
-                                                            "url":  "https://github.com/QcWyGm/dsh-config-sync-plugin",
-                                                            "commit":  "164b533de40eeb71579c36c1957804f898279a74"
-                                                        }
-                                         },
-                                         {
-                                             "version":  "0.3.27",
-                                             "publishTimestamp":  1794538977,
-                                             "source":  {
-                                                            "type":  "git",
-                                                            "url":  "https://github.com/QcWyGm/dsh-config-sync-plugin",
-                                                            "commit":  "31de2fc2d7ecc0308910efa2598646a379024cc2"
-                                                        }
-                                         },
-                                         {
-                                             "version":  "0.3.26",
-                                             "publishTimestamp":  1794499109,
-                                             "source":  {
-                                                            "type":  "git",
-                                                            "url":  "https://github.com/QcWyGm/dsh-config-sync-plugin",
-                                                            "commit":  "7eaa2a369fae6c1c0c11f60034dea772c3a1f35d"
-                                                        }
-                                         },
-                                         {
-                                             "version":  "0.3.25",
-                                             "publishTimestamp":  1794497666,
-                                             "source":  {
-                                                            "type":  "git",
-                                                            "url":  "https://github.com/QcWyGm/dsh-config-sync-plugin",
-                                                            "commit":  "20aa3671d0f01d82f5c5c805cfa23e8d0536d2df"
-                                                        }
-                                         },
-                                         {
-                                             "version":  "0.3.24",
-                                             "publishTimestamp":  1794494566,
-                                             "source":  {
-                                                            "type":  "git",
-                                                            "url":  "https://github.com/QcWyGm/dsh-config-sync-plugin",
-                                                            "commit":  "201da72e66d771458e3f954f9f751d6cb06f2f34"
-                                                        }
-                                         },
-                                         {
-                                             "version":  "0.3.23",
-                                             "publishTimestamp":  1794491867,
-                                             "source":  {
-                                                            "type":  "git",
-                                                            "url":  "https://github.com/QcWyGm/dsh-config-sync-plugin",
-                                                            "commit":  "f08c79f43c2e73e98cdfddde893311c5a18f0281"
-                                                        }
-                                         },
-                                         {
-                                             "version":  "0.3.22",
-                                             "publishTimestamp":  1794490814,
-                                             "source":  {
-                                                            "type":  "git",
-                                                            "url":  "https://github.com/QcWyGm/dsh-config-sync-plugin",
-                                                            "commit":  "741ad9acf2e27e3d99f5f49d01478ac2c924f2fb"
-                                                        }
-                                         },
-                                         {
-                                             "version":  "0.3.21",
-                                             "publishTimestamp":  1794489014,
-                                             "source":  {
-                                                            "type":  "git",
-                                                            "url":  "https://github.com/QcWyGm/dsh-config-sync-plugin",
-                                                            "commit":  "741ad9acf2e27e3d99f5f49d01478ac2c924f2fb"
-                                                        }
-                                         },
-                                         {
-                                             "version":  "0.3.20",
-                                             "publishTimestamp":  1794489194,
-                                             "source":  {
-                                                            "type":  "git",
-                                                            "url":  "https://github.com/QcWyGm/dsh-config-sync-plugin",
-                                                            "commit":  "7dfefb46350bd2361bb57ede74ca4263ea8f0fe5"
-                                                        }
-                                         },
-                                         {
-                                             "version":  "0.3.18",
-                                             "publishTimestamp":  1794488206,
-                                             "source":  {
-                                                            "type":  "git",
-                                                            "url":  "https://github.com/QcWyGm/dsh-config-sync-plugin",
-                                                            "commit":  "95f093d3404cc09c9379e82eb08ee96b0ee03d0e"
-                                                        }
-                                         },
-                                         {
-                                             "version":  "0.3.16",
-                                             "publishTimestamp":  1794468951,
-                                             "source":  {
-                                                            "type":  "git",
-                                                            "url":  "https://github.com/QcWyGm/dsh-config-sync-plugin",
-                                                            "commit":  "18a1b0e975f47a212d16f2be3af37dfb03dcd2e7"
-                                                        }
-                                         },
-                                         {
-                                             "version":  "0.3.15",
-                                             "publishTimestamp":  1794468634,
-                                             "source":  {
-                                                            "type":  "git",
-                                                            "url":  "https://github.com/QcWyGm/dsh-config-sync-plugin",
-                                                            "commit":  "0305261d1f0105cc02497729f786832d9d884af4"
-                                                        }
-                                         },
-                                         {
-                                             "version":  "0.3.14",
-                                             "publishTimestamp":  1794464479,
-                                             "source":  {
-                                                            "type":  "git",
-                                                            "url":  "https://github.com/QcWyGm/dsh-config-sync-plugin",
-                                                            "commit":  "d7e141a46cd34a40862a07eebd53051d432b34b0"
-                                                        }
-                                         },
-                                         {
-                                             "version":  "0.3.13",
-                                             "publishTimestamp":  1794463017,
-                                             "source":  {
-                                                            "type":  "git",
-                                                            "url":  "https://github.com/QcWyGm/dsh-config-sync-plugin",
-                                                            "commit":  "26b4951873e3997abc2f6341fd06ff2ff9dbf3eb"
-                                                        }
-                                         },
-                                         {
-                                             "version":  "0.3.12",
-                                             "publishTimestamp":  1794462261,
-                                             "source":  {
-                                                            "type":  "git",
-                                                            "url":  "https://github.com/QcWyGm/dsh-config-sync-plugin",
-                                                            "commit":  "983ba0f171fee5e11efe9cea913132ef1ceffd18"
-                                                        }
-                                         },
-                                         {
-                                             "version":  "0.3.11",
-                                             "publishTimestamp":  1794462157,
-                                             "source":  {
-                                                            "type":  "git",
-                                                            "url":  "https://github.com/QcWyGm/dsh-config-sync-plugin",
-                                                            "commit":  "8f66f9bf0e6c1b3c84cccbcb1e079c1a320803db"
-                                                        }
-                                         },
-                                         {
-                                             "version":  "0.3.10",
-                                             "publishTimestamp":  1794461812,
-                                             "source":  {
-                                                            "type":  "git",
-                                                            "url":  "https://github.com/QcWyGm/dsh-config-sync-plugin",
-                                                            "commit":  "186983e166e6642aa97823269e97fcd9418b440f"
-                                                        }
-                                         },
-                                         {
-                                             "version":  "0.3.9",
-                                             "publishTimestamp":  1794458803,
-                                             "source":  {
-                                                            "type":  "git",
-                                                            "url":  "https://github.com/QcWyGm/dsh-config-sync-plugin",
-                                                            "commit":  "f7a04c462a459c0517c0475c66101ae784fa6c3d"
-                                                        }
-                                         },
-                                         {
-                                             "version":  "0.3.8",
-                                             "publishTimestamp":  1794457414,
-                                             "source":  {
-                                                            "type":  "git",
-                                                            "url":  "https://github.com/QcWyGm/dsh-config-sync-plugin",
-                                                            "commit":  "a5ffe89f1c635c67ff4a46dde7387e88b00beff3"
-                                                        }
-                                         },
-                                         {
-                                             "version":  "0.3.7",
-                                             "publishTimestamp":  1794455934,
-                                             "source":  {
-                                                            "type":  "git",
-                                                            "url":  "https://github.com/QcWyGm/dsh-config-sync-plugin",
-                                                            "commit":  "9d050e78edc84b7e837df88a65fdada0f21a1bbf"
-                                                        }
-                                         },
-                                         {
-                                             "version":  "0.3.6",
-                                             "publishTimestamp":  1794452903,
-                                             "source":  {
-                                                            "type":  "git",
-                                                            "url":  "https://github.com/QcWyGm/dsh-config-sync-plugin",
-                                                            "commit":  "70ffa0114b287b2a1fb45244bd18f0c904a40dbd"
-                                                        }
-                                         },
-                                         {
-                                             "version":  "0.3.5",
-                                             "publishTimestamp":  1794452445,
-                                             "source":  {
-                                                            "type":  "git",
-                                                            "url":  "https://github.com/QcWyGm/dsh-config-sync-plugin",
-                                                            "commit":  "45cce666a079d9feb864bf3640ec9f501f2d9e74"
-                                                        }
-                                         },
-                                         {
-                                             "version":  "0.3.4",
-                                             "publishTimestamp":  1794450483,
-                                             "source":  {
-                                                            "type":  "git",
-                                                            "url":  "https://github.com/QcWyGm/dsh-config-sync-plugin",
-                                                            "commit":  "7cec96d22a50b8ade68b50cab17e7613f1c91c17"
-                                                        }
-                                         },
-                                         {
-                                             "version":  "0.3.3",
-                                             "publishTimestamp":  1794448847,
-                                             "source":  {
-                                                            "type":  "git",
-                                                            "url":  "https://github.com/QcWyGm/dsh-config-sync-plugin",
-                                                            "commit":  "fd3648f40fe660febe6dc47c98b6e877280b1ad4"
-                                                        }
-                                         },
-                                         {
-                                             "version":  "0.3.2",
-                                             "publishTimestamp":  1794448227,
-                                             "source":  {
-                                                            "type":  "git",
-                                                            "url":  "https://github.com/QcWyGm/dsh-config-sync-plugin",
-                                                            "commit":  "d0167bfd752553fa178206b05662da2a1caefc48"
-                                                        }
-                                         },
-                                         {
-                                             "version":  "0.3.1",
-                                             "publishTimestamp":  1794585600,
-                                             "source":  {
-                                                            "type":  "git",
-                                                            "url":  "https://github.com/QcWyGm/dsh-config-sync-plugin",
-                                                            "commit":  "0cd114c569c942cb534b220c1f077474a99b65bb"
-                                                        }
-                                         },
-                                         {
-                                             "version":  "0.3.0",
-                                             "publishTimestamp":  1794499200,
-                                             "source":  {
-                                                            "type":  "git",
-                                                            "url":  "https://github.com/QcWyGm/dsh-config-sync-plugin",
-                                                            "commit":  "53a21a97d5d138c6b3bc2e7f20a57a2b27d7853c"
-                                                        }
-                                         },
-                                         {
-                                             "version":  "0.2.9",
-                                             "publishTimestamp":  1794412800,
-                                             "source":  {
-                                                            "type":  "git",
-                                                            "url":  "https://github.com/QcWyGm/dsh-config-sync-plugin",
-                                                            "commit":  "f2fd2f41f8e2a613b6bf88ed4e98477297f2781b"
-                                                        }
-                                         }
-                                     ]
-                    }
-                ]
+  "format": 1,
+  "title": {
+    "en": "QcWyGm plugins",
+    "zh": "QcWyGm 插件"
+  },
+  "description": {
+    "en": "DSH plugins by QcWyGm.",
+    "zh": "QcWyGm 的 DSH 插件。"
+  },
+  "plugins": [
+    {
+      "name": "dsh-config-sync-plugin",
+      "title": {
+        "en": "Config Sync",
+        "zh": "配置同步"
+      },
+      "description": {
+        "zh": "多机 DSH 配置同步：本机与云端仓库的差异一目了然——改了哪些文件、提交领先还是落后、哪些会话和技能还没同步，一键生成退出后执行的推送、拉取、还原脚本。拉取被本地改动挡住时两侧都留底、逐项选保留哪边；每次应用前自动备份，配置快照、插件备份、会话备份都能一键还原，装坏的插件也能整份回滚。仅限 Windows（脚本为 PowerShell）。",
+        "en": "Multi-machine DSH config sync: see exactly how this machine differs from the cloud config repo — changed files, commits ahead or behind, sessions and skills not synced yet — then generate the push, pull and restore scripts that run after the client exits. A blocked pull keeps both sides and lets you pick file by file; every apply snapshots the profile first, and config snapshots, plugin backups and session backups all restore in one click, including rolling back a broken plugin install. Windows only (the scripts are PowerShell)."
+      },
+      "icon": "https://raw.githubusercontent.com/QcWyGm/dsh-config-sync-plugin/main/docs/panel.png",
+      "author": "QcWyGm",
+      "homepage": "https://github.com/QcWyGm/dsh-config-sync-plugin#readme",
+      "repository": {
+        "url": "https://github.com/QcWyGm/dsh-config-sync-plugin"
+      },
+      "versions": [
+        {
+          "version": "0.3.69",
+          "publishTimestamp": 1795101952,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/QcWyGm/dsh-config-sync-plugin",
+            "commit": "c091e9e0a15e27a3361a073ac8cca7ce82140d2a"
+          }
+        },
+        {
+          "version": "0.3.68",
+          "publishTimestamp": 1795096505,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/QcWyGm/dsh-config-sync-plugin",
+            "commit": "dfdf1560ef92c1e9d25576f0237ebd4e463b64db"
+          }
+        },
+        {
+          "version": "0.3.67",
+          "publishTimestamp": 1795094973,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/QcWyGm/dsh-config-sync-plugin",
+            "commit": "1af15249ad78b2186fa91c155c068d167c36d41f"
+          }
+        },
+        {
+          "version": "0.3.66",
+          "publishTimestamp": 1795091254,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/QcWyGm/dsh-config-sync-plugin",
+            "commit": "b13f2f7b44dafac48845d36863f5bc234ed0e730"
+          }
+        },
+        {
+          "version": "0.3.65",
+          "publishTimestamp": 1795017142,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/QcWyGm/dsh-config-sync-plugin",
+            "commit": "e19317c69f097f250fba228ea00289abaad75d32"
+          }
+        },
+        {
+          "version": "0.3.64",
+          "publishTimestamp": 1795012301,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/QcWyGm/dsh-config-sync-plugin",
+            "commit": "aa3d3872bf75e96f9379a69d905ab0c4d2fe0556"
+          }
+        },
+        {
+          "version": "0.3.63",
+          "publishTimestamp": 1795009233,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/QcWyGm/dsh-config-sync-plugin",
+            "commit": "6d4976cf387a50dede0f2868db3cef6f28c0bace"
+          }
+        },
+        {
+          "version": "0.3.62",
+          "publishTimestamp": 1795006149,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/QcWyGm/dsh-config-sync-plugin",
+            "commit": "d3f1e1894c020a7303ea74efe4d060f31ab25c6a"
+          }
+        },
+        {
+          "version": "0.3.61",
+          "publishTimestamp": 1794918180,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/QcWyGm/dsh-config-sync-plugin",
+            "commit": "8f078742fe79659b2e838ee0f7a79af33d8bebcd"
+          }
+        },
+        {
+          "version": "0.3.60",
+          "publishTimestamp": 1794852193,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/QcWyGm/dsh-config-sync-plugin",
+            "commit": "28fc40dc2b5b422ac6217e65ce683e0408478858"
+          }
+        },
+        {
+          "version": "0.3.59",
+          "publishTimestamp": 1794842058,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/QcWyGm/dsh-config-sync-plugin",
+            "commit": "6858d897ed51ed546749dc9fe4bb443506daceea"
+          }
+        },
+        {
+          "version": "0.3.58",
+          "publishTimestamp": 1794836713,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/QcWyGm/dsh-config-sync-plugin",
+            "commit": "a112dfe03329f74a244de609ccd257eb846638e3"
+          }
+        },
+        {
+          "version": "0.3.56",
+          "publishTimestamp": 1794828380,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/QcWyGm/dsh-config-sync-plugin",
+            "commit": "cfa11600948a2d4670ccef355483a0c484824339"
+          }
+        },
+        {
+          "version": "0.3.55",
+          "publishTimestamp": 1794745575,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/QcWyGm/dsh-config-sync-plugin",
+            "commit": "dcb5de6621e70d59a3b586167b25822f0f4c2125"
+          }
+        },
+        {
+          "version": "0.3.54",
+          "publishTimestamp": 1794686763,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/QcWyGm/dsh-config-sync-plugin",
+            "commit": "dfe759cf16ac98a3b6d7a087e4281a88aafc9e37"
+          }
+        },
+        {
+          "version": "0.3.53",
+          "publishTimestamp": 1794681534,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/QcWyGm/dsh-config-sync-plugin",
+            "commit": "232667ddc35661d860cf16f5be0e8584506f4d22"
+          }
+        },
+        {
+          "version": "0.3.52",
+          "publishTimestamp": 1794681043,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/QcWyGm/dsh-config-sync-plugin",
+            "commit": "a54021c2e2327a8d83ab705bb8be202e03367cb3"
+          }
+        },
+        {
+          "version": "0.3.51",
+          "publishTimestamp": 1794680106,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/QcWyGm/dsh-config-sync-plugin",
+            "commit": "daf750fc63781ec7152be8de2d22516e498bced2"
+          }
+        },
+        {
+          "version": "0.3.50",
+          "publishTimestamp": 1794677365,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/QcWyGm/dsh-config-sync-plugin",
+            "commit": "b656ece983c16912353f28c00ec32186450a0423"
+          }
+        },
+        {
+          "version": "0.3.49",
+          "publishTimestamp": 1794671288,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/QcWyGm/dsh-config-sync-plugin",
+            "commit": "1abf25209013e845ce83d6951863a48b7a0afc22"
+          }
+        },
+        {
+          "version": "0.3.48",
+          "publishTimestamp": 1794668425,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/QcWyGm/dsh-config-sync-plugin",
+            "commit": "d629133d4810868e7bae4fe6d476a990a7d0b6b5"
+          }
+        },
+        {
+          "version": "0.3.47",
+          "publishTimestamp": 1794655851,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/QcWyGm/dsh-config-sync-plugin",
+            "commit": "32bf65c858bb9feeb2eb874247f7998c0dcd6b97"
+          }
+        },
+        {
+          "version": "0.3.46",
+          "publishTimestamp": 1794631761,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/QcWyGm/dsh-config-sync-plugin",
+            "commit": "23a2a180433707f6046ebfe0e833a250e540df0b"
+          }
+        },
+        {
+          "version": "0.3.45",
+          "publishTimestamp": 1794628521,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/QcWyGm/dsh-config-sync-plugin",
+            "commit": "2fd0a33e182d63cf339d88e28fcc1a9389273bc2"
+          }
+        },
+        {
+          "version": "0.3.44",
+          "publishTimestamp": 1794600924,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/QcWyGm/dsh-config-sync-plugin",
+            "commit": "6bf956caf4c98a620bcccdb4cdadbc298e6404aa"
+          }
+        },
+        {
+          "version": "0.3.43",
+          "publishTimestamp": 1794595889,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/QcWyGm/dsh-config-sync-plugin",
+            "commit": "0d1e0a8c6990fc0f191a3fa9865c88f9f6d095e2"
+          }
+        },
+        {
+          "version": "0.3.42",
+          "publishTimestamp": 1794594457,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/QcWyGm/dsh-config-sync-plugin",
+            "commit": "a6559224608ff3d7a0022e59bf14491231558be1"
+          }
+        },
+        {
+          "version": "0.3.41",
+          "publishTimestamp": 1794592993,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/QcWyGm/dsh-config-sync-plugin",
+            "commit": "d6fa57520ef1b369fac3d1e57a57fd3e3ff166b7"
+          }
+        },
+        {
+          "version": "0.3.38",
+          "publishTimestamp": 1794591044,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/QcWyGm/dsh-config-sync-plugin",
+            "commit": "ea0806b5005c3367445d1a4a37249aa66d1afa88"
+          }
+        },
+        {
+          "version": "0.3.37",
+          "publishTimestamp": 1794590469,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/QcWyGm/dsh-config-sync-plugin",
+            "commit": "a6d002b1cb425caa786612cd65268de0ba5e6cb2"
+          }
+        },
+        {
+          "version": "0.3.36",
+          "publishTimestamp": 1794589205,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/QcWyGm/dsh-config-sync-plugin",
+            "commit": "3792c23ab657c36248842b507867aafe209bbb8a"
+          }
+        },
+        {
+          "version": "0.3.35",
+          "publishTimestamp": 1794675000,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/QcWyGm/dsh-config-sync-plugin",
+            "commit": "8ac85b52c48a9960ec266a36346c15bde233fa80"
+          }
+        },
+        {
+          "version": "0.3.34",
+          "publishTimestamp": 1794584100,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/QcWyGm/dsh-config-sync-plugin",
+            "commit": "2959b0a40fd0a1d9dc09f931d094cd8a554b5712"
+          }
+        },
+        {
+          "version": "0.3.33",
+          "publishTimestamp": 1794584100,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/QcWyGm/dsh-config-sync-plugin",
+            "commit": "fdccb4758483a9c1c2783e008a29cd0a7defd817"
+          }
+        },
+        {
+          "version": "0.3.32",
+          "publishTimestamp": 1794583500,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/QcWyGm/dsh-config-sync-plugin",
+            "commit": "f3634549523af3e170d625bf007b91c1a3d9a326"
+          }
+        },
+        {
+          "version": "0.3.31",
+          "publishTimestamp": 1794582600,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/QcWyGm/dsh-config-sync-plugin",
+            "commit": "eb05c3c77a24876a79069105b95d60e443ab9d98"
+          }
+        },
+        {
+          "version": "0.3.30",
+          "publishTimestamp": 1794581520,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/QcWyGm/dsh-config-sync-plugin",
+            "commit": "f6f56683bc2c092aca9d69bdd5560dc3ad8e5d2a"
+          }
+        },
+        {
+          "version": "0.3.29",
+          "publishTimestamp": 1794579922,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/QcWyGm/dsh-config-sync-plugin",
+            "commit": "047df6218b1b4e23cd465bf92322d2a86a83f9f9"
+          }
+        },
+        {
+          "version": "0.3.28",
+          "publishTimestamp": 1794540554,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/QcWyGm/dsh-config-sync-plugin",
+            "commit": "164b533de40eeb71579c36c1957804f898279a74"
+          }
+        },
+        {
+          "version": "0.3.27",
+          "publishTimestamp": 1794538977,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/QcWyGm/dsh-config-sync-plugin",
+            "commit": "31de2fc2d7ecc0308910efa2598646a379024cc2"
+          }
+        },
+        {
+          "version": "0.3.26",
+          "publishTimestamp": 1794499109,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/QcWyGm/dsh-config-sync-plugin",
+            "commit": "7eaa2a369fae6c1c0c11f60034dea772c3a1f35d"
+          }
+        },
+        {
+          "version": "0.3.25",
+          "publishTimestamp": 1794497666,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/QcWyGm/dsh-config-sync-plugin",
+            "commit": "20aa3671d0f01d82f5c5c805cfa23e8d0536d2df"
+          }
+        },
+        {
+          "version": "0.3.24",
+          "publishTimestamp": 1794494566,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/QcWyGm/dsh-config-sync-plugin",
+            "commit": "201da72e66d771458e3f954f9f751d6cb06f2f34"
+          }
+        },
+        {
+          "version": "0.3.23",
+          "publishTimestamp": 1794491867,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/QcWyGm/dsh-config-sync-plugin",
+            "commit": "f08c79f43c2e73e98cdfddde893311c5a18f0281"
+          }
+        },
+        {
+          "version": "0.3.22",
+          "publishTimestamp": 1794490814,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/QcWyGm/dsh-config-sync-plugin",
+            "commit": "741ad9acf2e27e3d99f5f49d01478ac2c924f2fb"
+          }
+        },
+        {
+          "version": "0.3.21",
+          "publishTimestamp": 1794489014,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/QcWyGm/dsh-config-sync-plugin",
+            "commit": "741ad9acf2e27e3d99f5f49d01478ac2c924f2fb"
+          }
+        },
+        {
+          "version": "0.3.20",
+          "publishTimestamp": 1794489194,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/QcWyGm/dsh-config-sync-plugin",
+            "commit": "7dfefb46350bd2361bb57ede74ca4263ea8f0fe5"
+          }
+        },
+        {
+          "version": "0.3.18",
+          "publishTimestamp": 1794488206,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/QcWyGm/dsh-config-sync-plugin",
+            "commit": "95f093d3404cc09c9379e82eb08ee96b0ee03d0e"
+          }
+        },
+        {
+          "version": "0.3.16",
+          "publishTimestamp": 1794468951,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/QcWyGm/dsh-config-sync-plugin",
+            "commit": "18a1b0e975f47a212d16f2be3af37dfb03dcd2e7"
+          }
+        },
+        {
+          "version": "0.3.15",
+          "publishTimestamp": 1794468634,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/QcWyGm/dsh-config-sync-plugin",
+            "commit": "0305261d1f0105cc02497729f786832d9d884af4"
+          }
+        },
+        {
+          "version": "0.3.14",
+          "publishTimestamp": 1794464479,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/QcWyGm/dsh-config-sync-plugin",
+            "commit": "d7e141a46cd34a40862a07eebd53051d432b34b0"
+          }
+        },
+        {
+          "version": "0.3.13",
+          "publishTimestamp": 1794463017,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/QcWyGm/dsh-config-sync-plugin",
+            "commit": "26b4951873e3997abc2f6341fd06ff2ff9dbf3eb"
+          }
+        },
+        {
+          "version": "0.3.12",
+          "publishTimestamp": 1794462261,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/QcWyGm/dsh-config-sync-plugin",
+            "commit": "983ba0f171fee5e11efe9cea913132ef1ceffd18"
+          }
+        },
+        {
+          "version": "0.3.11",
+          "publishTimestamp": 1794462157,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/QcWyGm/dsh-config-sync-plugin",
+            "commit": "8f66f9bf0e6c1b3c84cccbcb1e079c1a320803db"
+          }
+        },
+        {
+          "version": "0.3.10",
+          "publishTimestamp": 1794461812,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/QcWyGm/dsh-config-sync-plugin",
+            "commit": "186983e166e6642aa97823269e97fcd9418b440f"
+          }
+        },
+        {
+          "version": "0.3.9",
+          "publishTimestamp": 1794458803,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/QcWyGm/dsh-config-sync-plugin",
+            "commit": "f7a04c462a459c0517c0475c66101ae784fa6c3d"
+          }
+        },
+        {
+          "version": "0.3.8",
+          "publishTimestamp": 1794457414,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/QcWyGm/dsh-config-sync-plugin",
+            "commit": "a5ffe89f1c635c67ff4a46dde7387e88b00beff3"
+          }
+        },
+        {
+          "version": "0.3.7",
+          "publishTimestamp": 1794455934,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/QcWyGm/dsh-config-sync-plugin",
+            "commit": "9d050e78edc84b7e837df88a65fdada0f21a1bbf"
+          }
+        },
+        {
+          "version": "0.3.6",
+          "publishTimestamp": 1794452903,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/QcWyGm/dsh-config-sync-plugin",
+            "commit": "70ffa0114b287b2a1fb45244bd18f0c904a40dbd"
+          }
+        },
+        {
+          "version": "0.3.5",
+          "publishTimestamp": 1794452445,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/QcWyGm/dsh-config-sync-plugin",
+            "commit": "45cce666a079d9feb864bf3640ec9f501f2d9e74"
+          }
+        },
+        {
+          "version": "0.3.4",
+          "publishTimestamp": 1794450483,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/QcWyGm/dsh-config-sync-plugin",
+            "commit": "7cec96d22a50b8ade68b50cab17e7613f1c91c17"
+          }
+        },
+        {
+          "version": "0.3.3",
+          "publishTimestamp": 1794448847,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/QcWyGm/dsh-config-sync-plugin",
+            "commit": "fd3648f40fe660febe6dc47c98b6e877280b1ad4"
+          }
+        },
+        {
+          "version": "0.3.2",
+          "publishTimestamp": 1794448227,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/QcWyGm/dsh-config-sync-plugin",
+            "commit": "d0167bfd752553fa178206b05662da2a1caefc48"
+          }
+        },
+        {
+          "version": "0.3.1",
+          "publishTimestamp": 1794585600,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/QcWyGm/dsh-config-sync-plugin",
+            "commit": "0cd114c569c942cb534b220c1f077474a99b65bb"
+          }
+        },
+        {
+          "version": "0.3.0",
+          "publishTimestamp": 1794499200,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/QcWyGm/dsh-config-sync-plugin",
+            "commit": "53a21a97d5d138c6b3bc2e7f20a57a2b27d7853c"
+          }
+        },
+        {
+          "version": "0.2.9",
+          "publishTimestamp": 1794412800,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/QcWyGm/dsh-config-sync-plugin",
+            "commit": "f2fd2f41f8e2a613b6bf88ed4e98477297f2781b"
+          }
+        }
+      ]
+    }
+  ]
 }
