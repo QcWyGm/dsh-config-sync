@@ -1,10 +1,9 @@
 {
-    "releasedAt": "2026-11-20",
-    "tgz": "https://github.com/QcWyGm/dsh-config-sync-plugin/releases/download/v0.3.74/dsh-config-sync-plugin-0.3.74.tgz",
-    "minClient": "0.2.2-rc.2",
-    "version": "0.3.74",
-    "tgzBytes": 383999,
-    "notes": "Fix regression in 0.3.73 where apply.ps1 lost its UTF-8 BOM (PS5.1 reads Chinese script as GBK and the pull fails immediately). This release ships the correct BOM; behavior otherwise identical to 0.3.73.",
-    "notesEn": "Fix regression in 0.3.73 where apply.ps1 lost its UTF-8 BOM (PS5.1 reads Chinese script as GBK and the pull fails immediately). This release ships the correct BOM; behavior otherwise identical to 0.3.73.",
-    "sha256": "d3b8757742dbd212966e76b3872ce1d87d7b7de304c46986d2515fb0562fd100"
+  "version": "0.3.75",
+  "tgz": "https://github.com/QcWyGm/dsh-config-sync-plugin/releases/download/v0.3.75/dsh-config-sync-plugin-0.3.75.tgz",
+  "tgzBytes": 385053,
+  "sha256":"5ed2dd32a2a770c190386efa2e5a7e50d705f605dc1b09bf4c3aca89e707ca6d",
+  "releasedAt": "2026-11-21",
+  "notes": "隐藏/归档的工作区跨机同步：workspace-archives.v1.json 纳入 settings，B 机拉取后不再显示已隐藏的工作区与会话。",
+  "notesEn": "Sync hidden/archived workspaces across machines: workspace-archives.v1.json joined settings, hidden workspaces stay hidden on B after pull."
 }

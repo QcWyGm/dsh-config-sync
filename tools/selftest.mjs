@@ -1252,6 +1252,10 @@ console.log('== 跨机路径占位符与问题反馈 ==')
   check('workspace.json（DSH 工作区登记）进了同步范围',
     captureSrc.includes("storages\\workspace.json") && applySrc.includes("storages\\workspace.json"),
     '工作区登记表没同步')
+  check('workspace-archives.v1.json（工作区隐藏/归档状态）进了同步范围',
+    captureSrc.includes('settings\\workspace-archives.json') && captureSrc.includes('dsh-session-manager\\workspace-archives.v1.json')
+      && applySrc.includes('settings\\workspace-archives.json') && applySrc.includes('dsh-session-manager\\workspace-archives.v1.json'),
+    '工作区隐藏状态没纳入 settingsMap（A 机隐藏的工作区会带到 B 机显示）')
   check('面板有「本机路径」卡：只读展示 + 「修改」进编辑 + 保存',
     cli.includes("M('本机路径', 'Local paths')") && cli.includes("M('修改', 'Edit')")
       && cli.includes('callRoots') && cli.includes('setCustom') && cli.includes('addCustom'),

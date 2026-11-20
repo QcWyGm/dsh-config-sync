@@ -742,7 +742,8 @@ $settingsMap = @(
   @{ Repo = 'settings\redteam-preset-declare.json'; Src = (Join-Path $DshHome 'redteam\preset-declare.json');                      Label = '红队预设声明' },
   @{ Repo = 'settings\task-board-ledger.json';     Src = (Join-Path $DshHome 'task-board\ledger-v2.json');                        Label = '任务板台账' },
   @{ Repo = 'settings\task-board-scheduler.json';  Src = (Join-Path $DshHome 'task-board\scheduler-v2.json');                     Label = '任务板调度' },
-  @{ Repo = 'settings\dsh-workspaces.json';        Src = (Join-Path $DshHome 'storages\workspace.json');                          Label = 'DSH 工作区登记' }
+  @{ Repo = 'settings\dsh-workspaces.json';        Src = (Join-Path $DshHome 'storages\workspace.json');                          Label = 'DSH 工作区登记' },
+  @{ Repo = 'settings\workspace-archives.json';    Src = (Join-Path $DshHome 'dsh-session-manager\workspace-archives.v1.json');   Label = 'DSH 工作区隐藏状态' }
 )
 
 # ---------- 0.5 宿主版本契约（一切动作之前先校验） ----------
@@ -899,9 +900,10 @@ $localPluginMap = [ordered]@{
   'dsh-our-free-model-2.8.0'      = 'dsh-our-free-model'
   'dsh-purge-1.4.0'               = 'dsh-purge'
   'dsh-config-sync-plugin-0.3.69' = 'dsh-config-sync-plugin'
-    'dsh-config-sync-plugin-0.3.70' = 'dsh-config-sync-plugin'
-    'dsh-config-sync-plugin-0.3.74' = 'dsh-config-sync-plugin'
-    'dsh-config-sync-plugin-0.3.73' = 'dsh-config-sync-plugin'
+  'dsh-config-sync-plugin-0.3.75' = 'dsh-config-sync-plugin'
+  'dsh-config-sync-plugin-0.3.74' = 'dsh-config-sync-plugin'
+  'dsh-config-sync-plugin-0.3.73' = 'dsh-config-sync-plugin'
+  'dsh-config-sync-plugin-0.3.70' = 'dsh-config-sync-plugin'
   'dsh-config-sync-plugin-0.3.68' = 'dsh-config-sync-plugin'
   'dsh-config-sync-plugin-0.3.67' = 'dsh-config-sync-plugin'
   'dsh-config-sync-plugin-0.3.66' = 'dsh-config-sync-plugin'

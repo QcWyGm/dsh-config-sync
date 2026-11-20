@@ -19,7 +19,7 @@ The package name is **`dsh-config-sync-plugin`** (the `dsh-config-sync` name on 
 
 | Way | Command / entry | Notes |
 |---|---|---|
-| npm | `npm i dsh-config-sync-plugin` | Use it as a dependency, or add `"dsh-config-sync-plugin": "^0.3.74"` to the profile's `package.json` and run `pnpm i`. The name matches the `cordis.patch.yml` insert name and the install folder `dsh-config-sync-plugin-<ver>` |
+| npm | `npm i dsh-config-sync-plugin` | Use it as a dependency, or add `"dsh-config-sync-plugin": "^0.3.75"` to the profile's `package.json` and run `pnpm i`. The name matches the `cordis.patch.yml` insert name and the install folder `dsh-config-sync-plugin-<ver>` |
 | Marketplace | client → Plugins → Discover → “Config Sync” | Installs from the git commit registered in `market-index.json` |
 | Offline tgz | `releases\dsh-config-sync-plugin-<ver>.tgz` | GitHub Release asset for air-gapped machines; the panel's Update button downloads the same file |
 
@@ -215,6 +215,12 @@ Whether a workspace and its sessions work on a new machine depends on three path
 So "the original machine's location becomes this machine's location" is inferred like this: the registry tells you the workspace's title/slot and its shape under `{{APP_ROOT}}`, which expands to an absolute path here; sessions claim the same workspace through `sessionIds` and follow that location - never by guessing a drive letter. If it cannot be inferred (the registered path is a bare old drive path, or there is no matching entry), nothing is rewritten: the panel reports it instead of writing a guessed path.
 
 The report produced on push is split into two groups: `scope: config` for paths inside config files, `scope: data` for records under `workspace\` and `conversations\` that still point at the other machine. The panel lists them separately ("Paths inside config files" / "Paths in workspace / session records"), and both can be accepted row by row.
+
+### Hidden/archived workspaces no longer reappear on the other machine (0.3.75)
+
+Workspaces and sessions you hide/archive from the config-sync panel used to show up again on machine B after a pull. Cause: DSH stores that state separately in `<DshHome>\dsh-session-manager\workspace-archives.v1.json` (`archived:true` plus the related `sessionIds`), which was never part of the sync set; the workspace registry is merged by ID (union), so a locally hidden record gets merged back in.
+
+Since 0.3.75 this file is part of the `settings` sync: a push writes it to the repo as `settings\workspace-archives.json`, and a pull restores it to the same path on B. When B starts, DSH reads `archived:true` workspaces and filters them out of the workspace list; their sessions move to the archived group and stop showing. This is whole-file replace semantics — machine A is authoritative. Hiding is not deletion: the workspace/session files remain and can be restored by un-hiding in DSH.
 
 ## New sessions land in the default workspace (since 0.3.28)
 
@@ -576,6 +582,7 @@ The log shows which path ran: `文件比较（快筛）：比对 N 个，深哈�
 
 | Date | Version | Summary |
 |---|---|---|
+| 2026-11-21 | 0.3.75 | Sync hidden/archived workspaces across machines (workspace-archives.v1.json into settings); hidden workspaces and sessions stay hidden on B after pull |
 | 2026-11-19 | 0.3.69 | Carry billion-context compaction state across machines (bili-state.mjs); two new notice kinds (plugin-missing / context-state) |
 | 2026-11-19 | 0.3.68 | Session projection-cache guard (fixes agent-busy session creation) |
 | 2026-11-19 | 0.3.67 | Session log seq reconciliation guard (merge by seq, no more whole-file overwrite) |
