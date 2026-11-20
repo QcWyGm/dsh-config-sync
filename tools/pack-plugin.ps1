@@ -40,6 +40,10 @@ try {
     $from = Join-Path $RepoRoot $item
     if (Test-Path -LiteralPath $from) { Copy-Item -LiteralPath $from -Destination (Join-Path $pkgDir $item) -Recurse }
   }
+  # 排除 .git 目录（避免把仓库对象/历史打进 tgz，导致体积爆炸）
+  Get-ChildItem -LiteralPath $pkgDir -Recurse -Directory -Force -ErrorAction SilentlyContinue |
+    Where-Object { $_.Name -eq '.git' } |
+    ForEach-Object { Remove-Item -LiteralPath $_.FullName -Recurse -Force -ErrorAction SilentlyContinue }
   # package.json 必须带进包（npm 装包靠它认入口）
   Copy-Item -LiteralPath $pkgFile -Destination (Join-Path $pkgDir 'package.json') -Force
 

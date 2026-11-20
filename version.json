@@ -1,10 +1,10 @@
 {
-  "sha256":"83ce2300503a67a68762b75024f56df1ce2f4e107cfad78a040402065c384bf0",
-  "version": "0.3.70",
-  "releasedAt": "2026-11-19",
-  "notesEn": "Sync-notice context isolation fix (tests no longer pollute real sync-notices.json); panel wording streamlined; README test log condensed into a table.",
-  "tgz": "releases/dsh-config-sync-plugin-0.3.70.tgz",
+  "sha256":"540511131194f8493a57401ca4fd3a97f3a61310486be91031529898b0bbf6d5",
+  "version": "0.3.72",
+  "releasedAt": "2026-11-20",
+  "notesEn": "Fix apply.ps1 localPluginMap: deduplicate plugin-missing notices by base name, no longer repeat for old version numbers of same plugin; streamlined README wording.",
+  "tgz": "releases/dsh-config-sync-plugin-0.3.72.tgz",
   "minClient": "0.2.2-rc.2",
-  "notes": "同步通知上下文隔离修复（测试不再污染真实 sync-notices.json）；面板文案精简；README 测试记录合并为表格。",
-  "tgzBytes": 380161
+  "notes": "修复 apply.ps1 localPluginMap：按基础名去重 plugin-missing 通知，不再为同一插件的旧版本号重复提示；README 文案精简。",
+  "tgzBytes": 308931546
 }

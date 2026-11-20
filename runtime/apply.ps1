@@ -898,9 +898,26 @@ if ($dropped.Count -gt 0) { Ok "已剔除 $($dropped.Count) 个实验性 bundle�
 $localPluginMap = [ordered]@{
   'dsh-our-free-model-2.8.0'      = 'dsh-our-free-model'
   'dsh-purge-1.4.0'               = 'dsh-purge'
-  'dsh-config-sync-plugin-0.3.70' = 'dsh-config-sync-plugin'
-    'dsh-config-sync-plugin-0.3.71' = 'dsh-config-sync-plugin'
+  'dsh-config-sync-plugin-0.3.69' = 'dsh-config-sync-plugin'
+    'dsh-config-sync-plugin-0.3.70' = 'dsh-config-sync-plugin'
+    'dsh-config-sync-plugin-0.3.72' = 'dsh-config-sync-plugin'
+  'dsh-config-sync-plugin-0.3.68' = 'dsh-config-sync-plugin'
+  'dsh-config-sync-plugin-0.3.67' = 'dsh-config-sync-plugin'
+  'dsh-config-sync-plugin-0.3.66' = 'dsh-config-sync-plugin'
+  'dsh-config-sync-plugin-0.3.65' = 'dsh-config-sync-plugin'
+  'dsh-config-sync-plugin-0.3.64' = 'dsh-config-sync-plugin'
+  'dsh-config-sync-plugin-0.3.63' = 'dsh-config-sync-plugin'
+  'dsh-config-sync-plugin-0.3.62' = 'dsh-config-sync-plugin'
+  'dsh-config-sync-plugin-0.3.61' = 'dsh-config-sync-plugin'
+  'dsh-config-sync-plugin-0.3.59' = 'dsh-config-sync-plugin'
+  'dsh-config-sync-plugin-0.3.58' = 'dsh-config-sync-plugin'
+  'dsh-config-sync-plugin-0.3.57' = 'dsh-config-sync-plugin'
+  'dsh-config-sync-plugin-0.3.56' = 'dsh-config-sync-plugin'
   'dsh-config-sync-0.1.0'         = 'dsh-config-sync'
+}
+foreach ($dirName in $localPluginMap.Keys) {
+  $pattern = 'link:[^"]*' + [regex]::Escape($dirName)
+  $pkgRaw = [regex]::Replace($pkgRaw, $pattern, ('link:' + $appRootFwd + '/' + $dirName), 'IgnoreCase')
 }
 Write-TextPreserveBom (Join-Path $ProfileDir 'package.json') $pkgRaw
 Ok "已写入 package.json（link 路径指向 $appRootFwd）"
@@ -1249,9 +1266,29 @@ function Get-ArchivePluginVersion([string]$archPath, [string]$dirName) {
 # ---------- 8. 就位本地插件（link: 依赖） ----------
 if (Test-SyncGroupEnabled $Scope 'local-plugins') {
 $needExtract = @()
+
+# 新增：预先扫描本机已部署的插件基础名，避免同一插件的不同历史版本号重复报「没装」。
+# 例如本机已装 dsh-config-sync-plugin-0.3.70，就不再为 0.3.57~0.3.69 各发一次 plugin-missing。
+$installedBaseNames = @{}
+Get-ChildItem -LiteralPath $AppRoot -Directory -Force -ErrorAction SilentlyContinue | ForEach-Object {
+    $dName = $_.Name
+    if ($dName -match '^(.+?)(-\d+\.\d+.*)$') {
+        $installedBaseNames[$matches[1]] = $true
+    }
+}
+
 foreach ($dirName in $localPluginMap.Keys) {
   if (-not (Test-SyncItemEnabled $Scope 'local-plugins' $dirName)) { continue }
   $target = Join-Path $AppRoot $dirName
+
+  # 新增：若目录不存在，但同一插件的其他版本已装，跳过旧版本号的缺失检查
+  if (-not (Test-Path -LiteralPath $target)) {
+    $baseName = $localPluginMap[$dirName]
+    if ($installedBaseNames.ContainsKey($baseName)) {
+      continue
+    }
+  }
+
   if (Test-Path -LiteralPath $target) {
     # 已部署的目录不会被覆盖，否则插件升级永远到不了本机（仓库里的 tgz 更新了也没用）。
     # 判据改成比版本号：归档里的 package.json version vs 已部署目录的 version，不同才算新版本。
@@ -1267,7 +1304,7 @@ foreach ($dirName in $localPluginMap.Keys) {
     }
     $hasNewVersion = $false
     if ((Test-Path -LiteralPath $arch) -and $archVer -and $depVer) {
-      $hasNewVersion = ([version]$archVer -gt [version]$depVer)
+      $hasNewVersion = ($archVer -ne $depVer)
     } elseif (Test-Path -LiteralPath $arch) {
       # 读不到版本（老归档、结构异常）时退回 mtime，但要求比已部署目录新 10 秒以上，避免每轮误判
       $archTime = (Get-Item -LiteralPath $arch).LastWriteTime
