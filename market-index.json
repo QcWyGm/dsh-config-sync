@@ -32,7 +32,7 @@
                                              "source":  {
                                                "type":  "git",
                                                "url":  "https://github.com/QcWyGm/dsh-config-sync-plugin",
-                                               "commit":  "TODO_COMMIT_0378"
+                                               "commit":  "e8f04a3a89724c7df85d37d37992a2df6b1a4c14"
                                              }
 },
 {
