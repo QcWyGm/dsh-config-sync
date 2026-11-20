@@ -94,7 +94,7 @@ function check(label, cond, detail = '') {
 }
 
 console.log('== dsh-config-sync-plugin 宿主半身自检 ==')
-check('apply() 注册了路由', routes.size === 11 && routes.has('/config-sync/update') && routes.has('/config-sync/scope') && routes.has('/config-sync/extra-config') && routes.has('/config-sync/conflict') && routes.has('/config-sync/roots') && routes.has('/config-sync/feedback') && routes.has('/config-sync/cache-guard'), `实际 ${routes.size} 条：${[...routes.keys()].join(', ')}`)
+check('apply() 注册了路由', routes.size === 12 && routes.has('/config-sync/update') && routes.has('/config-sync/scope') && routes.has('/config-sync/extra-config') && routes.has('/config-sync/conflict') && routes.has('/config-sync/roots') && routes.has('/config-sync/feedback') && routes.has('/config-sync/cache-guard') && routes.has('/config-sync/workspace-view'), `实际 ${routes.size} 条：${[...routes.keys()].join(', ')}`)
 
 const status = await call('/config-sync/status', { headers: { host: 'localhost:3080' } })
 const body = JSON.parse(status.body || '{}')
@@ -1594,5 +1594,27 @@ console.log('== 同步清单的两类新提示 ==')
 }
 
 console.log('')
+
+console.log('')
+console.log('== 工作区显示状态卡片 ==')
+{
+  const wvTool = join(pluginRootSelf, 'runtime', 'tools', 'workspace-view.mjs')
+  const wvSrc = existsSync(wvTool) ? readFileSync(wvTool, 'utf8') : ''
+  check('workspace-view 工具模块存在且导出三函数',
+    wvSrc.includes('export function readView') && wvSrc.includes('export function setWorkspaceState') && wvSrc.includes('export function setSessionState'), 'runtime/tools/workspace-view.mjs')
+  const idxSrc = existsSync(join(pluginRootSelf, 'index.js')) ? readFileSync(join(pluginRootSelf, 'index.js'), 'utf8') : ''
+  check('宿主导入 workspace-view 并注册 /config-sync/workspace-view',
+    idxSrc.includes("from './runtime/tools/workspace-view.mjs'")
+    && idxSrc.includes("const ROUTE_WORKSPACE_VIEW = '/config-sync/workspace-view'")
+    && idxSrc.includes('handleWorkspaceView'), 'index.js 的接线')
+  const cliSrc = existsSync(join(pluginRootSelf, 'client.js')) ? readFileSync(join(pluginRootSelf, 'client.js'), 'utf8') : ''
+  check('客户端有 WorkspaceViewCard 且三态与会话独立操作都接到路由',
+    cliSrc.includes('function WorkspaceViewCard()')
+    && cliSrc.includes("fetch('/config-sync/workspace-view'")
+    && cliSrc.includes("action: 'workspace'") && cliSrc.includes("action: 'session'")
+    && cliSrc.includes("M('归档工作区', 'Archive workspace')") && cliSrc.includes("M('隐藏会话', 'Sessions hidden')")
+    && cliSrc.includes('workspaceViewCard'), 'client.js 的卡片')
+  check('面板新增「工作区显示」分区', cliSrc.includes("Section(M('工作区显示', 'Workspace visibility')"), '分区装配')
+}
 process.exit(failures === 0 ? 0 : 1)
 

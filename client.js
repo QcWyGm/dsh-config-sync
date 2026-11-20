@@ -492,6 +492,23 @@ window.__ModuleLoader__.load({
       return body
     }
 
+    /** 工作区显示状态：三态（显示 / 隐藏会话 / 归档工作区）+ 会话级独立隐藏。 */
+    async function callWorkspaceView(payload) {
+      const res = await fetch('/config-sync/workspace-view', payload
+        ? {
+          method: 'POST',
+          cache: 'no-store',
+          credentials: 'same-origin',
+          headers: jsonHeaders,
+          body: JSON.stringify(payload),
+        }
+        : { cache: 'no-store', credentials: 'same-origin', headers: langHeaders() })
+      const text = await res.text()
+      let body
+      try { body = text ? JSON.parse(text) : null } catch { throw badJson(res) }
+      if (!res.ok || !body || body.ok !== true) throw new Error((body && body.error) || `${res.status}`)
+      return body
+    }
     /** 取一份体检数据 + 生成脚本动作，供两个入口复用。 */
     function useSync() {
       const [data, setData] = react.useState(null)
@@ -1570,6 +1587,112 @@ window.__ModuleLoader__.load({
       )
     }
 
+    function WorkspaceViewCard() {
+      const [data, setData] = react.useState(null)
+      const [err, setErr] = react.useState('')
+      const [busy, setBusy] = react.useState(false)
+      const [msg, setMsg] = react.useState('')
+      const [expanded, setExpanded] = react.useState({})
+
+      const load = react.useCallback(async () => {
+        setBusy(true); setErr('')
+        try { setData(await callWorkspaceView()) }
+        catch (e) { setErr(String((e && e.message) || e)) }
+        finally { setBusy(false) }
+      }, [])
+      react.useEffect(() => { load() }, [load])
+
+      const changeWorkspace = react.useCallback(async (wsId, state) => {
+        setBusy(true); setErr(''); setMsg('')
+        try {
+          const d = await callWorkspaceView({ action: 'workspace', workspaceId: wsId, state })
+          setData(d)
+          setMsg(M('已更新工作区显示状态', 'Workspace view state updated'))
+        } catch (e) { setErr(String((e && e.message) || e)) }
+        finally { setBusy(false) }
+      }, [])
+
+      const changeSession = react.useCallback(async (sid, hidden) => {
+        setBusy(true); setErr(''); setMsg('')
+        try {
+          const d = await callWorkspaceView({ action: 'session', sessionId: sid, hidden })
+          setData(d)
+        } catch (e) { setErr(String((e && e.message) || e)) }
+        finally { setBusy(false) }
+      }, [])
+
+      const stateLabel = (st) => st === 'archive' ? M('归档', 'Archived')
+        : st === 'hide-sessions' ? M('隐藏会话', 'Sessions hidden')
+          : st === 'partial' ? M('部分隐藏', 'Partly hidden')
+            : M('显示', 'Visible')
+
+      const opts = [
+        ['normal', M('显示', 'Visible')],
+        ['hide-sessions', M('隐藏会话', 'Sessions hidden')],
+        ['archive', M('归档工作区', 'Archive workspace')],
+      ]
+
+      if (!data || !data.available) {
+        return h('div', { style: S.card },
+          h('div', { style: S.cardTitle }, M('工作区显示状态', 'Workspace visibility')),
+          h('div', { style: S.hint }, err ? M(`读取失败：${err}`, `Read failed: ${err}`) : M('本机还没有工作区数据，DSH 初始化后可用。', 'No workspace data yet — available after DSH initializes.')))
+      }
+
+      const wss = data.workspaces || []
+      const archived = wss.filter(w => w.state === 'archive').length
+      return h('div', { style: S.card },
+        h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' } },
+          h('div', { style: S.cardTitle }, M('工作区显示状态', 'Workspace visibility')),
+          h('div', { style: { ...S.hint, flex: 1, minWidth: '160px' } },
+            M('三态切换工作区；展开后逐个隐藏 / 显示会话。改动写入本机 DSH，重启或刷新会话列表后生效。', 'Switch a workspace between three states; expand to hide/show individual sessions. Changes write to local DSH and take effect after restarting or refreshing the session list.')),
+          h('button', { type: 'button', style: S.btn, disabled: busy, onClick: load }, busy ? M('刷新中…', 'Refreshing…') : M('刷新', 'Refresh')),
+        ),
+        msg ? h('div', { style: { ...S.hint, color: 'var(--dsw-alias-state-success-primary, #1a7f37)' } }, msg) : null,
+        err ? h('div', { style: { ...S.hint, color: 'var(--dsw-alias-state-error-primary)' } }, err) : null,
+        h('div', { style: S.footnote }, M(`共 ${wss.length} 个工作区，${archived} 个已归档；归档的工作区会从列表消失，会话仍保留。`, `${wss.length} workspaces, ${archived} archived; archived ones disappear from the list, sessions are kept.`)),
+        wss.length === 0
+          ? h('div', { style: S.footnote }, M('没有工作区。', 'No workspaces.'))
+          : h('div', { style: { display: 'flex', flexDirection: 'column', gap: '6px', marginTop: '2px' } },
+            wss.map(w => {
+              const open = !!expanded[w.workspaceId]
+              return h('div', { key: w.workspaceId, style: { border: '1px solid var(--dsw-alias-border-l1)', borderRadius: '8px', padding: '8px 10px' } },
+                h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' } },
+                  h('button', {
+                    type: 'button', style: S.btn, onClick: () => setExpanded(e => ({ ...e, [w.workspaceId]: !open })),
+                    title: open ? M('收起会话', 'Collapse sessions') : M('展开会话', 'Expand sessions'),
+                  }, open ? '▾' : '▸'),
+                  h('span', { style: { fontSize: '12px', fontWeight: 600, minWidth: '90px' } }, w.title || w.workspaceId.slice(0, 8)),
+                  h('span', { style: chipStyle(w.state === 'archive' ? 'warn' : w.state === 'normal' ? 'ok' : 'pull') }, stateLabel(w.state)),
+                  h('span', { style: { ...S.footnote, flex: 1 } }, M(`${w.sessionCount} 会话 · ${w.hiddenCount} 隐藏`, `${w.sessionCount} sessions · ${w.hiddenCount} hidden`)),
+                  h('select', {
+                    value: w.state === 'partial' ? 'partial' : w.state,
+                    disabled: busy,
+                    onChange: (e) => { if (e.target.value !== 'partial') changeWorkspace(w.workspaceId, e.target.value) },
+                    style: { fontSize: '12px', padding: '3px 6px', borderRadius: '6px', border: '1px solid var(--dsw-alias-border-l1)', background: 'var(--dsw-alias-bg-base)', color: 'var(--dsw-alias-label-primary)' },
+                  },
+                    w.state === 'partial' ? h('option', { value: 'partial' }, stateLabel('partial')) : null,
+                    opts.map(([v, label]) => h('option', { key: v, value: v }, label)),
+                  ),
+                ),
+                open
+                  ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: '2px', marginTop: '6px', paddingLeft: '18px' } },
+                    (w.sessions || []).length === 0
+                      ? h('div', { style: S.footnote }, M('这个工作区还没有会话。', 'No sessions in this workspace.'))
+                      : w.sessions.map(s => h('div', { key: s.id, style: { display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12px', lineHeight: '18px' } },
+                        h('span', { style: { flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: s.hidden ? 'var(--dsw-alias-label-tertiary)' : 'var(--dsw-alias-label-secondary)' } }, s.id),
+                        h('button', {
+                          type: 'button', style: S.btn, disabled: busy,
+                          onClick: () => changeSession(s.id, !s.hidden),
+                        }, s.hidden ? M('显示', 'Show') : M('隐藏', 'Hide')),
+                      )),
+                  )
+                  : null,
+              )
+            }),
+          ),
+        h('div', { style: S.footnote }, M('会话改动只动这一条；工作区三态作用于整组。', 'Session changes affect only that session; workspace states affect the whole group.')),
+      )
+    }
     function ScopeCard() {
       const [state, setState] = react.useState(null)
       const [open, setOpen] = react.useState({})
@@ -2468,6 +2591,7 @@ window.__ModuleLoader__.load({
             'Push/pull must run after DSH fully exits: generate, quit, then double-click.')),
       )
 
+      const workspaceViewCard = h(WorkspaceViewCard, {})
       const remoteCard = data ? h(RemoteCard, { data, onSaved: refresh }) : null
       const autoCard = data ? h(AutoCard, { data, onSaved: refresh }) : null
       // 「还原备份」自己拿 status 里的 backup 段（快照列表），改动后让父层 refresh 重新读
@@ -2558,6 +2682,7 @@ window.__ModuleLoader__.load({
           conflictCard
             ? Section(M('同步冲突', 'Sync conflicts'), M('这些文件挡住了拉取：逐项选完保存，再点「立即拉取」', 'These files block the pull: pick per file, save, then pull'), [conflictCard])
             : null,
+          Section(M('工作区显示', 'Workspace visibility'), M('三态切换工作区，展开后单独控制会话的隐藏 / 显示', 'Switch workspace states; expand to hide/show individual sessions'), [workspaceViewCard]),
           Section(M('本机路径', 'Local paths'), M('每台机器确认一次即可：仓库里用占位符，落地时按这里展开', 'Confirm once per machine: the repo stores placeholders, expanded with these paths'), [rootsCard]),
           Section(M('同步目标', 'Sync targets'), M('仓库与远端都是本机设置，改完即生效', 'Repo and remote are local settings, applied at once'), [repoCard, remoteCard].filter(Boolean)),
           Section(M('自动化与插件更新', 'Automation & plugin update'), M('退出后自动做什么、插件自己怎么升级', 'What runs automatically after exit, and how the plugin upgrades'), [autoCard, updCard].filter(Boolean)),
@@ -3212,7 +3337,7 @@ window.__ModuleLoader__.load({
       } catch { /* 插件路由还没起好就静默跳过，面板里仍会显示同一结果 */ }
     }
 
-    // ==================== 0.3.75：会话缓存守卫（客户端半身） ====================
+    // ==================== 0.3.76：会话缓存守卫（客户端半身） ====================
     // 宿主侧没法拦 agent-busy（它是 sessionController 内部抛的 RemoteError），
     // 所以在这里包一层 sessions.create：撞上就上报、清缓存、去掉旧 sessionId 重试一次。
     const BUSY_RE = /session\/agent-busy|is owned by subagent routing/i
@@ -3309,7 +3434,7 @@ window.__ModuleLoader__.load({
       // 界面还没完全起来时 fetch 可能扑空，所以稍等一会儿再查；只查一次，不轮询。
       try { setTimeout(announceLastResult, 1500) } catch { }
 
-      // 0.3.75：给客户端的 sessions 服务套上 agent-busy 自愈钩子。
+      // 0.3.76：给客户端的 sessions 服务套上 agent-busy 自愈钩子。
       // 拿不到 sessions（老版本宿主 / 服务还没起来）就静默跳过，面板功能不受影响。
       try {
         if (typeof ctx.get === 'function') {

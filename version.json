@@ -1,9 +1,9 @@
 {
-  "version": "0.3.75",
-  "tgz": "https://github.com/QcWyGm/dsh-config-sync-plugin/releases/download/v0.3.75/dsh-config-sync-plugin-0.3.75.tgz",
-  "tgzBytes": 385053,
-  "sha256":"5ed2dd32a2a770c190386efa2e5a7e50d705f605dc1b09bf4c3aca89e707ca6d",
+  "version": "0.3.76",
+  "tgz": "https://github.com/QcWyGm/dsh-config-sync-plugin/releases/download/v0.3.76/dsh-config-sync-plugin-0.3.76.tgz",
+  "tgzBytes": 390552,
+  "sha256": "43f630e17a79163a845cde3beadc42fe1e323ac48dcb7073ecc76fb2f50db472",
   "releasedAt": "2026-11-21",
-  "notes": "隐藏/归档的工作区跨机同步：workspace-archives.v1.json 纳入 settings，B 机拉取后不再显示已隐藏的工作区与会话。",
-  "notesEn": "Sync hidden/archived workspaces across machines: workspace-archives.v1.json joined settings, hidden workspaces stay hidden on B after pull."
+  "notes": "配置同步面板新增「工作区显示」卡片：工作区三态切换（显示 / 隐藏会话 / 归档工作区），展开后逐个隐藏 / 显示会话；工作区与会话独立操作，写入本机 DSH 的两套原生状态文件，不依赖 session-manager API。",
+  "notesEn": "New \"Workspace visibility\" card in the config-sync panel: switch a workspace between visible / sessions-hidden / archived, expand to hide/show individual sessions. Workspaces and sessions are independent; writes the two native DSH state files directly (no session-manager API)."
 }

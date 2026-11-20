@@ -19,7 +19,7 @@ The package name is **`dsh-config-sync-plugin`** (the `dsh-config-sync` name on 
 
 | Way | Command / entry | Notes |
 |---|---|---|
-| npm | `npm i dsh-config-sync-plugin` | Use it as a dependency, or add `"dsh-config-sync-plugin": "^0.3.75"` to the profile's `package.json` and run `pnpm i`. The name matches the `cordis.patch.yml` insert name and the install folder `dsh-config-sync-plugin-<ver>` |
+| npm | `npm i dsh-config-sync-plugin` | Use it as a dependency, or add `"dsh-config-sync-plugin": "^0.3.76"` to the profile's `package.json` and run `pnpm i`. The name matches the `cordis.patch.yml` insert name and the install folder `dsh-config-sync-plugin-<ver>` |
 | Marketplace | client → Plugins → Discover → “Config Sync” | Installs from the git commit registered in `market-index.json` |
 | Offline tgz | `releases\dsh-config-sync-plugin-<ver>.tgz` | GitHub Release asset for air-gapped machines; the panel's Update button downloads the same file |
 
@@ -221,6 +221,18 @@ The report produced on push is split into two groups: `scope: config` for paths 
 Workspaces and sessions you hide/archive from the config-sync panel used to show up again on machine B after a pull. Cause: DSH stores that state separately in `<DshHome>\dsh-session-manager\workspace-archives.v1.json` (`archived:true` plus the related `sessionIds`), which was never part of the sync set; the workspace registry is merged by ID (union), so a locally hidden record gets merged back in.
 
 Since 0.3.75 this file is part of the `settings` sync: a push writes it to the repo as `settings\workspace-archives.json`, and a pull restores it to the same path on B. When B starts, DSH reads `archived:true` workspaces and filters them out of the workspace list; their sessions move to the archived group and stop showing. This is whole-file replace semantics — machine A is authoritative. Hiding is not deletion: the workspace/session files remain and can be restored by un-hiding in DSH.
+
+### New "Workspace visibility" card in the panel (0.3.76)
+
+A new **Workspace visibility** section brings both native DSH hiding mechanisms into one card:
+
+| Action | Effect | Backing file |
+|---|---|---|
+| Visible | Workspace shown normally, all sessions visible | Drop the archive record; remove sessions from `archivedSessionIds` |
+| Hide sessions | Workspace stays in the list, its sessions go to Archived | Sessions written to `global.archivedSessionIds` in `<DshHome>\storages\workspace.json` |
+| Archive workspace | Workspace disappears from the list, sessions kept | `<DshHome>\dsh-session-manager\workspace-archives.v1.json` gets `archived:true` and its sessions hidden too |
+
+Each workspace switches between the three states independently; expanding it lets you hide/show a single session without touching others (a session toggle changes only that one `archivedSessionIds` entry, never the workspace archive record). Changes write the two native DSH state files directly — the session-manager Web API needs a DSH connection-owner credential the plugin route does not have. The session list is cached locally, so restart or refresh the session list to see the effect. Since 0.3.75 the archive file is synced, so these states travel with push/pull too.
 
 ## New sessions land in the default workspace (since 0.3.28)
 
