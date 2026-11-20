@@ -1,10 +1,10 @@
 {
-  "sha256":"540511131194f8493a57401ca4fd3a97f3a61310486be91031529898b0bbf6d5",
-  "version": "0.3.72",
-  "releasedAt": "2026-11-20",
-  "notesEn": "Fix apply.ps1 localPluginMap: deduplicate plugin-missing notices by base name, no longer repeat for old version numbers of same plugin; streamlined README wording.",
-  "tgz": "releases/dsh-config-sync-plugin-0.3.72.tgz",
-  "minClient": "0.2.2-rc.2",
-  "notes": "修复 apply.ps1 localPluginMap：按基础名去重 plugin-missing 通知，不再为同一插件的旧版本号重复提示；README 文案精简。",
-  "tgzBytes": 308931546
+    "releasedAt":  "2026-11-20",
+    "tgz":  "https://github.com/QcWyGm/dsh-config-sync-plugin/releases/download/v0.3.73/dsh-config-sync-plugin-0.3.73.tgz",
+    "minClient":  "0.2.2-rc.2",
+    "version":  "0.3.73",
+    "tgzBytes":  380518,
+    "notes":  "0.3.72 的 version.json 下载地址修复已通过 manifest 生效；0.3.73 将修正后的清单打包进插件，避免 npm 包内版本不一致",
+    "notesEn":  "Internal version.json fix for 0.3.72 download URL; 0.3.73 bundles corrected manifest",
+    "sha256":"ee11b052a96e97e642425faefb5e65b9ee7408accb007d2d45eb1698f9c350bc"
 }
