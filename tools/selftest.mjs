@@ -1616,5 +1616,41 @@ console.log('== 工作区显示状态卡片 ==')
     && cliSrc.includes('workspaceViewCard'), 'client.js 的卡片')
   check('面板新增「工作区显示」分区', cliSrc.includes("Section(M('工作区显示', 'Workspace visibility')"), '分区装配')
 }
+
+console.log('')
+console.log('== 配置同步页面 5 点调整 ==')
+{
+  const cliSrc = existsSync(join(pluginRootSelf, 'client.js')) ? readFileSync(join(pluginRootSelf, 'client.js'), 'utf8') : ''
+  const wvSrc = existsSync(join(pluginRootSelf, 'runtime', 'tools', 'workspace-view.mjs')) ? readFileSync(join(pluginRootSelf, 'runtime', 'tools', 'workspace-view.mjs'), 'utf8') : ''
+  // 1) 会话名称：工具侧读 session/title 并在 readView 里带 title 字段；卡片侧显示 s.title
+  check('会话名称：工具从 session 日志提取 title 并随 readView 返回',
+    wvSrc.includes('zstdDecompressSync') && wvSrc.includes('buildSessionLogIndex')
+    && wvSrc.includes("'session/title'") && wvSrc.includes('title: rec.title || wsId')
+    && wvSrc.includes('const title = log ? titleFromFile(log).title'), 'workspace-view.mjs 的标题提取')
+  check('会话名称：卡片显示 s.title || s.id', cliSrc.includes('s.title || s.id'), 'client.js 卡片')
+  // 2) 修改按钮：点「修改」才出现三态 select 与会话隐藏按钮
+  check('修改按钮：编辑态才显示三态 select 与会话隐藏按钮',
+    cliSrc.includes('const [editing, setEditing]')
+    && cliSrc.includes("M('修改', 'Edit')") && cliSrc.includes("M('完成', 'Done')")
+    && cliSrc.includes('const edit = !!editing[w.workspaceId]')
+    && cliSrc.includes('setEditing(v => ({ ...v, [w.workspaceId]: !edit }))')
+    && cliSrc.includes('changeWorkspace(w.workspaceId, e.target.value)')
+    && cliSrc.includes('changeSession(s.id, !s.hidden)'), 'client.js 编辑态')
+  // 3) 点工作区整行即展开，不再单独展开按钮
+  check('点工作区即展开（整行 onClick，无独立展开按钮）',
+    cliSrc.includes("onClick: () => setExpanded(e => ({ ...e, [w.workspaceId]: !open }))")
+    && !cliSrc.includes("open ? '▾' : '▸', 'Expand sessions'"), 'client.js 展开交互')
+  // 4) 工作区显示卡片排在问题反馈前
+  const wvPos = cliSrc.indexOf("Section(M('工作区显示', 'Workspace visibility')")
+  const fbPos = cliSrc.indexOf("Section(M('问题反馈', 'Feedback')")
+  check('工作区显示卡片移到问题反馈前', wvPos > 0 && fbPos > 0 && wvPos < fbPos, '分区顺序')
+  // 5) 标题固定 + 快速跳转 tab：Section 支持 id 锚点、pageHeader sticky、tab 点击 scrollIntoView
+  check('标题固定：pageHeader sticky', cliSrc.includes("position: 'sticky'") && cliSrc.includes('zIndex: 50'), 'pageHeader sticky')
+  check('快速跳转 tab：Section 带锚点 id', cliSrc.includes('function Section(title, hint, cards, id)') && cliSrc.includes("sync-section-' + id"), 'Section id')
+  check('快速跳转 tab：点击后平滑滚动到对应卡片',
+    cliSrc.includes("getElementById('sync-section-' + sid)")
+    && cliSrc.includes("scrollIntoView({ behavior: 'smooth', block: 'start' })")
+    && cliSrc.includes("['feedback', M('问题反馈', 'Feedback')]"), 'tab 跳转')
+}
 process.exit(failures === 0 ? 0 : 1)
 

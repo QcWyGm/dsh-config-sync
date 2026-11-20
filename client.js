@@ -208,10 +208,10 @@ window.__ModuleLoader__.load({
     }
 
     /** 一个分区：小标题 + 一句说明 + 内部网格。卡片少时自动单列，宽了并排两列。 */
-    function Section(title, hint, cards) {
+    function Section(title, hint, cards, id) {
       const list = (cards || []).filter(Boolean)
       if (!list.length) return null
-      return h('div', { style: S.section },
+      return h('div', { id: id ? 'sync-section-' + id : undefined, style: id ? { ...S.section, scrollMarginTop: '8px' } : S.section },
         h('div', { style: S.sectionHead },
           h('div', { style: S.sectionTitle }, title),
           hint ? h('span', { style: { ...S.sectionHint, opacity: 0.75 } }, `· `) : null,
@@ -1593,6 +1593,7 @@ window.__ModuleLoader__.load({
       const [busy, setBusy] = react.useState(false)
       const [msg, setMsg] = react.useState('')
       const [expanded, setExpanded] = react.useState({})
+      const [editing, setEditing] = react.useState({})
 
       const load = react.useCallback(async () => {
         setBusy(true); setErr('')
@@ -1631,11 +1632,12 @@ window.__ModuleLoader__.load({
         ['hide-sessions', M('隐藏会话', 'Sessions hidden')],
         ['archive', M('归档工作区', 'Archive workspace')],
       ]
+      const stop = (e) => e.stopPropagation()
 
       if (!data || !data.available) {
         return h('div', { style: S.card },
           h('div', { style: S.cardTitle }, M('工作区显示状态', 'Workspace visibility')),
-          h('div', { style: S.hint }, err ? M(`读取失败：${err}`, `Read failed: ${err}`) : M('本机还没有工作区数据，DSH 初始化后可用。', 'No workspace data yet — available after DSH initializes.')))
+          h('div', { style: S.hint }, err ? M('读取失败：' + err, 'Read failed: ' + err) : M('本机还没有工作区数据，DSH 初始化后可用。', 'No workspace data yet — available after DSH initializes.')))
       }
 
       const wss = data.workspaces || []
@@ -1644,53 +1646,75 @@ window.__ModuleLoader__.load({
         h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' } },
           h('div', { style: S.cardTitle }, M('工作区显示状态', 'Workspace visibility')),
           h('div', { style: { ...S.hint, flex: 1, minWidth: '160px' } },
-            M('三态切换工作区；展开后逐个隐藏 / 显示会话。改动写入本机 DSH，重启或刷新会话列表后生效。', 'Switch a workspace between three states; expand to hide/show individual sessions. Changes write to local DSH and take effect after restarting or refreshing the session list.')),
+            M('点工作区展开会话；点「修改」后才可切换状态。改动写入本机 DSH，重启或刷新会话列表后生效。', 'Click a workspace to expand sessions; click Edit to change states. Changes write to local DSH and take effect after restarting or refreshing the session list.')),
           h('button', { type: 'button', style: S.btn, disabled: busy, onClick: load }, busy ? M('刷新中…', 'Refreshing…') : M('刷新', 'Refresh')),
         ),
         msg ? h('div', { style: { ...S.hint, color: 'var(--dsw-alias-state-success-primary, #1a7f37)' } }, msg) : null,
         err ? h('div', { style: { ...S.hint, color: 'var(--dsw-alias-state-error-primary)' } }, err) : null,
-        h('div', { style: S.footnote }, M(`共 ${wss.length} 个工作区，${archived} 个已归档；归档的工作区会从列表消失，会话仍保留。`, `${wss.length} workspaces, ${archived} archived; archived ones disappear from the list, sessions are kept.`)),
+        h('div', { style: S.footnote }, M('共 ' + wss.length + ' 个工作区，' + archived + ' 个已归档；归档的工作区会从列表消失，会话仍保留。', wss.length + ' workspaces, ' + archived + ' archived; archived ones disappear from the list, sessions are kept.')),
         wss.length === 0
           ? h('div', { style: S.footnote }, M('没有工作区。', 'No workspaces.'))
           : h('div', { style: { display: 'flex', flexDirection: 'column', gap: '6px', marginTop: '2px' } },
             wss.map(w => {
               const open = !!expanded[w.workspaceId]
+              const edit = !!editing[w.workspaceId]
               return h('div', { key: w.workspaceId, style: { border: '1px solid var(--dsw-alias-border-l1)', borderRadius: '8px', padding: '8px 10px' } },
-                h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' } },
-                  h('button', {
-                    type: 'button', style: S.btn, onClick: () => setExpanded(e => ({ ...e, [w.workspaceId]: !open })),
-                    title: open ? M('收起会话', 'Collapse sessions') : M('展开会话', 'Expand sessions'),
-                  }, open ? '▾' : '▸'),
+                // 整行可点展开 / 收起（需求3）
+                h('div', {
+                  style: { display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', cursor: 'pointer' },
+                  onClick: () => setExpanded(e => ({ ...e, [w.workspaceId]: !open })),
+                  title: open ? M('点击收起会话', 'Click to collapse sessions') : M('点击展开会话', 'Click to expand sessions'),
+                },
+                  h('span', { style: { fontSize: '12px', color: 'var(--dsw-alias-label-tertiary)', width: '12px' } }, open ? '▾' : '▸'),
                   h('span', { style: { fontSize: '12px', fontWeight: 600, minWidth: '90px' } }, w.title || w.workspaceId.slice(0, 8)),
                   h('span', { style: chipStyle(w.state === 'archive' ? 'warn' : w.state === 'normal' ? 'ok' : 'pull') }, stateLabel(w.state)),
-                  h('span', { style: { ...S.footnote, flex: 1 } }, M(`${w.sessionCount} 会话 · ${w.hiddenCount} 隐藏`, `${w.sessionCount} sessions · ${w.hiddenCount} hidden`)),
-                  h('select', {
-                    value: w.state === 'partial' ? 'partial' : w.state,
-                    disabled: busy,
-                    onChange: (e) => { if (e.target.value !== 'partial') changeWorkspace(w.workspaceId, e.target.value) },
-                    style: { fontSize: '12px', padding: '3px 6px', borderRadius: '6px', border: '1px solid var(--dsw-alias-border-l1)', background: 'var(--dsw-alias-bg-base)', color: 'var(--dsw-alias-label-primary)' },
-                  },
-                    w.state === 'partial' ? h('option', { value: 'partial' }, stateLabel('partial')) : null,
-                    opts.map(([v, label]) => h('option', { key: v, value: v }, label)),
-                  ),
+                  h('span', { style: { ...S.footnote, flex: 1 } }, M(w.sessionCount + ' 会话 · ' + w.hiddenCount + ' 隐藏', w.sessionCount + ' sessions · ' + w.hiddenCount + ' hidden')),
+                  h('button', {
+                    type: 'button', style: S.btn, disabled: busy,
+                    onClick: (e) => { stop(e); setEditing(v => ({ ...v, [w.workspaceId]: !edit })) },
+                  }, edit ? M('完成', 'Done') : M('修改', 'Edit')),
                 ),
+                // 编辑态才出现三态选择（需求2）
+                edit
+                  ? h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px', marginTop: '6px', flexWrap: 'wrap' }, onClick: stop },
+                    h('span', { style: S.footnote }, M('工作区状态', 'Workspace state')),
+                    h('select', {
+                      value: w.state === 'partial' ? 'partial' : w.state,
+                      disabled: busy,
+                      onChange: (e) => { if (e.target.value !== 'partial') changeWorkspace(w.workspaceId, e.target.value) },
+                      style: { fontSize: '12px', padding: '3px 6px', borderRadius: '6px', border: '1px solid var(--dsw-alias-border-l1)', background: 'var(--dsw-alias-bg-base)', color: 'var(--dsw-alias-label-primary)' },
+                    },
+                      w.state === 'partial' ? h('option', { value: 'partial' }, stateLabel('partial')) : null,
+                      opts.map(([v, label]) => h('option', { key: v, value: v }, label)),
+                    ),
+                  )
+                  : null,
+                // 展开的会话列表：显示会话名（需求1），编辑态才出隐藏/显示按钮（需求2）
                 open
                   ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: '2px', marginTop: '6px', paddingLeft: '18px' } },
                     (w.sessions || []).length === 0
                       ? h('div', { style: S.footnote }, M('这个工作区还没有会话。', 'No sessions in this workspace.'))
                       : w.sessions.map(s => h('div', { key: s.id, style: { display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12px', lineHeight: '18px' } },
-                        h('span', { style: { flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: s.hidden ? 'var(--dsw-alias-label-tertiary)' : 'var(--dsw-alias-label-secondary)' } }, s.id),
-                        h('button', {
-                          type: 'button', style: S.btn, disabled: busy,
-                          onClick: () => changeSession(s.id, !s.hidden),
-                        }, s.hidden ? M('显示', 'Show') : M('隐藏', 'Hide')),
+                        h('span', {
+                          style: { flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: s.hidden ? 'var(--dsw-alias-label-tertiary)' : 'var(--dsw-alias-label-secondary)' },
+                          title: (s.title || s.id) + '\n' + s.id,
+                        }, s.title || s.id),
+                        s.hidden
+                          ? h('span', { style: { ...S.footnote, color: 'var(--dsw-alias-label-tertiary)' } }, M('已隐藏', 'Hidden'))
+                          : null,
+                        edit
+                          ? h('button', {
+                            type: 'button', style: S.btn, disabled: busy,
+                            onClick: () => changeSession(s.id, !s.hidden),
+                          }, s.hidden ? M('显示', 'Show') : M('隐藏', 'Hide'))
+                          : null,
                       )),
                   )
                   : null,
               )
             }),
           ),
-        h('div', { style: S.footnote }, M('会话改动只动这一条；工作区三态作用于整组。', 'Session changes affect only that session; workspace states affect the whole group.')),
+        h('div', { style: S.footnote }, M('每条会话单独控制，不影响工作区三态；工作区三态会作用于整组会话。', 'Each session is controlled independently; workspace states affect the whole group.')),
       )
     }
     function ScopeCard() {
@@ -2612,7 +2636,7 @@ window.__ModuleLoader__.load({
 
       return h('div', { style: S.page },
         h('div', { style: S.pageInner },
-          h('div', { style: S.pageHeader },
+          h('div', { style: { ...S.pageHeader, position: 'sticky', top: '0', zIndex: 50, background: 'var(--dsw-alias-bg-base)' } },
             h('div', { style: S.pageHeaderMain },
               h('div', { style: S.pageTitleRow },
                 h('div', { style: S.pageTitle }, M('配置同步', 'Config Sync')),
@@ -2662,6 +2686,27 @@ window.__ModuleLoader__.load({
               h('button', { type: 'button', style: S.btn, disabled: busy, onClick: doRefresh },
                 busy ? M('检测中…', 'Checking…') : M('重新检测', 'Re-check')),
             ),
+            h('div', { style: { display: 'flex', gap: '4px', flexWrap: 'wrap', width: '100%', borderTop: '1px solid var(--dsw-alias-border-l1)', paddingTop: '8px' } },
+              [
+                ['overview', M('概览', 'Overview')],
+                ['workspace', M('工作区显示', 'Workspaces')],
+                ['targets', M('同步目标', 'Targets')],
+                ['automation', M('自动化', 'Automation')],
+                ['actions', M('生成脚本', 'Scripts')],
+                ['restore', M('还原备份', 'Restore')],
+                ['scope', M('同步内容', 'Content')],
+                ['extra', M('插件数据', 'Plugin data')],
+                ['feedback', M('问题反馈', 'Feedback')],
+              ].map((pair) => {
+                const sid = pair[0], label = pair[1]
+                return h('button', {
+                  key: sid, type: 'button',
+                  style: { fontSize: '12px', lineHeight: '18px', padding: '3px 10px', borderRadius: '6px', border: '1px solid transparent', background: 'transparent', color: 'var(--dsw-alias-label-secondary)', cursor: 'pointer' },
+                  title: M('跳转到此区', 'Jump to section'),
+                  onClick: () => { const el = document.getElementById('sync-section-' + sid); if (el && el.scrollIntoView) el.scrollIntoView({ behavior: 'smooth', block: 'start' }) },
+                }, label)
+              }),
+            ),
           ),
           toast
             ? h('div', {
@@ -2678,22 +2723,21 @@ window.__ModuleLoader__.load({
             : null,
           err ? h('div', { style: { ...S.hint, color: 'var(--dsw-alias-state-error-primary)' } }, M(`读取失败：${err}`, `Read failed: ${err}`)) : null,
           // 按内容分区：状态在上、配置居中、动作在下；每区内部网格并排（宽屏两列）
-          Section(M('概览', 'Overview'), M('版本、依赖、快照一眼看完', 'Versions, dependencies and snapshots at a glance'), [overview]),
+          Section(M('概览', 'Overview'), M('版本、依赖、快照一眼看完', 'Versions, dependencies and snapshots at a glance'), [overview], 'overview'),
           conflictCard
-            ? Section(M('同步冲突', 'Sync conflicts'), M('这些文件挡住了拉取：逐项选完保存，再点「立即拉取」', 'These files block the pull: pick per file, save, then pull'), [conflictCard])
+            ? Section(M('同步冲突', 'Sync conflicts'), M('这些文件挡住了拉取：逐项选完保存，再点「立即拉取」', 'These files block the pull: pick per file, save, then pull'), [conflictCard], 'conflict')
             : null,
-          Section(M('工作区显示', 'Workspace visibility'), M('三态切换工作区，展开后单独控制会话的隐藏 / 显示', 'Switch workspace states; expand to hide/show individual sessions'), [workspaceViewCard]),
-          Section(M('本机路径', 'Local paths'), M('每台机器确认一次即可：仓库里用占位符，落地时按这里展开', 'Confirm once per machine: the repo stores placeholders, expanded with these paths'), [rootsCard]),
-          Section(M('同步目标', 'Sync targets'), M('仓库与远端都是本机设置，改完即生效', 'Repo and remote are local settings, applied at once'), [repoCard, remoteCard].filter(Boolean)),
-          Section(M('自动化与插件更新', 'Automation & plugin update'), M('退出后自动做什么、插件自己怎么升级', 'What runs automatically after exit, and how the plugin upgrades'), [autoCard, updCard].filter(Boolean)),
-          Section(M('退出后执行', 'After exit'), M('生成脚本 → 退出客户端后跑一遍', 'Generate the script → it runs after the client quits'), [actionCard]),
-          // 「还原备份」跟在动作卡之后：先看怎么生成脚本，再挑具体退回到哪份快照
-          Section(M('还原备份', 'Restore backup'), M('点快照 → 确认差异 → 排队还原（退出客户端后执行）', 'Pick a snapshot → confirm the diff → queued restore (runs after the client quits)'), [restoreCard].filter(Boolean)),
-          // 「同步内容」放在整页最下面：它是"细项配置"，看清前面的状态与动作后才会来调整
-          Section(M('同步内容', 'Sync content'), M('十二组内容，默认全勾；必需组锁定', 'Twelve groups, all checked; required groups are locked'), [scopeCard]),
-          Section(M('插件数据与额外路径', 'Plugin data & extra paths'), M('插件自己的配置与数据：默认自动收，可改排除名单与体积上限', 'A plugin\'s own config and data: collected automatically, with editable exclusions and a size cap'), [extraCard]),
-          // 反馈放在最后一区：查完状态、调完配置，才轮到「有问题要报」
-          Section(M('问题反馈', 'Feedback'), M('提交即建 GitHub Issue，跨机器共用；离线先排队', 'Each report becomes a GitHub Issue, shared across machines; offline reports queue locally'), [feedbackCard]),
+          Section(M('本机路径', 'Local paths'), M('每台机器确认一次即可：仓库里用占位符，落地时按这里展开', 'Confirm once per machine: the repo stores placeholders, expanded with these paths'), [rootsCard], 'roots'),
+          Section(M('同步目标', 'Sync targets'), M('仓库与远端都是本机设置，改完即生效', 'Repo and remote are local settings, applied at once'), [repoCard, remoteCard].filter(Boolean), 'targets'),
+          Section(M('自动化与插件更新', 'Automation & plugin update'), M('退出后自动做什么、插件自己怎么升级', 'What runs automatically after exit, and how the plugin upgrades'), [autoCard, updCard].filter(Boolean), 'automation'),
+          Section(M('退出后执行', 'After exit'), M('生成脚本 → 退出客户端后跑一遍', 'Generate the script → it runs after the client quits'), [actionCard], 'actions'),
+          Section(M('还原备份', 'Restore backup'), M('点快照 → 确认差异 → 排队还原（退出客户端后执行）', 'Pick a snapshot → confirm the diff → queued restore (runs after the client quits)'), [restoreCard].filter(Boolean), 'restore'),
+          Section(M('同步内容', 'Sync content'), M('十二组内容，默认全勾；必需组锁定', 'Twelve groups, all checked; required groups are locked'), [scopeCard], 'scope'),
+          Section(M('插件数据与额外路径', 'Plugin data & extra paths'), M('插件自己的配置与数据：默认自动收，可改排除名单与体积上限', 'A plugin\'s own config and data: collected automatically, with editable exclusions and a size cap'), [extraCard], 'extra'),
+          // 需求4：工作区显示卡片移到「问题反馈」前
+          Section(M('工作区显示', 'Workspace visibility'), M('点工作区展开会话，点「修改」后才可切换状态；工作区与会话独立操作', 'Click a workspace to expand; click Edit to change states; workspaces and sections are independent'), [workspaceViewCard], 'workspace'),
+          // 反馈放在最后一区
+          Section(M('问题反馈', 'Feedback'), M('提交即建 GitHub Issue，跨机器共用；离线先排队', 'Each report becomes a GitHub Issue, shared across machines; offline reports queue locally'), [feedbackCard], 'feedback'),
         ),
       )
     }

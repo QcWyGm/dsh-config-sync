@@ -1,9 +1,9 @@
 {
-  "version": "0.3.76",
-  "tgz": "https://github.com/QcWyGm/dsh-config-sync-plugin/releases/download/v0.3.76/dsh-config-sync-plugin-0.3.76.tgz",
-  "tgzBytes": 390552,
-  "sha256": "43f630e17a79163a845cde3beadc42fe1e323ac48dcb7073ecc76fb2f50db472",
+  "version": "0.3.77",
+  "tgz": "https://github.com/QcWyGm/dsh-config-sync-plugin/releases/download/v0.3.77/dsh-config-sync-plugin-0.3.77.tgz",
+  "tgzBytes": 394697,
+  "sha256": "61a579dfa7a4baefe1a348098b9a1811c94ab5dbdf48644d2cc03b5ba7ea835c",
   "releasedAt": "2026-11-21",
-  "notes": "配置同步面板新增「工作区显示」卡片：工作区三态切换（显示 / 隐藏会话 / 归档工作区），展开后逐个隐藏 / 显示会话；工作区与会话独立操作，写入本机 DSH 的两套原生状态文件，不依赖 session-manager API。",
-  "notesEn": "New \"Workspace visibility\" card in the config-sync panel: switch a workspace between visible / sessions-hidden / archived, expand to hide/show individual sessions. Workspaces and sessions are independent; writes the two native DSH state files directly (no session-manager API)."
+  "notes": "配置同步面板五点交互调整：工作区展开后显示会话名称（从 session/title 提取，带缓存）；加「修改」按钮，点了才可切状态；点工作区整行即展开；工作区显示卡片移到问题反馈前；标题吸顶 + 快速跳转标签点击平滑滚动到对应卡片。",
+  "notesEn": "Five panel interaction refinements: show session names when a workspace is expanded (from session/title, cached); an Edit button that must be clicked before states can change; click the whole workspace row to expand; the Workspace visibility card moved just above Feedback; a sticky title bar with quick-jump tabs that smoothly scroll to each section."
 }

@@ -19,7 +19,7 @@ The package name is **`dsh-config-sync-plugin`** (the `dsh-config-sync` name on 
 
 | Way | Command / entry | Notes |
 |---|---|---|
-| npm | `npm i dsh-config-sync-plugin` | Use it as a dependency, or add `"dsh-config-sync-plugin": "^0.3.76"` to the profile's `package.json` and run `pnpm i`. The name matches the `cordis.patch.yml` insert name and the install folder `dsh-config-sync-plugin-<ver>` |
+| npm | `npm i dsh-config-sync-plugin` | Use it as a dependency, or add `"dsh-config-sync-plugin": "^0.3.77"` to the profile's `package.json` and run `pnpm i`. The name matches the `cordis.patch.yml` insert name and the install folder `dsh-config-sync-plugin-<ver>` |
 | Marketplace | client → Plugins → Discover → “Config Sync” | Installs from the git commit registered in `market-index.json` |
 | Offline tgz | `releases\dsh-config-sync-plugin-<ver>.tgz` | GitHub Release asset for air-gapped machines; the panel's Update button downloads the same file |
 
@@ -233,6 +233,18 @@ A new **Workspace visibility** section brings both native DSH hiding mechanisms 
 | Archive workspace | Workspace disappears from the list, sessions kept | `<DshHome>\dsh-session-manager\workspace-archives.v1.json` gets `archived:true` and its sessions hidden too |
 
 Each workspace switches between the three states independently; expanding it lets you hide/show a single session without touching others (a session toggle changes only that one `archivedSessionIds` entry, never the workspace archive record). Changes write the two native DSH state files directly — the session-manager Web API needs a DSH connection-owner credential the plugin route does not have. The session list is cached locally, so restart or refresh the session list to see the effect. Since 0.3.75 the archive file is synced, so these states travel with push/pull too.
+
+### Panel: session names, Edit button, click-to-expand and quick jump (0.3.77)
+
+Five interaction refinements on top of the 0.3.76 "Workspace visibility" card:
+
+1. **Session names**: each expanded session shows a readable title (from the `session/title` event, falling back to the first user message text); hover for the full session ID. Titles are cached and rebuilt from the local logs on each machine.
+2. **Edit button**: the state dropdown and per-session Hide/Show buttons stay hidden until you click Edit on that workspace; click Done to leave edit mode, so states cannot be changed by accident.
+3. **Click to expand**: click anywhere on a workspace row to expand/collapse its sessions; no separate expand button.
+4. **Card position**: the Workspace visibility card moved just above Feedback, as the last configuration step.
+5. **Sticky title + quick jump**: the panel title bar is sticky, with shortcut tabs below it (Overview / Workspaces / Targets / Automation / Scripts / Restore / Content / Plugin data / Feedback); clicking one smoothly scrolls to that section.
+
+Title reading and state changes stay self-contained in this plugin and do not call the session-manager Web API.
 
 ## New sessions land in the default workspace (since 0.3.28)
 
