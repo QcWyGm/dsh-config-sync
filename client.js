@@ -3212,7 +3212,7 @@ window.__ModuleLoader__.load({
       } catch { /* 插件路由还没起好就静默跳过，面板里仍会显示同一结果 */ }
     }
 
-    // ==================== 0.3.73：会话缓存守卫（客户端半身） ====================
+    // ==================== 0.3.74：会话缓存守卫（客户端半身） ====================
     // 宿主侧没法拦 agent-busy（它是 sessionController 内部抛的 RemoteError），
     // 所以在这里包一层 sessions.create：撞上就上报、清缓存、去掉旧 sessionId 重试一次。
     const BUSY_RE = /session\/agent-busy|is owned by subagent routing/i
@@ -3309,7 +3309,7 @@ window.__ModuleLoader__.load({
       // 界面还没完全起来时 fetch 可能扑空，所以稍等一会儿再查；只查一次，不轮询。
       try { setTimeout(announceLastResult, 1500) } catch { }
 
-      // 0.3.73：给客户端的 sessions 服务套上 agent-busy 自愈钩子。
+      // 0.3.74：给客户端的 sessions 服务套上 agent-busy 自愈钩子。
       // 拿不到 sessions（老版本宿主 / 服务还没起来）就静默跳过，面板功能不受影响。
       try {
         if (typeof ctx.get === 'function') {

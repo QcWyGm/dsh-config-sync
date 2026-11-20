@@ -1,4 +1,4 @@
-<#
+﻿<#
  DSH 配置同步 —— 应用脚本（把本仓库的配置还原到当前电脑）
 
 用法
@@ -900,6 +900,7 @@ $localPluginMap = [ordered]@{
   'dsh-purge-1.4.0'               = 'dsh-purge'
   'dsh-config-sync-plugin-0.3.69' = 'dsh-config-sync-plugin'
     'dsh-config-sync-plugin-0.3.70' = 'dsh-config-sync-plugin'
+    'dsh-config-sync-plugin-0.3.74' = 'dsh-config-sync-plugin'
     'dsh-config-sync-plugin-0.3.73' = 'dsh-config-sync-plugin'
   'dsh-config-sync-plugin-0.3.68' = 'dsh-config-sync-plugin'
   'dsh-config-sync-plugin-0.3.67' = 'dsh-config-sync-plugin'
