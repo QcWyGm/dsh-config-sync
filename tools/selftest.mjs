@@ -1644,8 +1644,10 @@ console.log('== 配置同步页面 5 点调整 ==')
   const wvPos = cliSrc.indexOf("Section(M('工作区显示', 'Workspace visibility')")
   const fbPos = cliSrc.indexOf("Section(M('问题反馈', 'Feedback')")
   check('工作区显示卡片移到问题反馈前', wvPos > 0 && fbPos > 0 && wvPos < fbPos, '分区顺序')
-  // 5) 标题固定 + 快速跳转 tab：Section 支持 id 锚点、pageHeader sticky、tab 点击 scrollIntoView
-  check('标题固定：pageHeader sticky', cliSrc.includes("position: 'sticky'") && cliSrc.includes('zIndex: 50'), 'pageHeader sticky')
+  // 5) 标题固定 + 快速跳转 tab：Section 支持 id 锚点、页头在滚动区之外、tab 点击 scrollIntoView
+  check('标题固定：页头在滚动区之外（两段式布局，不再 sticky）',
+    cliSrc.includes('pageHeaderWrap:') && cliSrc.includes('pageBody:')
+    && !cliSrc.includes("position: 'sticky'"), 'pageHeader 两段式')
   check('快速跳转 tab：Section 带锚点 id', cliSrc.includes('function Section(title, hint, cards, id)') && cliSrc.includes("sync-section-' + id"), 'Section id')
   check('快速跳转 tab：点击后平滑滚动到对应卡片',
     cliSrc.includes("getElementById('sync-section-' + sid)")
@@ -1663,11 +1665,12 @@ console.log('== 配置同步页面 5 点调整 ==')
   // 7) 条件区（同步冲突/本机路径）按卡片是否存在动态出现在 tab
   check('快速跳转 tab：条件区 conflict/roots 动态过滤',
     cliSrc.includes('...(conflictCard ?') && cliSrc.includes('...(showRoots ?'), 'tab 条件区')
-  // 8) 内容不在标题背后显示：sticky 头部不透明背景 + 跳转按头部高度设 scrollMarginTop
-  check('滚动落点在标题下方：sticky 不透明背景 + 动态 scrollMarginTop',
-    cliSrc.includes('background: \'var(--dsw-alias-settings-card-fill, #fff)\'')
-    && cliSrc.includes('el.style.scrollMarginTop = (hh + 8)')
-    && cliSrc.includes('headerRef.current ? headerRef.current.offsetHeight'), '滚动遮挡')
+  // 8) 滚动区从标题下方开始：页头不滚动、内容区独立 overflow 且落点是固定 8px
+  check('滚动落点在标题下方：内容区独立滚动 + 固定 scrollMarginTop',
+    /pageBody:\s*\{[^}]*overflowY: 'auto'/.test(cliSrc)
+    && /pageBody:\s*\{[^}]*minHeight: 0/.test(cliSrc)
+    && cliSrc.includes("scrollMarginTop: '8px'")
+    && !cliSrc.includes('headerRef.current ? headerRef.current.offsetHeight'), '滚动遮挡')
 }
 process.exit(failures === 0 ? 0 : 1)
 

@@ -19,7 +19,7 @@ The package name is **`dsh-config-sync-plugin`** (the `dsh-config-sync` name on 
 
 | Way | Command / entry | Notes |
 |---|---|---|
-| npm | `npm i dsh-config-sync-plugin` | Use it as a dependency, or add `"dsh-config-sync-plugin": "^0.3.78"` to the profile's `package.json` and run `pnpm i`. The name matches the `cordis.patch.yml` insert name and the install folder `dsh-config-sync-plugin-<ver>` |
+| npm | `npm i dsh-config-sync-plugin` | Use it as a dependency, or add `"dsh-config-sync-plugin": "^0.3.79"` to the profile's `package.json` and run `pnpm i`. The name matches the `cordis.patch.yml` insert name and the install folder `dsh-config-sync-plugin-<ver>` |
 | Marketplace | client → Plugins → Discover → “Config Sync” | Installs from the git commit registered in `market-index.json` |
 | Offline tgz | `releases\dsh-config-sync-plugin-<ver>.tgz` | GitHub Release asset for air-gapped machines; the panel's Update button downloads the same file |
 
@@ -252,6 +252,18 @@ Two display fixes on top of 0.3.77:
 
 1. **Jump order matches section order**: the quick-jump tabs now follow the exact render order of the sections (Overview / Sync conflicts [when present] / Local paths [when expanded] / Targets / Automation & updates / Scripts / Restore / Content / Plugin data / Workspace visibility / Feedback). The two conditional sections (conflicts, local paths) appear in the tabs only when their cards are shown.
 2. **Scroll lands below the title**: the sticky title bar now uses an opaque background (same fill as panel cards), so content no longer shows through it; jumping to a tab sets the scroll offset from the title bar's actual height, so the target section lands fully below the title instead of being covered.
+
+### The panel is now a fixed header plus an independently scrolling body (0.3.79)
+
+0.3.78 still kept the sticky header inside the same scroll container, so two cases leaked through: with a shorter panel, or with a header that wraps onto more lines, content brushed past the header's divider and even showed up in the padding above it; and the jump offset was computed from the header height, so it shifted whenever conditional sections appeared or disappeared.
+
+0.3.79 splits the panel in two: the header (title, badges, meta line and section tabs) now sits **outside** the scroll area, pinned at the top of the panel; below it a separate `overflow-y:auto` region holds the notices and every section card. Three direct results:
+
+1. **Structurally impossible to leak through**: the scrolling region starts 20px under the header divider, so however far you scroll, content stays inside it — never in the header area or above it.
+2. **Jump targets are fixed**: a section tab now just scrolls to the top of the scrolling region plus 8px, with no header-height math, so header wrapping and conditional sections no longer move the landing point.
+3. **No more header jitter**: the header does not scroll at all, so the shadow, translucent background and padding patches are gone; a single divider line is all that is left.
+
+The change touches only the panel itself (`S.page` / `pageInner` are used nowhere else); the sidebar row and the settings summary row are unaffected.
 
 
 ## New sessions land in the default workspace (since 0.3.28)

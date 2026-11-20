@@ -93,11 +93,21 @@ window.__ModuleLoader__.load({
         color: 'var(--dsw-alias-label-primary-foreground)', fontWeight: 600,
         transition: 'background .15s ease, border-color .15s ease',
       },
-      // 面板整页
+      // 面板整页：竖向两段式 —— 页头固定在上、下面这段才是滚动区
+      // 只有这样内容才不会滚过标题，跳转后分区标题也一定落在主标题下方
       page: {
-        height: '100%', overflowY: 'auto', boxSizing: 'border-box',
-        padding: '24px 28px 36px', background: 'var(--dsw-alias-bg-base)',
+        height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden',
+        boxSizing: 'border-box', background: 'var(--dsw-alias-bg-base)',
         color: 'var(--dsw-alias-label-primary)',
+      },
+      pageHeaderWrap: {
+        flex: '0 0 auto', zIndex: 50, padding: '24px 28px 0',
+        background: 'var(--dsw-alias-bg-base)',
+      },
+      pageHeaderInner: { maxWidth: '1140px', margin: '0 auto' },
+      pageBody: {
+        flex: '1 1 auto', minHeight: 0, overflowY: 'auto', overflowX: 'hidden',
+        padding: '20px 28px 36px', boxSizing: 'border-box',
       },
       pageInner: { maxWidth: '1140px', margin: '0 auto', display: 'flex', flexDirection: 'column', gap: '20px' },
       pageTitle: { fontSize: '20px', lineHeight: '28px', fontWeight: 700, letterSpacing: '0.3px', color: 'var(--dsw-alias-label-primary)' },
@@ -2636,8 +2646,10 @@ window.__ModuleLoader__.load({
         : null
 
       return h('div', { style: S.page },
-        h('div', { style: S.pageInner },
-          h('div', { ref: headerRef, style: { ...S.pageHeader, position: 'sticky', top: '0', zIndex: 50, background: 'var(--dsw-alias-settings-card-fill, #fff)', boxShadow: '0 2px 8px var(--dsw-alias-border-l1)' } },
+        // 页头在滚动区之外：内容滚不到它上面，区标签跳转后的标题也只出现在它下面
+        h('div', { style: S.pageHeaderWrap },
+          h('div', { style: S.pageHeaderInner },
+            h('div', { ref: headerRef, style: S.pageHeader },
             h('div', { style: S.pageHeaderMain },
               h('div', { style: S.pageTitleRow },
                 h('div', { style: S.pageTitle }, M('配置同步', 'Config Sync')),
@@ -2706,11 +2718,15 @@ window.__ModuleLoader__.load({
                   key: sid, type: 'button',
                   style: { fontSize: '12px', lineHeight: '18px', padding: '3px 10px', borderRadius: '6px', border: '1px solid transparent', background: 'transparent', color: 'var(--dsw-alias-label-secondary)', cursor: 'pointer' },
                   title: M('跳转到此区', 'Jump to section'),
-                  onClick: () => { const el = document.getElementById('sync-section-' + sid); if (!el || !el.scrollIntoView) return; const hh = headerRef.current ? headerRef.current.offsetHeight : 160; el.style.scrollMarginTop = (hh + 8) + 'px'; el.scrollIntoView({ behavior: 'smooth', block: 'start' }) },
+                  onClick: () => { const el = document.getElementById('sync-section-' + sid); if (!el || !el.scrollIntoView) return; el.scrollIntoView({ behavior: 'smooth', block: 'start' }) },
                 }, label)
               }),
             ),
           ),
+        ),
+        ),
+        h('div', { style: S.pageBody },
+          h('div', { style: S.pageInner },
           toast
             ? h('div', {
               style: {
@@ -2741,6 +2757,7 @@ window.__ModuleLoader__.load({
           Section(M('工作区显示', 'Workspace visibility'), M('点工作区展开会话，点「修改」后才可切换状态；工作区与会话独立操作', 'Click a workspace to expand; click Edit to change states; workspaces and sections are independent'), [workspaceViewCard], 'workspace'),
           // 反馈放在最后一区
           Section(M('问题反馈', 'Feedback'), M('提交即建 GitHub Issue，跨机器共用；离线先排队', 'Each report becomes a GitHub Issue, shared across machines; offline reports queue locally'), [feedbackCard], 'feedback'),
+          ),
         ),
       )
     }
