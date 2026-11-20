@@ -1,9 +1,10 @@
 {
-  "version": "0.3.71",
-  "releasedAt": "2026-11-20",
-  "notes": "修复 localPluginMap 多版本键导致假 plugin-missing 通知；版本比对从 -ne 改为 [version]-gt 防止旧归档降级已部署插件；local-plugins 目录名与 zip 从 0.3.56 更新到 0.3.70。",
-  "notesEn": "Fix localPluginMap multi-version keys causing false plugin-missing notices; version comparison changed from -ne to [version]-gt to prevent archive downgrade; local-plugins dir and zip renamed from 0.3.56 to 0.3.70.",
-  "sha256":"f975ddae1ba038f73fa3e64bbd106df45c03067ade971fb0d1186d7e6012bbdd",
-  "tgz": "releases/dsh-config-sync-plugin-0.3.71.tgz",
-  "minClient": "0.2.2-rc.2"
+  "sha256":"83ce2300503a67a68762b75024f56df1ce2f4e107cfad78a040402065c384bf0",
+  "version": "0.3.70",
+  "releasedAt": "2026-11-19",
+  "notesEn": "Sync-notice context isolation fix (tests no longer pollute real sync-notices.json); panel wording streamlined; README test log condensed into a table.",
+  "tgz": "releases/dsh-config-sync-plugin-0.3.70.tgz",
+  "minClient": "0.2.2-rc.2",
+  "notes": "同步通知上下文隔离修复（测试不再污染真实 sync-notices.json）；面板文案精简；README 测试记录合并为表格。",
+  "tgzBytes": 380161
 }
