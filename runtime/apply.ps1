@@ -898,25 +898,9 @@ if ($dropped.Count -gt 0) { Ok "已剔除 $($dropped.Count) 个实验性 bundle�
 $localPluginMap = [ordered]@{
   'dsh-our-free-model-2.8.0'      = 'dsh-our-free-model'
   'dsh-purge-1.4.0'               = 'dsh-purge'
-  'dsh-config-sync-plugin-0.3.69' = 'dsh-config-sync-plugin'
-    'dsh-config-sync-plugin-0.3.70' = 'dsh-config-sync-plugin'
-  'dsh-config-sync-plugin-0.3.68' = 'dsh-config-sync-plugin'
-  'dsh-config-sync-plugin-0.3.67' = 'dsh-config-sync-plugin'
-  'dsh-config-sync-plugin-0.3.66' = 'dsh-config-sync-plugin'
-  'dsh-config-sync-plugin-0.3.65' = 'dsh-config-sync-plugin'
-  'dsh-config-sync-plugin-0.3.64' = 'dsh-config-sync-plugin'
-  'dsh-config-sync-plugin-0.3.63' = 'dsh-config-sync-plugin'
-  'dsh-config-sync-plugin-0.3.62' = 'dsh-config-sync-plugin'
-  'dsh-config-sync-plugin-0.3.61' = 'dsh-config-sync-plugin'
-  'dsh-config-sync-plugin-0.3.59' = 'dsh-config-sync-plugin'
-  'dsh-config-sync-plugin-0.3.58' = 'dsh-config-sync-plugin'
-  'dsh-config-sync-plugin-0.3.57' = 'dsh-config-sync-plugin'
-  'dsh-config-sync-plugin-0.3.56' = 'dsh-config-sync-plugin'
+  'dsh-config-sync-plugin-0.3.70' = 'dsh-config-sync-plugin'
+    'dsh-config-sync-plugin-0.3.71' = 'dsh-config-sync-plugin'
   'dsh-config-sync-0.1.0'         = 'dsh-config-sync'
-}
-foreach ($dirName in $localPluginMap.Keys) {
-  $pattern = 'link:[^"]*' + [regex]::Escape($dirName)
-  $pkgRaw = [regex]::Replace($pkgRaw, $pattern, ('link:' + $appRootFwd + '/' + $dirName), 'IgnoreCase')
 }
 Write-TextPreserveBom (Join-Path $ProfileDir 'package.json') $pkgRaw
 Ok "已写入 package.json（link 路径指向 $appRootFwd）"
@@ -1283,7 +1267,7 @@ foreach ($dirName in $localPluginMap.Keys) {
     }
     $hasNewVersion = $false
     if ((Test-Path -LiteralPath $arch) -and $archVer -and $depVer) {
-      $hasNewVersion = ($archVer -ne $depVer)
+      $hasNewVersion = ([version]$archVer -gt [version]$depVer)
     } elseif (Test-Path -LiteralPath $arch) {
       # 读不到版本（老归档、结构异常）时退回 mtime，但要求比已部署目录新 10 秒以上，避免每轮误判
       $archTime = (Get-Item -LiteralPath $arch).LastWriteTime
