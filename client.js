@@ -2165,6 +2165,7 @@ window.__ModuleLoader__.load({
       // 定时器放 ref 里：数据每刷新一次 effect 就会重跑，若在 effect 里 return 清理函数，
       // 会把还没到点的"5 秒后消失"定时器一起清掉，提示就一直挂在屏幕上。
       const toastTimer = react.useRef(null)
+      const headerRef = react.useRef(null)
       const summary = summarize(data)
       // 门禁分三条：有路径就能生成还原脚本；拉取允许「真仓库 or 空目录」；推送只允许真仓库。
       // 空目录 = 新机器还没拉过，面板只放行「拉取」，推送按钮直接禁掉（后端也会再拦一次）。
@@ -2636,7 +2637,7 @@ window.__ModuleLoader__.load({
 
       return h('div', { style: S.page },
         h('div', { style: S.pageInner },
-          h('div', { style: { ...S.pageHeader, position: 'sticky', top: '0', zIndex: 50, background: 'var(--dsw-alias-bg-base)' } },
+          h('div', { ref: headerRef, style: { ...S.pageHeader, position: 'sticky', top: '0', zIndex: 50, background: 'var(--dsw-alias-settings-card-fill, #fff)', boxShadow: '0 2px 8px var(--dsw-alias-border-l1)' } },
             h('div', { style: S.pageHeaderMain },
               h('div', { style: S.pageTitleRow },
                 h('div', { style: S.pageTitle }, M('配置同步', 'Config Sync')),
@@ -2689,13 +2690,15 @@ window.__ModuleLoader__.load({
             h('div', { style: { display: 'flex', gap: '4px', flexWrap: 'wrap', width: '100%', borderTop: '1px solid var(--dsw-alias-border-l1)', paddingTop: '8px' } },
               [
                 ['overview', M('概览', 'Overview')],
-                ['workspace', M('工作区显示', 'Workspaces')],
+                ...(conflictCard ? [['conflict', M('同步冲突', 'Sync conflicts')]] : []),
+                ...(showRoots ? [['roots', M('本机路径', 'Local paths')]] : []),
                 ['targets', M('同步目标', 'Targets')],
                 ['automation', M('自动化', 'Automation')],
                 ['actions', M('生成脚本', 'Scripts')],
                 ['restore', M('还原备份', 'Restore')],
                 ['scope', M('同步内容', 'Content')],
                 ['extra', M('插件数据', 'Plugin data')],
+                ['workspace', M('工作区显示', 'Workspaces')],
                 ['feedback', M('问题反馈', 'Feedback')],
               ].map((pair) => {
                 const sid = pair[0], label = pair[1]
@@ -2703,7 +2706,7 @@ window.__ModuleLoader__.load({
                   key: sid, type: 'button',
                   style: { fontSize: '12px', lineHeight: '18px', padding: '3px 10px', borderRadius: '6px', border: '1px solid transparent', background: 'transparent', color: 'var(--dsw-alias-label-secondary)', cursor: 'pointer' },
                   title: M('跳转到此区', 'Jump to section'),
-                  onClick: () => { const el = document.getElementById('sync-section-' + sid); if (el && el.scrollIntoView) el.scrollIntoView({ behavior: 'smooth', block: 'start' }) },
+                  onClick: () => { const el = document.getElementById('sync-section-' + sid); if (!el || !el.scrollIntoView) return; const hh = headerRef.current ? headerRef.current.offsetHeight : 160; el.style.scrollMarginTop = (hh + 8) + 'px'; el.scrollIntoView({ behavior: 'smooth', block: 'start' }) },
                 }, label)
               }),
             ),

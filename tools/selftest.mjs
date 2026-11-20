@@ -1651,6 +1651,23 @@ console.log('== 配置同步页面 5 点调整 ==')
     cliSrc.includes("getElementById('sync-section-' + sid)")
     && cliSrc.includes("scrollIntoView({ behavior: 'smooth', block: 'start' })")
     && cliSrc.includes("['feedback', M('问题反馈', 'Feedback')]"), 'tab 跳转')
+  // 6) tab 顺序 = 卡片渲染顺序：workspace 在 extra 之后、feedback 之前（不再是第 2 位）
+  const tabBlock = cliSrc.slice(cliSrc.indexOf("['overview', M('概览', 'Overview')]"), cliSrc.indexOf('.map((pair) =>'))
+  const tabOrder = ['overview', 'workspace', 'targets', 'automation', 'actions', 'restore', 'scope', 'extra', 'feedback']
+    .filter((k) => k !== 'workspace' && k !== 'feedback')  // 下面单独校验位置
+  const tabIdx = (s) => tabBlock.indexOf("['" + s + "',")
+  check('快速跳转 tab 顺序与卡片顺序一致：workspace 在 extra 后、feedback 前',
+    tabIdx('extra') > 0 && tabIdx('feedback') > tabIdx('extra')
+    && tabBlock.indexOf("['workspace',") > tabIdx('extra')
+    && tabBlock.indexOf("['workspace',") < tabIdx('feedback'), 'tab 顺序')
+  // 7) 条件区（同步冲突/本机路径）按卡片是否存在动态出现在 tab
+  check('快速跳转 tab：条件区 conflict/roots 动态过滤',
+    cliSrc.includes('...(conflictCard ?') && cliSrc.includes('...(showRoots ?'), 'tab 条件区')
+  // 8) 内容不在标题背后显示：sticky 头部不透明背景 + 跳转按头部高度设 scrollMarginTop
+  check('滚动落点在标题下方：sticky 不透明背景 + 动态 scrollMarginTop',
+    cliSrc.includes('background: \'var(--dsw-alias-settings-card-fill, #fff)\'')
+    && cliSrc.includes('el.style.scrollMarginTop = (hh + 8)')
+    && cliSrc.includes('headerRef.current ? headerRef.current.offsetHeight'), '滚动遮挡')
 }
 process.exit(failures === 0 ? 0 : 1)
 

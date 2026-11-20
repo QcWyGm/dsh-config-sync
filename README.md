@@ -15,7 +15,7 @@ DSH 插件：左侧栏多一行「配置同步」，点开是整页体检面板�
 
 | 方式 | 命令 / 入口 | 说明 |
 |---|---|---|
-| npm | `npm i dsh-config-sync-plugin` | 适合把它当依赖管理，或在 profile 的 `package.json` 里写 `"dsh-config-sync-plugin": "^0.3.77"` 后 `pnpm i`；包名与 `cordis.patch.yml` 里注册的名字、插件目录 `dsh-config-sync-plugin-<ver>` 一致 |
+| npm | `npm i dsh-config-sync-plugin` | 适合把它当依赖管理，或在 profile 的 `package.json` 里写 `"dsh-config-sync-plugin": "^0.3.78"` 后 `pnpm i`；包名与 `cordis.patch.yml` 里注册的名字、插件目录 `dsh-config-sync-plugin-<ver>` 一致 |
 | 插件市场 | 客户端「插件市场 → 发现」搜「配置同步」 | 走 `market-index.json` 登记的 git 提交，版本与 README 对齐 |
 | 离线 tgz | `releases\dsh-config-sync-plugin-<ver>.tgz` | GitHub Release 附件，适合内网机器；面板「更新」按钮下载的也是它 |
 
@@ -265,6 +265,14 @@ pwsh -File runtime\sync.ps1 pull `
 5. **固定标题 + 快速跳转**：面板标题栏吸顶；标题下方增加快捷标签（概览 / 工作区显示 / 同步目标 / 自动化 / 生成脚本 / 还原备份 / 同步内容 / 插件数据 / 问题反馈），点击平滑滚动到对应分区。
 
 会话标题读取与三态读写都在本插件内自包含完成，不依赖 session-manager 的 Web API。
+
+### 快速跳转顺序与卡片对齐、滚动不再被标题遮挡（0.3.78）
+
+0.3.77 的两处显示问题已修：
+
+1. **跳转顺序对齐卡片**：快捷标签顺序改为与分区实际渲染顺序完全一致（概览 / 同步冲突[有冲突时] / 本机路径[展开时] / 同步目标 / 自动化与插件更新 / 生成脚本 / 还原备份 / 同步内容 / 插件数据 / 工作区显示 / 问题反馈）。同步冲突、本机路径两个条件分区只在卡片存在时才出现在标签里。
+2. **滚动落点在标题下方**：标题栏改为不透明背景（面板卡片同色），滚动时内容不再从标题背后透出；点标签跳转时按标题栏实际高度设置滚动落点，目标分区完整显示在标题下方，不再被遮住。
+
 
 ## 同步后新会话落在默认工作区
 

@@ -1,9 +1,9 @@
 {
-  "version": "0.3.77",
-  "tgz": "https://github.com/QcWyGm/dsh-config-sync-plugin/releases/download/v0.3.77/dsh-config-sync-plugin-0.3.77.tgz",
-  "tgzBytes": 394697,
-  "sha256": "61a579dfa7a4baefe1a348098b9a1811c94ab5dbdf48644d2cc03b5ba7ea835c",
+  "version": "0.3.78",
+  "tgz": "https://github.com/QcWyGm/dsh-config-sync-plugin/releases/download/v0.3.78/dsh-config-sync-plugin-0.3.78.tgz",
+  "tgzBytes": 395961,
+  "sha256": "2b8f1fa85f370ac7b9b3842b8dd68081fe6f7a2f7360256d926f3ade2f397292",
   "releasedAt": "2026-11-21",
-  "notes": "配置同步面板五点交互调整：工作区展开后显示会话名称（从 session/title 提取，带缓存）；加「修改」按钮，点了才可切状态；点工作区整行即展开；工作区显示卡片移到问题反馈前；标题吸顶 + 快速跳转标签点击平滑滚动到对应卡片。",
-  "notesEn": "Five panel interaction refinements: show session names when a workspace is expanded (from session/title, cached); an Edit button that must be clicked before states can change; click the whole workspace row to expand; the Workspace visibility card moved just above Feedback; a sticky title bar with quick-jump tabs that smoothly scroll to each section."
+  "notes": "修复 0.3.77 两处显示问题：快速跳转标签顺序改为与卡片渲染顺序完全一致（含条件分区同步冲突/本机路径动态出现）；标题栏改不透明背景，滚动内容不再从标题背后透出，跳转按标题栏实际高度设落点，目标分区完整显示在标题下方。",
+  "notesEn": "Two display fixes on top of 0.3.77: quick-jump tabs now follow the exact card render order (conditional Sync conflicts / Local paths sections appear only when their cards do); the sticky title bar uses an opaque background so content no longer shows through, and jumps set the scroll offset from the title bar height so the target section lands fully below it."
 }
